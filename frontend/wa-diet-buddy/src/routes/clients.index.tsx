@@ -60,7 +60,7 @@ const FILTER_TABS: { key: Filter; label: string }[] = [
 function ClientsListPage() {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
-  const [sort, setSort] = useState<"recent" | "name" | "adherence">("recent");
+  const [sort, setSort] = useState<"newest" | "name">("newest");
   const [newOpen, setNewOpen] = useState(false);
   const queryClient = useQueryClient();
 
@@ -98,8 +98,7 @@ function ClientsListPage() {
 
     list = [...list].sort((a, b) => {
       if (sort === "name") return a.name.localeCompare(b.name);
-      if (sort === "adherence") return b.adherencePct - a.adherencePct;
-      return a.lastActivity.localeCompare(b.lastActivity);
+      return b.joinedAt.localeCompare(a.joinedAt);
     });
 
     return list;
@@ -174,9 +173,8 @@ function ClientsListPage() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="recent">Recent activity</SelectItem>
+                <SelectItem value="newest">Newest</SelectItem>
                 <SelectItem value="name">Name (A–Z)</SelectItem>
-                <SelectItem value="adherence">Adherence</SelectItem>
               </SelectContent>
             </Select>
           </div>
