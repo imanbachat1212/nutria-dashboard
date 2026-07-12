@@ -1,7 +1,7 @@
 [build]
   base    = "frontend/nutria-public"
   command = "npm install && npm run build"
-  publish = "frontend/nutria-public/dist"
+  publish = "dist"
 
 # Redirect all paths to index.html for client-side React Router
 [[redirects]]
