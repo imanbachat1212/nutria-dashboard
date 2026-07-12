@@ -1,0 +1,20 @@
+[build]
+  base    = "frontend/nutria-public"
+  command = "npm install && npm run build"
+  publish = "frontend/nutria-public/dist"
+
+# Redirect all paths to index.html for client-side React Router
+[[redirects]]
+  from   = "/*"
+  to     = "/index.html"
+  status = 200
+
+# Environment variables — set these in the Netlify dashboard:
+#
+#   VITE_API_URL  — the publicly reachable backend URL
+#                   e.g. https://api.nutria.health or https://nutria-backend.onrender.com
+#
+# NOTE: The backend (localhost:4000) is currently running locally only.
+# The public site CANNOT go live until the backend is deployed to a cloud host
+# (Render, Railway, Fly.io, etc.) and VITE_API_URL is set to that URL.
+# See TODO.md → "Infrastructure / Cross-cutting" for the hosting note.

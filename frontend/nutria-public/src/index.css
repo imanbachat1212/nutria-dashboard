@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-stone-50 text-stone-900 antialiased;
+  }
+}
+
+/* RTL support when Arabic is active */
+[dir="rtl"] {
+  font-family: "Noto Naskh Arabic", "Inter", system-ui, sans-serif;
+}
