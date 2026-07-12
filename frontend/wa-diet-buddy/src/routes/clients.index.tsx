@@ -33,7 +33,7 @@ import {
 } from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
 import { NewClientDialog } from "@/components/new-client-dialog";
-import { calcBMI, type ServiceType } from "@/lib/clients-mock";
+import type { ServiceType } from "@/lib/clients-mock";
 import { fetchClients, createClient } from "@/lib/clients-api";
 
 type Filter = "all" | ServiceType | "active" | "paused";
@@ -190,19 +190,13 @@ function ClientsListPage() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-muted/40 hover:bg-muted/40">
-                  <TableHead className="w-[28%]">Client</TableHead>
-                  <TableHead>Program</TableHead>
-                  <TableHead className="text-right">Weight</TableHead>
-                  <TableHead className="text-right">BMI</TableHead>
-                  <TableHead className="text-right">Adherence</TableHead>
-                  <TableHead>Last activity</TableHead>
+                  <TableHead className="w-[60%]">Client</TableHead>
+                  <TableHead className="w-[39%]">Program</TableHead>
                   <TableHead className="w-[1%]" />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filtered.map((c) => {
-                  const bmi = calcBMI(c);
-                  const weightDelta = c.weightKg - c.startWeightKg;
                   return (
                     <TableRow
                       key={c.id}
@@ -234,30 +228,6 @@ function ClientsListPage() {
                       <TableCell>
                         <ServiceBadge types={c.serviceType} />
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        <div className="font-medium">{c.weightKg.toFixed(1)} kg</div>
-                        <div
-                          className={`text-xs ${
-                            weightDelta < 0
-                              ? "text-success"
-                              : weightDelta > 0
-                                ? "text-warning-foreground"
-                                : "text-muted-foreground"
-                          }`}
-                        >
-                          {weightDelta > 0 ? "+" : ""}
-                          {weightDelta.toFixed(1)} kg
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums font-medium">
-                        {bmi.toFixed(1)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <AdherenceBar pct={c.adherencePct} />
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {c.lastActivity}
-                      </TableCell>
                       <TableCell>
                         <Button variant="ghost" size="sm" asChild>
                           <Link to="/clients/$clientId" params={{ clientId: c.id }}>
@@ -271,7 +241,7 @@ function ClientsListPage() {
 
                 {filtered.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={7} className="py-16 text-center">
+                    <TableCell colSpan={3} className="py-16 text-center">
                       <div className="mx-auto flex max-w-sm flex-col items-center gap-2 text-muted-foreground">
                         <UsersIcon className="h-8 w-8 opacity-50" />
                         <p className="text-sm">No clients match your filter.</p>
@@ -337,23 +307,4 @@ function StatusDot({ status }: { status: "active" | "paused" | "lead" }) {
         ? "text-warning-foreground fill-warning"
         : "text-muted-foreground fill-muted-foreground";
   return <Circle className={`h-2 w-2 ${tone}`} />;
-}
-
-function AdherenceBar({ pct }: { pct: number }) {
-  const tone =
-    pct >= 85
-      ? "bg-success"
-      : pct >= 70
-        ? "bg-chart-4"
-        : pct > 0
-          ? "bg-destructive/80"
-          : "bg-muted-foreground/30";
-  return (
-    <div className="flex items-center justify-end gap-2">
-      <div className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
-        <div className={`h-full ${tone}`} style={{ width: `${pct}%` }} />
-      </div>
-      <span className="w-8 text-xs font-medium tabular-nums">{pct}%</span>
-    </div>
-  );
 }
