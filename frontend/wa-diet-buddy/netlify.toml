@@ -1,7 +1,7 @@
 [build]
   base    = "frontend/wa-diet-buddy"
   command = "npm install && npm run build"
-  publish = "frontend/wa-diet-buddy/dist"
+  publish = "dist"
 
 [build.environment]
   NODE_VERSION = "20"
@@ -20,6 +20,14 @@
 # Without `publish` pointing at the real directory, Netlify can't establish static-file
 # priority over the SSR function, so every request — including /assets/* — falls through
 # to the function and gets served as SSR HTML instead of the actual JS/CSS file.
+#
+# IMPORTANT: `publish` is resolved RELATIVE TO `base` — since `base` above is already
+# "frontend/wa-diet-buddy", `publish` must be just "dist", NOT the full repo-relative
+# path "frontend/wa-diet-buddy/dist". Setting the full path here doubled it in a past
+# deploy (Netlify resolved to .../frontend/wa-diet-buddy/frontend/wa-diet-buddy/dist),
+# which took every static asset down. Don't copy nutria-public's netlify.toml pattern
+# blindly here — it looks identical (base + full-path publish) but hasn't been confirmed
+# to actually resolve correctly either; treat it as unverified, not as a template.
 #
 # Environment variables — set these in the Netlify dashboard:
 #
