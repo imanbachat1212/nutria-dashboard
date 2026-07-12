@@ -1,0 +1,21 @@
+[build]
+  base    = "frontend/wa-diet-buddy"
+  command = "npm install && npm run build"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# This is a TanStack Start (Nitro) SSR app deployed via the official
+# @netlify/vite-plugin-tanstack-start integration (see vite.config.ts — nitro.preset
+# is hard-pinned to "netlify"). `npm run build` generates a self-describing .netlify/
+# directory (functions-internal/, v1/functions/, etc.) that Netlify's build system
+# auto-detects and deploys from — do NOT set `publish` or `functions` here, that
+# would override the framework integration's own deploy manifest.
+#
+# Environment variables — set these in the Netlify dashboard:
+#
+#   VITE_API_URL — the publicly reachable backend URL
+#                  e.g. https://nutria-backend.onrender.com
+#
+# NOTE: nutria-public (frontend/nutria-public) is a separate site/deploy target with
+# its own netlify.toml — not affected by this file.
