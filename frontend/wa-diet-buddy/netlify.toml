@@ -1,6 +1,7 @@
 [build]
   base    = "frontend/wa-diet-buddy"
   command = "npm install && npm run build"
+  publish = "frontend/wa-diet-buddy/dist"
 
 [build.environment]
   NODE_VERSION = "20"
@@ -9,8 +10,16 @@
 # @netlify/vite-plugin-tanstack-start integration (see vite.config.ts — nitro.preset
 # is hard-pinned to "netlify"). `npm run build` generates a self-describing .netlify/
 # directory (functions-internal/, v1/functions/, etc.) that Netlify's build system
-# auto-detects and deploys from — do NOT set `publish` or `functions` here, that
-# would override the framework integration's own deploy manifest.
+# auto-detects for the SSR function — that part is genuinely zero-config.
+#
+# `publish` DOES need to be set explicitly, though: Netlify's official docs for this
+# integration say the client build lands in `dist/client`, but that's not what this
+# project actually produces (@lovable.dev/vite-tanstack-config's nitro wiring differs
+# from a vanilla TanStack Start setup). Confirmed via .netlify/functions-internal/nitro.json
+# → "publicDir": "../../dist" — the real client output is flat `dist/`, not `dist/client/`.
+# Without `publish` pointing at the real directory, Netlify can't establish static-file
+# priority over the SSR function, so every request — including /assets/* — falls through
+# to the function and gets served as SSR HTML instead of the actual JS/CSS file.
 #
 # Environment variables — set these in the Netlify dashboard:
 #
