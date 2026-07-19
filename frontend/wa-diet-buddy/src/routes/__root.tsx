@@ -20,6 +20,7 @@ import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 import { DashboardLayout } from "@/components/dashboard-layout";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
+import { Toaster } from "@/components/ui/sonner";
 
 function NotFoundComponent() {
   return (
@@ -129,6 +130,7 @@ function RootComponent() {
       <AuthProvider>
         <AuthGate />
       </AuthProvider>
+      <Toaster />
     </QueryClientProvider>
   );
 }

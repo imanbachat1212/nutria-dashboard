@@ -5,6 +5,7 @@ interface APIFood {
   _id: string;
   name: string;
   nameAr?: string;
+  brand?: string;
   category?: string;
   source?: string;
   servingSize: number;
@@ -68,6 +69,7 @@ function toFoodItem(f: APIFood): FoodItem {
     id: f._id,
     name: f.name,
     arabicName: f.nameAr,
+    brand: f.brand,
     category: mapCategory(f.category),
     source: mapSource(f.source),
     macros: {
@@ -122,6 +124,7 @@ export async function fetchFoods(params?: {
 export interface CreateFoodPayload {
   name: string;
   arabicName?: string;
+  brand?: string;
   category: FoodCategory;
   source: FoodSource;
   kcal: number;
@@ -140,6 +143,7 @@ export async function createFood(data: CreateFoodPayload): Promise<FoodItem> {
   const body = {
     name: data.name,
     nameAr: data.arabicName || undefined,
+    brand: data.brand || undefined,
     category: backendCat,
     source: data.source,
     servingSize: data.servingSize,
@@ -159,4 +163,8 @@ export async function createFood(data: CreateFoodPayload): Promise<FoodItem> {
 export async function updateFood(id: string, data: { verified?: boolean }): Promise<FoodItem> {
   const raw = await api.patch<APIFood>(`/api/foods/${id}`, data);
   return toFoodItem(raw);
+}
+
+export async function deleteFood(id: string): Promise<void> {
+  await api.delete(`/api/foods/${id}`);
 }

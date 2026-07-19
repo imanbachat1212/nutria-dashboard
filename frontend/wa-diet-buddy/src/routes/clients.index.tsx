@@ -5,6 +5,7 @@ import {
   Search,
   Plus,
   ArrowUpDown,
+  Filter,
   Phone,
   Users as UsersIcon,
   Circle,
@@ -36,7 +37,7 @@ import { NewClientDialog } from "@/components/new-client-dialog";
 import type { ServiceType } from "@/lib/clients-mock";
 import { fetchClients, createClient } from "@/lib/clients-api";
 
-type Filter = "all" | ServiceType | "active" | "paused";
+type Filter = "all" | ServiceType | "active" | "paused" | "lead";
 
 export const Route = createFileRoute("/clients/")({
   head: () => ({
@@ -55,6 +56,7 @@ const FILTER_TABS: { key: Filter; label: string }[] = [
   { key: "gym", label: "Gym" },
   { key: "classes", label: "Classes" },
   { key: "paused", label: "Paused" },
+  { key: "lead", label: "Leads" },
 ];
 
 function ClientsListPage() {
@@ -73,18 +75,31 @@ function ClientsListPage() {
 
   const mutation = useMutation({
     mutationFn: createClient,
-    onSuccess: () => {
+    onSuccess: (created) => {
       setQuery("");
+      // Insert the server-confirmed record into the cache immediately so it shows up in the
+      // list with no perceptible delay — the Atlas-backed list refetch below can take multiple
+      // seconds, and without this the client appears to vanish until it resolves.
+      queryClient.setQueryData<{ clients: (typeof created)[]; total: number }>(
+        ["clients"],
+        (old) => (old ? { ...old, clients: [created, ...old.clients], total: old.total + 1 } : old),
+      );
+      // Background reconciliation in case of concurrent edits elsewhere.
       queryClient.invalidateQueries({ queryKey: ["clients"] });
     },
   });
 
   const filtered = useMemo(() => {
-    let list = clients.filter((c) => c.status !== "lead");
+    let list: typeof clients;
 
-    if (filter === "active") list = list.filter((c) => c.status === "active");
-    else if (filter === "paused") list = list.filter((c) => c.status === "paused");
-    else if (filter !== "all") list = list.filter((c) => c.serviceType.includes(filter as ServiceType));
+    // "Active"/"Paused"/"Leads" are exact status matches — a lead is never active or paused,
+    // so no explicit exclusion is needed. Diet/Gym/Classes filter by program only (matching
+    // the stat cards below, which also count leads), and "All" now shows everyone.
+    if (filter === "all") list = clients;
+    else if (filter === "lead") list = clients.filter((c) => c.status === "lead");
+    else if (filter === "active") list = clients.filter((c) => c.status === "active");
+    else if (filter === "paused") list = clients.filter((c) => c.status === "paused");
+    else list = clients.filter((c) => c.serviceType.includes(filter as ServiceType));
 
     if (query.trim()) {
       const q = query.toLowerCase();
@@ -106,7 +121,7 @@ function ClientsListPage() {
 
   const totals = useMemo(
     () => ({
-      all: clients.filter((c) => c.status !== "lead").length,
+      all: clients.length,
       active: clients.filter((c) => c.status === "active").length,
       diet: clients.filter((c) => c.serviceType.includes("diet")).length,
       gym: clients.filter((c) => c.serviceType.includes("gym")).length,
@@ -151,21 +166,19 @@ function ClientsListPage() {
               />
             </div>
 
-            <div className="flex items-center gap-1.5 overflow-x-auto">
-              {FILTER_TABS.map((t) => (
-                <button
-                  key={t.key}
-                  onClick={() => setFilter(t.key)}
-                  className={`whitespace-nowrap rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-                    filter === t.key
-                      ? "border-primary bg-primary-soft text-primary"
-                      : "border-border bg-card text-muted-foreground hover:text-foreground hover:border-primary/30"
-                  }`}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
+            <Select value={filter} onValueChange={(v) => setFilter(v as Filter)}>
+              <SelectTrigger className="h-9 w-40">
+                <Filter className="h-3.5 w-3.5 text-muted-foreground" />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {FILTER_TABS.map((t) => (
+                  <SelectItem key={t.key} value={t.key}>
+                    {t.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
 
             <Select value={sort} onValueChange={(v) => setSort(v as typeof sort)}>
               <SelectTrigger className="h-9 w-40">

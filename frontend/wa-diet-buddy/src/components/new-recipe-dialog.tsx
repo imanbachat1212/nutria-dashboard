@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createMeal, updateMeal, getMeal } from "@/lib/meals-api";
+import { createMeal, updateMeal, getMeal, type PhotoItem } from "@/lib/meals-api";
 import { fetchFoods } from "@/lib/foods-api";
 import { uploadMedia } from "@/lib/api";
 import {
@@ -24,6 +24,7 @@ import {
   Upload,
   Search,
   Loader2,
+  Star,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -61,6 +62,8 @@ import {
 
 type Unit = "g" | "ml" | "cup" | "tbsp" | "tsp" | "oz" | "piece";
 const UNITS: Unit[] = ["g", "ml", "cup", "tbsp", "tsp", "oz", "piece"];
+
+const MAX_PHOTOS = 6;
 
 const UNIT_TO_GRAMS: Record<Unit, number> = {
   g: 1,
@@ -135,7 +138,7 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
   const [arabicName, setArabicName] = useState("");
   const [category, setCategory] = useState<RecipeCategory>("lunch");
   const [cuisine, setCuisine] = useState<RecipeCuisine>("lebanese");
-  const [photo, setPhoto] = useState<{ url: string; key: string } | null>(null);
+  const [photos, setPhotos] = useState<PhotoItem[]>([]);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [prepMin, setPrepMin] = useState(10);
@@ -158,7 +161,7 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
     setArabicName("");
     setCategory("lunch");
     setCuisine("lebanese");
-    setPhoto(null);
+    setPhotos([]);
     setPrepMin(10);
     setCookMin(15);
     setServings(1);
@@ -187,7 +190,7 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
     setArabicName(editData.nameAr || "");
     setCategory(editData.category);
     setCuisine(editData.cuisine);
-    setPhoto(editData.photo);
+    setPhotos(editData.photos);
     setPrepMin(editData.prepTime);
     setCookMin(editData.cookTime);
     setServings(editData.servings);
@@ -259,7 +262,10 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
 
   return (
     <Dialog open={open} onOpenChange={(o) => (o ? onOpenChange(true) : close())}>
-      <DialogContent className="max-w-3xl p-0 gap-0 overflow-hidden">
+      <DialogContent
+        className="max-w-3xl p-0 gap-0 overflow-hidden"
+        onPointerDownOutside={(e) => e.preventDefault()}
+      >
         <DialogHeader className="px-6 pt-6 pb-4 border-b">
           <div className="flex items-center gap-3">
             <div className="h-9 w-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
@@ -287,12 +293,7 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
           </div>
         </DialogHeader>
 
-        <div
-          className={cn(
-            "px-6 py-5 max-h-[60vh]",
-            step === 2 ? "overflow-visible" : "overflow-y-auto",
-          )}
-        >
+        <div className="px-6 py-5 max-h-[60vh] overflow-y-auto">
           {!formReady ? (
             <div className="flex items-center justify-center py-20 text-sm text-muted-foreground">
               <Loader2 className="h-5 w-5 animate-spin mr-2" />
@@ -386,45 +387,95 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                   </div>
                   <Separator />
                   <div className="space-y-2">
-                    <Label className="flex items-center gap-1.5">
-                      <ImageIcon className="h-3.5 w-3.5" /> Cover photo
-                    </Label>
-                    <div
-                      className={cn(
-                        "h-24 w-32 rounded-lg flex items-center justify-center shrink-0 overflow-hidden relative",
-                        photo ? "" : "bg-muted border border-dashed border-border",
+                    <div className="flex items-center justify-between">
+                      <Label className="flex items-center gap-1.5">
+                        <ImageIcon className="h-3.5 w-3.5" /> Photos{" "}
+                        <span className="text-muted-foreground text-[10px] font-normal">
+                          optional · up to {MAX_PHOTOS}
+                        </span>
+                      </Label>
+                      {photos.length > 0 && (
+                        <span className="text-[10px] text-muted-foreground">
+                          First photo is the cover shown on the recipe card
+                        </span>
                       )}
-                    >
-                      {photo ? (
-                        <>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      {photos.map((p, idx) => (
+                        <div
+                          key={p.key}
+                          className="h-24 rounded-lg overflow-hidden relative group border"
+                        >
                           <img
-                            src={photo.url}
-                            alt="Cover"
+                            src={p.url}
+                            alt={idx === 0 ? "Cover" : `Photo ${idx + 1}`}
                             className="absolute inset-0 w-full h-full object-cover"
                           />
+                          {idx === 0 && (
+                            <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1.5 py-0.5 text-[9px] font-medium text-white">
+                              Cover
+                            </span>
+                          )}
+                          {idx !== 0 && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setPhotos((prev) => [
+                                  prev[idx],
+                                  ...prev.slice(0, idx),
+                                  ...prev.slice(idx + 1),
+                                ])
+                              }
+                              title="Set as cover"
+                              className="absolute bottom-1 left-1 h-5 w-5 rounded-full bg-black/50 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-black/70 transition-opacity"
+                            >
+                              <Star className="h-3 w-3" />
+                            </button>
+                          )}
                           <button
-                            onClick={() => setPhoto(null)}
+                            type="button"
+                            onClick={() => setPhotos((prev) => prev.filter((_, i) => i !== idx))}
                             className="absolute top-1 right-1 h-5 w-5 rounded-full bg-black/50 text-white flex items-center justify-center hover:bg-black/70"
                           >
                             <X className="h-3 w-3" />
                           </button>
-                        </>
-                      ) : (
-                        <ImageIcon className="h-6 w-6 text-muted-foreground/50" />
+                        </div>
+                      ))}
+                      {photos.length < MAX_PHOTOS && (
+                        <button
+                          type="button"
+                          disabled={uploading}
+                          onClick={() => fileInputRef.current?.click()}
+                          className="h-24 rounded-lg flex flex-col items-center justify-center gap-1 bg-muted border border-dashed border-border hover:bg-muted/70 disabled:opacity-50 transition-colors"
+                        >
+                          {uploading ? (
+                            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                          ) : (
+                            <>
+                              <Upload className="h-5 w-5 text-muted-foreground/70" />
+                              <span className="text-[10px] text-muted-foreground">
+                                {photos.length === 0 ? "Add photos" : "Add more"}
+                              </span>
+                            </>
+                          )}
+                        </button>
                       )}
                     </div>
                     <input
                       ref={fileInputRef}
                       type="file"
                       accept="image/*"
+                      multiple
                       className="hidden"
                       onChange={async (e) => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
+                        const files = Array.from(e.target.files ?? []);
+                        if (files.length === 0) return;
+                        const room = MAX_PHOTOS - photos.length;
+                        const toUpload = files.slice(0, room);
                         setUploading(true);
                         try {
-                          const result = await uploadMedia(file);
-                          setPhoto(result);
+                          const uploaded = await Promise.all(toUpload.map((f) => uploadMedia(f)));
+                          setPhotos((prev) => [...prev, ...uploaded]);
                         } catch (err) {
                           console.error("Upload failed:", err);
                         } finally {
@@ -433,23 +484,13 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                         }
                       }}
                     />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="w-full"
-                      disabled={uploading}
-                      onClick={() => fileInputRef.current?.click()}
-                    >
-                      <Upload className="h-3.5 w-3.5" />
-                      {uploading ? "Uploading…" : photo ? "Replace photo" : "Upload photo"}
-                    </Button>
                   </div>
                 </div>
               )}
 
               {step === 2 && (
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between">
+                  <div className="sticky top-0 z-10 -mt-5 -mx-6 bg-background px-6 pt-5 pb-3 flex items-center justify-between">
                     <div>
                       <div className="text-sm font-semibold">Ingredients</div>
                       <div className="text-xs text-muted-foreground">
@@ -750,17 +791,26 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                     <div
                       className={cn(
                         "h-32 flex items-center justify-center relative overflow-hidden",
-                        photo ? "" : "bg-muted",
+                        photos[0] ? "" : "bg-muted",
                       )}
                     >
-                      {photo ? (
+                      {photos[0] ? (
                         <img
-                          src={photo.url}
+                          src={photos[0].url}
                           alt="Cover"
                           className="absolute inset-0 w-full h-full object-cover"
                         />
                       ) : (
                         <ImageIcon className="h-8 w-8 text-muted-foreground/50" />
+                      )}
+                      {photos.length > 1 && (
+                        <Badge
+                          variant="secondary"
+                          className="absolute bottom-2 right-2 gap-1 bg-black/60 text-[10px] text-white"
+                        >
+                          <ImageIcon className="h-2.5 w-2.5" />
+                          {photos.length} photos
+                        </Badge>
                       )}
                     </div>
                     <div className="p-4 space-y-3">
@@ -894,7 +944,7 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                     })),
                     steps: validSteps,
                     notes: notes.trim() || undefined,
-                    photo: photo || undefined,
+                    photos,
                   };
                   if (isEdit && editId) {
                     await updateMeal(editId, payload);

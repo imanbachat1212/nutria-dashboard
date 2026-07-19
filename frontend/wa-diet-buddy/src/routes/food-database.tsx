@@ -20,6 +20,9 @@ import {
   Globe,
   Download,
   WifiOff,
+  XCircle,
+  MoreHorizontal,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -27,11 +30,28 @@ import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Table,
   TableBody,
@@ -48,8 +68,13 @@ import {
   type FoodCategory,
   type FoodSource,
 } from "@/lib/food-database-mock";
-import { fetchFoods, updateFood } from "@/lib/foods-api";
-import { searchUsda, importUsdaFood, type UsdaSearchResult } from "@/lib/usda-api";
+import { fetchFoods, updateFood, deleteFood } from "@/lib/foods-api";
+import {
+  searchUsda,
+  importUsdaFood,
+  fetchImportedUsdaFdcIds,
+  type UsdaSearchResult,
+} from "@/lib/usda-api";
 import { NewFoodDialog } from "@/components/new-food-dialog";
 
 export const Route = createFileRoute("/food-database")({
@@ -82,6 +107,7 @@ const CATEGORIES: (FoodCategory | "all")[] = [
 const SOURCES: (FoodSource | "all")[] = ["all", "usda", "lebanese", "custom"];
 
 function FoodDatabasePage() {
+  const qc = useQueryClient();
   const [mode, setMode] = useState<"library" | "usda">("library");
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<FoodCategory | "all">("all");
@@ -90,6 +116,7 @@ function FoodDatabasePage() {
   const [onlyFavorites, setOnlyFavorites] = useState(false);
   const [selected, setSelected] = useState<FoodItem | null>(null);
   const [newOpen, setNewOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<FoodItem | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["foods", query, category, source],
@@ -104,6 +131,17 @@ function FoodDatabasePage() {
   });
 
   const allFoods = data?.foods ?? [];
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => deleteFood(id),
+    onSuccess: () => {
+      toast.success("Food removed from library");
+      qc.invalidateQueries({ queryKey: ["foods"] });
+      setDeleteTarget(null);
+      setSelected(null);
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
 
   // Source is now a server-side filter (fetchFoods above) — only verified/favorites stay
   // client-side, since those have no backend param yet and only ever apply to the page of
@@ -272,12 +310,12 @@ function FoodDatabasePage() {
                     <TableHead className="text-right">C</TableHead>
                     <TableHead className="text-right">F</TableHead>
                     <TableHead className="text-right">Fib</TableHead>
-                    <TableHead className="text-right pr-4">Used</TableHead>
+                    <TableHead className="text-right">Used</TableHead>
+                    <TableHead className="w-10 pr-4" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filtered.map((f) => {
-                    const meta = CATEGORY_META[f.category];
                     const src = SOURCE_META[f.source];
                     return (
                       <TableRow
@@ -297,7 +335,6 @@ function FoodDatabasePage() {
                             <div className="flex items-center gap-2 text-xs text-muted-foreground">
                               {f.brand && <span>{f.brand}</span>}
                               {f.arabicName && <span className="font-arabic">{f.arabicName}</span>}
-                              <span className="capitalize">· {meta.label}</span>
                             </div>
                           </div>
                         </TableCell>
@@ -321,15 +358,33 @@ function FoodDatabasePage() {
                         <TableCell className="text-right tabular-nums text-muted-foreground">
                           {f.macros.fiber}
                         </TableCell>
-                        <TableCell className="text-right pr-4 text-xs text-muted-foreground">
+                        <TableCell className="text-right text-xs text-muted-foreground">
                           {f.usedInPlans}× · {f.lastUsed}
+                        </TableCell>
+                        <TableCell className="pr-4" onClick={(e) => e.stopPropagation()}>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon" className="size-7">
+                                <MoreHorizontal className="size-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem
+                                className="text-rose-600"
+                                onSelect={() => setDeleteTarget(f)}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                                Remove from library
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </TableCell>
                       </TableRow>
                     );
                   })}
                   {filtered.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={8} className="py-12 text-center text-muted-foreground">
+                      <TableCell colSpan={9} className="py-12 text-center text-muted-foreground">
                         No foods match your filters.
                       </TableCell>
                     </TableRow>
@@ -343,6 +398,28 @@ function FoodDatabasePage() {
 
       <FoodDrawer food={selected} onClose={() => setSelected(null)} />
       <NewFoodDialog open={newOpen} onOpenChange={setNewOpen} />
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove "{deleteTarget?.name}"?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently removes the food from your library. This can't be undone. If it's
+              used in a recipe, meal plan, or journal entry, the removal will be blocked instead.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-rose-600 text-white hover:bg-rose-700"
+              disabled={deleteMutation.isPending}
+              onClick={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+            >
+              {deleteMutation.isPending ? "Removing…" : "Remove"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }
@@ -350,15 +427,38 @@ function FoodDatabasePage() {
 /* ---------- Search USDA (live, ephemeral — separate data path from the local library table
    above; results have no _id and aren't usable anywhere until imported) ---------- */
 
+interface BulkImportResult {
+  fdcId: number;
+  name: string;
+  ok: boolean;
+  error?: string;
+}
+
+// Small groups rather than one call per selected item at once — USDA's API (and our own
+// usda-import round-trip to it) has real rate limits, so a batch of 20 fired simultaneously
+// risks 429s. importUsdaFood is idempotent by fdcId (dedupe happens server-side, backed by a
+// DB unique index), so re-running a batch after a partial failure is always safe.
+const BULK_IMPORT_BATCH_SIZE = 4;
+
 function UsdaSearchPanel() {
   const qc = useQueryClient();
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [bulkState, setBulkState] = useState<{ total: number; results: BulkImportResult[] } | null>(
+    null,
+  );
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(query.trim()), 400);
     return () => clearTimeout(t);
   }, [query]);
+
+  // A fresh search invalidates any selection/results made against the previous result set.
+  useEffect(() => {
+    setSelected(new Set());
+    setBulkState(null);
+  }, [debounced]);
 
   const searching = debounced.length > 1;
 
@@ -380,6 +480,77 @@ function UsdaSearchPanel() {
   });
 
   const results = data ?? [];
+  const bulkRunning = !!bulkState && bulkState.results.length < bulkState.total;
+
+  // Bulk existence check for "Added" state — one request per result set, not one per row.
+  // Keying on the joined fdcIds (rather than just `debounced`) means the invalidateQueries
+  // calls below (shared "foods" key prefix) correctly refetch this too, so items just
+  // imported this session flip to "Added" without a page refresh.
+  const resultFdcIdsKey = results.map((r) => r.fdcId).join(",");
+  const { data: importedFdcIds } = useQuery({
+    queryKey: ["foods", "usda-imported", resultFdcIdsKey],
+    queryFn: () => fetchImportedUsdaFdcIds(results.map((r) => r.fdcId)),
+    enabled: results.length > 0,
+  });
+  const importedSet = useMemo(() => new Set(importedFdcIds ?? []), [importedFdcIds]);
+
+  function toggleOne(fdcId: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(fdcId)) next.delete(fdcId);
+      else next.add(fdcId);
+      return next;
+    });
+  }
+
+  const selectableResults = results.filter((r) => !importedSet.has(r.fdcId));
+  const allSelected =
+    selectableResults.length > 0 && selectableResults.every((r) => selected.has(r.fdcId));
+  const someSelected = selectableResults.some((r) => selected.has(r.fdcId));
+
+  function toggleAll() {
+    setSelected(allSelected ? new Set() : new Set(selectableResults.map((r) => r.fdcId)));
+  }
+
+  async function handleBulkImport() {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    const nameById = new Map(results.map((r) => [r.fdcId, r.name]));
+    setBulkState({ total: ids.length, results: [] });
+
+    const collected: BulkImportResult[] = [];
+    for (let i = 0; i < ids.length; i += BULK_IMPORT_BATCH_SIZE) {
+      const batch = ids.slice(i, i + BULK_IMPORT_BATCH_SIZE);
+      const settled = await Promise.allSettled(batch.map((fdcId) => importUsdaFood(fdcId)));
+      settled.forEach((outcome, idx) => {
+        const fdcId = batch[idx];
+        const fallbackName = nameById.get(fdcId) ?? `fdcId ${fdcId}`;
+        if (outcome.status === "fulfilled") {
+          collected.push({ fdcId, name: outcome.value.name || fallbackName, ok: true });
+        } else {
+          const message =
+            outcome.reason instanceof Error ? outcome.reason.message : "Import failed";
+          collected.push({ fdcId, name: fallbackName, ok: false, error: message });
+        }
+      });
+      setBulkState({ total: ids.length, results: [...collected] });
+    }
+
+    qc.invalidateQueries({ queryKey: ["foods"] });
+    setSelected(new Set());
+
+    const succeeded = collected.filter((r) => r.ok).length;
+    const failed = collected.length - succeeded;
+    if (failed === 0) {
+      toast.success(`${succeeded} food${succeeded === 1 ? "" : "s"} added to your library`);
+    } else if (succeeded === 0) {
+      toast.error(
+        `Couldn't add any of the ${failed} selected food${failed === 1 ? "" : "s"} — see details below`,
+      );
+    } else {
+      toast.error(`${succeeded} added, ${failed} failed — see details below`);
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -398,6 +569,63 @@ function UsdaSearchPanel() {
           meal plans, recipes, and journal entries.
         </p>
       </Card>
+
+      {(selected.size > 0 || bulkRunning) && (
+        <Card className="flex items-center justify-between gap-3 border-primary/30 bg-primary-soft/40 px-4 py-2.5">
+          <div className="text-sm font-medium text-primary">
+            {bulkRunning
+              ? `Importing ${bulkState!.results.length} of ${bulkState!.total}…`
+              : `${selected.size} selected`}
+          </div>
+          <div className="flex items-center gap-2">
+            {!bulkRunning && (
+              <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
+                Clear
+              </Button>
+            )}
+            <Button size="sm" onClick={handleBulkImport} disabled={bulkRunning}>
+              {bulkRunning ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <>
+                  <Download className="size-3.5" />
+                  Add to library
+                </>
+              )}
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {bulkState && bulkState.results.length === bulkState.total && (
+        <Card className="p-3">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-sm font-medium">
+              Import results — {bulkState.results.filter((r) => r.ok).length} of {bulkState.total}{" "}
+              added
+            </span>
+            <Button size="sm" variant="ghost" onClick={() => setBulkState(null)}>
+              <X className="size-3.5" />
+              Dismiss
+            </Button>
+          </div>
+          <ul className="space-y-1">
+            {bulkState.results.map((r) => (
+              <li key={r.fdcId} className="flex items-center gap-2 text-sm">
+                {r.ok ? (
+                  <CheckCircle2 className="size-3.5 shrink-0 text-emerald-600" />
+                ) : (
+                  <XCircle className="size-3.5 shrink-0 text-destructive" />
+                )}
+                <span className={cn("truncate", !r.ok && "text-muted-foreground")}>{r.name}</span>
+                {!r.ok && r.error && (
+                  <span className="truncate text-xs text-destructive">— {r.error}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
 
       {!searching ? (
         <Card className="flex flex-col items-center gap-2 py-16 text-center text-sm text-muted-foreground">
@@ -430,7 +658,15 @@ function UsdaSearchPanel() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="pl-4">Food</TableHead>
+                <TableHead className="w-10 pl-4">
+                  <Checkbox
+                    checked={allSelected ? true : someSelected ? "indeterminate" : false}
+                    onCheckedChange={toggleAll}
+                    disabled={bulkRunning}
+                    aria-label="Select all USDA results"
+                  />
+                </TableHead>
+                <TableHead>Food</TableHead>
                 <TableHead className="text-right">kcal</TableHead>
                 <TableHead className="text-right">P</TableHead>
                 <TableHead className="text-right">C</TableHead>
@@ -442,9 +678,18 @@ function UsdaSearchPanel() {
             <TableBody>
               {results.map((r: UsdaSearchResult) => {
                 const importing = importMutation.isPending && importMutation.variables === r.fdcId;
+                const alreadyAdded = importedSet.has(r.fdcId);
                 return (
                   <TableRow key={r.fdcId}>
-                    <TableCell className="pl-4">
+                    <TableCell className="w-10 pl-4">
+                      <Checkbox
+                        checked={selected.has(r.fdcId)}
+                        onCheckedChange={() => toggleOne(r.fdcId)}
+                        disabled={bulkRunning || alreadyAdded}
+                        aria-label={`Select ${r.name}`}
+                      />
+                    </TableCell>
+                    <TableCell>
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5">
                           <span className="font-medium text-foreground truncate">{r.name}</span>
@@ -473,15 +718,22 @@ function UsdaSearchPanel() {
                       {r.macros.fiber}
                     </TableCell>
                     <TableCell className="text-right pr-4">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={importing}
-                        onClick={() => importMutation.mutate(r.fdcId)}
-                      >
-                        <Download className="size-3.5" />
-                        {importing ? "Adding…" : "Add to library"}
-                      </Button>
+                      {alreadyAdded ? (
+                        <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                          <CheckCircle2 className="size-3.5 text-emerald-600" />
+                          Already in library
+                        </span>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={importing || bulkRunning}
+                          onClick={() => importMutation.mutate(r.fdcId)}
+                        >
+                          <Download className="size-3.5" />
+                          {importing ? "Adding…" : "Add to library"}
+                        </Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 );

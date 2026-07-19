@@ -7,6 +7,19 @@
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 import netlify from "@netlify/vite-plugin-tanstack-start";
 
+// @netlify/vite-plugin-tanstack-start's local-dev emulation (configureServer) assumes Vite's
+// project root IS the Netlify site's repository root. That's false here: netlify.toml's
+// `base = "frontend/wa-diet-buddy"` is relative to the actual repo root one level up (this is
+// a monorepo), but the plugin resolves `base` against Vite's own root (this directory) instead
+// — doubling the path to ".../frontend/wa-diet-buddy/frontend/wa-diet-buddy" and crashing
+// `vite dev` on startup ("Base directory does not exist"). Its build-time behavior (preparing
+// the Netlify Functions bundle from nitro's output) is unaffected — that only runs during
+// `vite build` via separate hooks, not configureServer — so scoping the plugin to build-only
+// keeps the Netlify deploy working while fixing local dev. See:
+// node_modules/@netlify/vite-plugin/dist/main.js (`projectRoot: viteDevServer.config.root`)
+// node_modules/@netlify/dev/dist/main.js (`repositoryRoot: this.#projectRoot`)
+const isBuild = process.argv.includes("build");
+
 export default defineConfig({
   tanstackStart: {
     // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
@@ -19,5 +32,5 @@ export default defineConfig({
   nitro: {
     preset: "netlify",
   },
-  plugins: [netlify()],
+  plugins: isBuild ? [netlify()] : [],
 });

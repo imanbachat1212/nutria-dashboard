@@ -1,6 +1,13 @@
 import { api } from "./api";
 import type { Recipe, RecipeCategory, RecipeCuisine } from "./meal-library-mock";
 
+export interface PhotoItem {
+  url: string;
+  key: string;
+  width?: number;
+  height?: number;
+}
+
 interface APIMeal {
   _id: string;
   name: string;
@@ -23,8 +30,18 @@ interface APIMeal {
   totalFiber: number;
   verified: boolean;
   notes?: string;
-  photo?: { url: string; key: string } | null;
+  // Server normalizes legacy single-`photo` recipes into photos[0] on read — see
+  // meals.service.js:normalizePhotos. This type only reflects the current (post-normalize)
+  // shape; the defensive fallback below still guards against an unnormalized response.
+  photos?: PhotoItem[];
+  photo?: PhotoItem | null;
   createdAt: string;
+}
+
+function toPhotoArray(m: Pick<APIMeal, "photos" | "photo">): PhotoItem[] {
+  if (m.photos?.length) return m.photos;
+  if (m.photo) return [m.photo];
+  return [];
 }
 
 interface APIListResult {
@@ -35,6 +52,7 @@ interface APIListResult {
 }
 
 function toRecipe(m: APIMeal): Recipe {
+  const photos = toPhotoArray(m);
   return {
     id: m._id,
     name: m.name,
@@ -43,7 +61,8 @@ function toRecipe(m: APIMeal): Recipe {
     cuisine: m.cuisine as RecipeCuisine,
     image: m.icon || "🥗",
     coverHue: m.coverHue || "bg-emerald-100",
-    photoUrl: m.photo?.url,
+    photoUrl: photos[0]?.url,
+    photos,
     prepMin: m.prepTime || 0,
     cookMin: m.cookTime || 0,
     servings: m.servings || 1,
@@ -113,7 +132,7 @@ export interface CreateMealPayload {
   ingredients: CreateMealIngredient[];
   steps: string[];
   notes?: string;
-  photo?: { url: string; key: string };
+  photos?: PhotoItem[];
 }
 
 export async function createMeal(data: CreateMealPayload): Promise<Recipe> {
@@ -177,7 +196,7 @@ export interface EditableMeal {
   ingredients: EditableIngredient[];
   steps: string[];
   notes?: string;
-  photo: { url: string; key: string } | null;
+  photos: PhotoItem[];
 }
 
 export async function getMeal(id: string): Promise<EditableMeal> {
@@ -213,6 +232,6 @@ export async function getMeal(id: string): Promise<EditableMeal> {
     }),
     steps: raw.steps || [],
     notes: raw.notes,
-    photo: raw.photo || null,
+    photos: toPhotoArray(raw),
   };
 }

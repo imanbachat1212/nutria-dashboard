@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -457,6 +457,14 @@ function RecipeDrawer({
   onEdit: (recipe: Recipe) => void;
   onDeleteRequest: (recipe: Recipe) => void;
 }) {
+  const [activeIndex, setActiveIndex] = useState(0);
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [recipe?.id]);
+
+  const photos = recipe?.photos ?? [];
+  const activePhotoUrl = photos[activeIndex]?.url ?? recipe?.photoUrl;
+
   return (
     <Sheet open={!!recipe} onOpenChange={(o) => !o && onClose()}>
       <SheetContent className="w-full sm:max-w-xl overflow-y-auto p-0">
@@ -465,17 +473,35 @@ function RecipeDrawer({
             <div
               className={cn(
                 "h-48 flex items-center justify-center relative overflow-hidden",
-                recipe.photoUrl ? "" : "bg-muted",
+                activePhotoUrl ? "" : "bg-muted",
               )}
             >
-              {recipe.photoUrl ? (
+              {activePhotoUrl ? (
                 <img
-                  src={recipe.photoUrl}
+                  src={activePhotoUrl}
                   alt={recipe.name}
                   className="absolute inset-0 w-full h-full object-cover"
                 />
               ) : (
                 <ImageIcon className="h-12 w-12 text-muted-foreground/50" />
+              )}
+              {photos.length > 1 && (
+                <div className="absolute bottom-2 left-2 right-2 flex gap-1.5 overflow-x-auto">
+                  {photos.map((p, idx) => (
+                    <button
+                      key={p.key}
+                      onClick={() => setActiveIndex(idx)}
+                      className={cn(
+                        "h-10 w-10 shrink-0 rounded-md overflow-hidden border-2 transition-colors",
+                        idx === activeIndex
+                          ? "border-white"
+                          : "border-white/40 hover:border-white/70",
+                      )}
+                    >
+                      <img src={p.url} alt="" className="h-full w-full object-cover" />
+                    </button>
+                  ))}
+                </div>
               )}
               <div className="absolute top-3 right-3 flex items-center gap-2">
                 <DropdownMenu>

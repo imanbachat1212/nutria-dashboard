@@ -55,7 +55,9 @@ export interface Recipe {
   cuisine: RecipeCuisine;
   image: string; // emoji placeholder
   coverHue: string; // tailwind bg class for card cover
-  photoUrl?: string; // uploaded cover photo URL
+  photoUrl?: string; // uploaded cover photo URL — always photos[0], kept separate for the
+  // card/grid view which only ever shows one image
+  photos?: { url: string; key: string }[]; // full gallery — used by the detail view
   prepMin: number;
   cookMin: number;
   servings: number;

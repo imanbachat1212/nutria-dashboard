@@ -28,3 +28,13 @@ export async function searchUsda(query: string): Promise<UsdaSearchResult[]> {
 export async function importUsdaFood(fdcId: number): Promise<{ name: string }> {
   return api.post<{ name: string }>("/api/foods/usda-import", { fdcId });
 }
+
+// Bulk existence check — one request for a whole page of search results instead of an
+// N-query fan-out. Returns the subset of the given fdcIds that already have a Food document.
+export async function fetchImportedUsdaFdcIds(fdcIds: number[]): Promise<number[]> {
+  if (fdcIds.length === 0) return [];
+  const result = await api.get<{ fdcIds: number[] }>(
+    `/api/foods/usda-imported?fdcIds=${fdcIds.join(",")}`,
+  );
+  return result.fdcIds;
+}

@@ -484,6 +484,7 @@ export function NewFoodDialog({ open, onOpenChange }: NewFoodDialogProps) {
                   await createFood({
                     name: name.trim(),
                     arabicName: arabicName.trim() || undefined,
+                    brand: brand.trim() || undefined,
                     category,
                     source,
                     kcal,
