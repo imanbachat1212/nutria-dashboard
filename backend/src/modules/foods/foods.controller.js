@@ -35,3 +35,12 @@ export const usdaImport = asyncHandler(async (req, res) => {
   const { food, created } = await foodsService.importUsdaFood(req.validated.body.fdcId, req.user);
   res.status(created ? 201 : 200).json({ data: food });
 });
+
+export const usdaImported = asyncHandler(async (req, res) => {
+  const fdcIds = req.validated.query.fdcIds
+    .split(",")
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isInteger(n) && n > 0);
+  const importedFdcIds = await foodsService.getImportedUsdaFdcIds(fdcIds);
+  res.json({ data: { fdcIds: importedFdcIds } });
+});

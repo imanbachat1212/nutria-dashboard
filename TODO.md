@@ -53,9 +53,9 @@
 
 ## Meal Library (Recipes)
 
-- [ ] **Recipe photo upload** — `uploadMedia()` is wired in the dialog but Cloudinary is
-      geo-blocked and no fallback provider is set up. `storage.js` is provider-agnostic;
-      swap `CLOUDINARY_URL` for R2/S3/etc when ready.
+- [x] **Recipe photo upload** — now supports multiple photos (`Meal.photos[]`, capped at 6,
+      `photos[0]` = cover). See `backend/CLAUDE.md` → "Image / file storage" for the
+      single→array migration pattern (read-time normalization, not DB-backfilled).
 - [ ] **Unit conversion for non-gram units** — `cup`, `tbsp`, `piece` in recipe ingredients
       fall back to rough gram weights. Needs per-food gram-weight table. `TODO` comments in
       `backend/src/lib/calc/recipeMacros.js` (lines 10 and 37) and
@@ -63,6 +63,23 @@
 - [ ] **`rating`, `usedInPlans`, `lastUsed`, `author`, `isFavorite`** — all hardcoded to
       defaults in `meals-api.ts:toRecipe()`. Wire `usedInPlans` / `lastUsed` once the
       mealplans module can report which recipes appear in active plans.
+- [x] **New/Edit Recipe dialog gotchas** (`new-recipe-dialog.tsx`) — two things worth knowing
+      before touching this component again:
+      1. **Outside-click prevention is scoped to this dialog only.** It uses
+         `onPointerDownOutside={(e) => e.preventDefault()}` directly on its own
+         `<DialogContent>` — `ui/dialog.tsx` (shared by every other dialog in the app) was
+         deliberately left untouched. Do not assume other dialogs share this behavior; each
+         dialog that wants it must opt in individually the same way.
+      2. **Step 2 (Ingredients) uses `position: sticky` for its header/Add button, not an
+         inner scroll container.** An inner-container-only fix (`max-h-* overflow-y-auto`
+         wrapped around just the ingredient rows, leaving the outer step wrapper as
+         `overflow-visible`) was tried first and **did not work** — the outer wrapper needed
+         `overflow-visible` so the food-search dropdown could escape clipping, but that same
+         setting let a long ingredient list spill past the dialog into the footer regardless
+         of the inner cap. The actual fix: make the outer step wrapper scroll like every other
+         step (`overflow-y-auto`, no more per-step special-casing), then use `sticky top-0` on
+         the Ingredients header + Add button so they stay pinned during that scroll. Don't
+         reintroduce an inner-only scroll fix here without reading this history first.
 
 ---
 
@@ -115,6 +132,20 @@
       endpoints, then replace the page. **AUTOMATION:** WhatsApp contacts → leads via webhook.
 - [ ] **"Convert to client" action** — shown in the UI, not wired.
 - [ ] **Lead source "automation"** — `source` enum value reserved for n8n-created leads.
+- [ ] **Three unreconciled "lead" concepts — needs a dedicated reconciliation pass.** There
+      are currently three separate, overlapping notions of "lead" in this codebase and they
+      don't agree with each other:
+      1. `Client.status` enum value `"lead"` — a status a real `Client` document can hold.
+      2. The actual `Lead` collection/module (`backend/src/modules/leads/`) — a stub, mostly
+         unbuilt (see entry above).
+      3. The sidebar `/leads` page — reads from `leads-mock.ts` only, wired to neither #1 nor
+         #2.
+      Before building out the `leads` module for real, decide: is a "lead" a `Client` with
+      `status: "lead"` (pre-conversion client, same collection), or should leads live
+      exclusively in the `Lead` collection until explicitly converted to a `Client`? Whichever
+      is chosen, the `/leads` page needs to be wired to that source of truth instead of mock
+      data, and the other concept should either be removed or clearly scoped to a different
+      meaning.
 
 ---
 
@@ -164,6 +195,23 @@
 
 - [ ] **Entire page is mock** — uses `billing-mock.ts`. Backend stub.
       Build: Invoice + Payment models, CRUD, PDF export.
+
+---
+
+## Program Selection + Payment-Gated Active Status — scoped, NOT YET BUILT
+
+- [ ] **Full flow is locked in principle but not implemented.** Waiting on the client's
+      finalized end-to-end flow before starting — do not build ahead of that confirmation.
+      Locked flow, in order:
+      1. Lead comes in → quick capture (minimal info, gets them into the system fast).
+      2. Dietitian runs the assessment → **Complete Profile** step (fills in the rest of the
+         client's real profile/intake data).
+      3. Program selection (which service/package the client is signing up for).
+      4. A real Invoice is created for that program (ties into the Billing module above —
+         Invoice/Payment models don't exist yet either, see Billing section).
+      5. Client `status` flips to `active` **only** when that invoice is marked Paid — i.e.
+         Active status is payment-gated, not set manually or on program selection alone.
+      Depends on: Billing module (Invoice/Payment models + CRUD) existing first.
 
 ---
 
@@ -267,6 +315,22 @@ These modules have models but only stub routes/services/controllers:
 
 ## Infrastructure / Cross-cutting
 
+- [x] **`@netlify/vite-plugin-tanstack-start` breaks `npm run dev` if included unconditionally**
+      — the plugin's local-dev emulation (`configureServer`) resolves `netlify.toml`'s
+      `base = "frontend/wa-diet-buddy"` against Vite's own project root instead of the true
+      repo root, doubling the path (`.../frontend/wa-diet-buddy/frontend/wa-diet-buddy`) and
+      crashing `vite dev` on startup with "Base directory does not exist". This is a plugin
+      limitation in monorepos where `netlify.toml` lives in a subfolder — not fixable via
+      netlify.toml changes without risking the deploy config that was already fixed once.
+      **Fixed** in `frontend/wa-diet-buddy/vite.config.ts`: the plugin is now only added to
+      `plugins` when `process.argv.includes("build")` (i.e. `npm run build` / `vite build`).
+      Its build-time behavior (bundling Netlify Functions from nitro's output) runs via
+      separate hooks that only fire on `vite build` anyway, so this doesn't affect deploys —
+      only `vite dev`'s local Netlify-platform emulation is skipped, which this project's dev
+      workflow doesn't use (it talks directly to the local Express backend on :4000). If a
+      future task needs that emulation locally, use `netlify dev` from the **repo root**
+      instead of `npm run dev` from inside `frontend/wa-diet-buddy` — that's the only way to
+      make the plugin's root-detection resolve correctly for this monorepo layout.
 - [ ] **Image storage provider** — Cloudinary geo-blocked. `storage.js` is provider-agnostic
       (`uploadImage` / `deleteImage`). Swap `CLOUDINARY_URL` for Cloudflare R2 or AWS S3
       when a provider is set up. Affects: client photos, meal/recipe photos, food images,

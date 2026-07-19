@@ -7,15 +7,16 @@ const ingredientSchema = z.object({
   unit: z.string().optional(),
 });
 
-const photoSchema = z
-  .object({
-    url: z.string(),
-    key: z.string(),
-    width: z.number().optional(),
-    height: z.number().optional(),
-  })
-  .nullable()
-  .optional();
+const photoItemSchema = z.object({
+  url: z.string(),
+  key: z.string(),
+  width: z.number().optional(),
+  height: z.number().optional(),
+});
+
+// photos[0] is the cover — capped well above what the UI exposes (6) as a sanity bound, not
+// a UX limit in itself.
+const photosSchema = z.array(photoItemSchema).max(6).optional();
 
 export const createMealSchema = z.object({
   body: z.object({
@@ -28,7 +29,7 @@ export const createMealSchema = z.object({
     cookTime: z.number().min(0).optional(),
     icon: z.string().optional(),
     coverHue: z.string().optional(),
-    photo: photoSchema,
+    photos: photosSchema,
     dietTags: z.array(z.string()).optional(),
     allergens: z.array(z.string()).optional(),
     ingredients: z.array(ingredientSchema).optional(),
@@ -55,7 +56,7 @@ export const updateMealSchema = z.object({
     cookTime: z.number().min(0).optional(),
     icon: z.string().optional(),
     coverHue: z.string().optional(),
-    photo: photoSchema,
+    photos: photosSchema,
     dietTags: z.array(z.string()).optional(),
     allergens: z.array(z.string()).optional(),
     ingredients: z.array(ingredientSchema).optional(),

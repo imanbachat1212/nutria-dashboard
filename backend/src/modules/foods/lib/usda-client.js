@@ -107,6 +107,7 @@ export async function getUsdaFoodDetails(fdcId) {
   return {
     fdcId: f.fdcId,
     name: f.description,
+    brand: f.brandOwner || f.brandName || undefined,
     servingSize: 100,
     servingUnit: "g",
     ...macros,

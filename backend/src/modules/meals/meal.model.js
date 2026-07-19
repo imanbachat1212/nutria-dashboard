@@ -30,7 +30,8 @@ const mealSchema = new mongoose.Schema(
     cookTime: { type: Number, default: 0 },
     icon: { type: String, default: "🥗" },
     coverHue: { type: String, default: "bg-emerald-100" },
-    photo: { type: imageSchema, default: null },
+    // photos[0] is the cover shown on the card/grid — the card only has room for one image.
+    photos: { type: [imageSchema], default: [] },
     dietTags: [{ type: String }],
     allergens: [{ type: String }],
     ingredients: [ingredientSchema],

@@ -86,11 +86,23 @@ Non-ApiError exceptions → 500.
 - Never store binary images in MongoDB.
 - Use `src/lib/storage.js` → Cloudinary. Interface: `uploadImage(buffer, folder)` → `{ url, key, width, height }`, `deleteImage(key)`.
 - Reusable embedded `imageSchema` in `src/lib/imageSchema.js` — `{ url, key, width, height }` (no _id).
-- Used on: clients (photo), meals (photo), foods (image), journal_entries (photo), cms_blocks (image).
+- Used on: clients (photo), meals (photos — array, see below), foods (image), journal_entries (photo), cms_blocks (image).
 - `media` module: `POST /api/media` accepts a single image via multer, calls `storage.uploadImage`.
+  Multi-image upload (e.g. meals) is just calling `uploadImage`/`deleteImage` once per file —
+  their signatures are single-file only, on purpose.
 - When deleting a record with an image, call `storage.deleteImage(key)` in the service.
 - WhatsApp meal photos: uploaded by n8n directly to storage; n8n posts the journal entry with the image URL already set.
 - Env: `CLOUDINARY_URL` (optional — server starts without it).
+
+### `meals.photos` migration pattern (single `photo` → array)
+`Meal.photo` (single embedded `imageSchema`) was migrated to `Meal.photos` (array;
+`photos[0]` is the cover shown on the card/grid). This was a **read-time normalization, not a
+DB backfill** — old documents still physically have the legacy single `photo` field in Mongo.
+`meals.service.js`'s `listMeals`/`getMealById` normalize `photo` → `photos: [photo]` on the way
+out; `deleteMeal` checks both shapes (via `.lean()`, since a hydrated Mongoose document hides
+fields the current schema doesn't declare) so legacy images still get cleaned up from storage.
+Any future code that reads meal photos directly (bypassing this service layer) must handle both
+shapes defensively — don't assume `photos` is always present/array-shaped on a raw document.
 
 ## Automation-readiness
 - `modules/webhooks` — thin controllers that receive inbound payloads and ONLY call existing services.

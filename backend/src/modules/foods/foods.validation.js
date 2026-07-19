@@ -4,6 +4,7 @@ export const createFoodSchema = z.object({
   body: z.object({
     name: z.string().min(1),
     nameAr: z.string().optional(),
+    brand: z.string().optional(),
     category: z.string().optional(),
     source: z.enum(["usda", "lebanese", "custom"]).optional(),
     servingSize: z.number().positive(),
@@ -23,6 +24,7 @@ export const updateFoodSchema = z.object({
   body: z.object({
     name: z.string().min(1).optional(),
     nameAr: z.string().optional(),
+    brand: z.string().optional(),
     category: z.string().optional(),
     source: z.enum(["usda", "lebanese", "custom"]).optional(),
     servingSize: z.number().positive().optional(),
@@ -51,6 +53,13 @@ export const listFoodsSchema = z.object({
 export const usdaSearchSchema = z.object({
   query: z.object({
     q: z.string().min(1),
+  }),
+});
+
+export const usdaImportedSchema = z.object({
+  query: z.object({
+    // comma-separated fdcIds, e.g. "1234,5678" — parsed to numbers in the controller
+    fdcIds: z.string().min(1),
   }),
 });
 

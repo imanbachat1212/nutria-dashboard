@@ -10,6 +10,7 @@ import {
   listFoodsSchema,
   usdaSearchSchema,
   usdaImportSchema,
+  usdaImportedSchema,
 } from "./foods.validation.js";
 
 const router = Router();
@@ -31,12 +32,20 @@ router.get(
   ctrl.list
 );
 
-// Must come before /:id — otherwise Express would match "usda-search" as an :id param.
+// Must come before /:id — otherwise Express would match "usda-search"/"usda-imported" as an
+// :id param.
 router.get(
   "/usda-search",
   requirePermission("foods.read"),
   validate(usdaSearchSchema),
   ctrl.usdaSearch
+);
+
+router.get(
+  "/usda-imported",
+  requirePermission("foods.read"),
+  validate(usdaImportedSchema),
+  ctrl.usdaImported
 );
 
 router.post(

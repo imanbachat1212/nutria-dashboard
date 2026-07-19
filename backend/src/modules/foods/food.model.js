@@ -5,6 +5,7 @@ const foodSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true },
     nameAr: { type: String, trim: true },
+    brand: { type: String, trim: true },
     category: { type: String, trim: true, index: true },
     source: {
       type: String,
