@@ -22,6 +22,24 @@ const foodSchema = new mongoose.Schema(
     fiber: { type: Number, default: 0 },
     sugar: { type: Number, default: null },
     sodium: { type: Number, default: null },
+    // Micronutrients — optional/nullable, same pattern as sugar/sodium. Currently only
+    // populated on the Hoteit et al. lab-verified Lebanese dishes/sweets (source: "lebanese",
+    // verified: true); every other food leaves them null.
+    //
+    // ⚠️ UNIT CAVEAT — NOT unit-verified. The source tables (Hoteit et al.) did not explicitly
+    // label vitamin units. The stored numbers are the RAW values as published — likely mcg for
+    // vitamin A and mcg for vitamin D, mg for vitamin E/C, but this is NOT confirmed. These
+    // must be verified against the original papers (F1000Research 2020 / Nutrients 2021 /
+    // PLOS One 2024) before use in any clinical calculation involving vitamin dosing.
+    // See TODO.md → "Food micronutrient unit verification".
+    vitaminA: { type: Number, default: null },
+    vitaminD: { type: Number, default: null },
+    vitaminE: { type: Number, default: null },
+    vitaminC: { type: Number, default: null },
+    iron: { type: Number, default: null },
+    // Provenance/citation for the numbers on this food (e.g. "Hoteit et al., lab-analyzed").
+    // Absent on hand-estimated and USDA-imported foods.
+    dataSource: { type: String, trim: true, default: null },
     verified: { type: Boolean, default: false },
     image: { type: imageSchema, default: null },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },

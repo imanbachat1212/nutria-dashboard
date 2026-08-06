@@ -192,25 +192,37 @@ async function seedFoods() {
   let inserted = 0;
   let updated = 0;
 
+  // Optional/provenance fields — only written when the seed entry actually provides them, so
+  // ordinary USDA/estimate foods (which omit them) keep the schema defaults on insert and their
+  // existing DB values on update. The lab-verified Lebanese entries supply these.
+  const OPTIONAL = [
+    "sodium", "iron", "vitaminA", "vitaminD", "vitaminE", "vitaminC", "dataSource", "verified",
+  ];
+
   for (const f of SEED_FOODS) {
+    const set = {
+      nameAr: f.nameAr,
+      category: f.category,
+      source: f.source,
+      servingSize: 100,
+      servingUnit: "g",
+      // NA-only lab sweets carry null macros/fiber on purpose ("not analyzed") — preserve null
+      // rather than coercing to 0 (which would falsely assert a measured zero). required:true
+      // isn't enforced on this path (findOneAndUpdate without runValidators).
+      calories: f.calories ?? null,
+      protein: f.protein ?? null,
+      carbs: f.carbs ?? null,
+      fat: f.fat ?? null,
+      fiber: f.fiber === undefined ? 0 : f.fiber,
+    };
+    for (const k of OPTIONAL) {
+      if (f[k] !== undefined) set[k] = f[k];
+    }
+
     const result = await Food.findOneAndUpdate(
       { name: f.name },
-      {
-        $set: {
-          nameAr: f.nameAr,
-          category: f.category,
-          source: f.source,
-          servingSize: 100,
-          servingUnit: "g",
-          calories: f.calories,
-          protein: f.protein,
-          carbs: f.carbs,
-          fat: f.fat,
-          fiber: f.fiber || 0,
-        },
-        $setOnInsert: { sugar: null, sodium: null },
-      },
-      { upsert: true, new: true, rawResult: true }
+      { $set: set, $setOnInsert: { sugar: null } },
+      { upsert: true, includeResultMetadata: true }
     );
     if (result.lastErrorObject?.updatedExisting) {
       updated++;

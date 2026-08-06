@@ -88,6 +88,36 @@
 - [ ] **Unit conversion / per-food gram weights** — same issue as Meal Library. Non-gram
       serving units (cup, tbsp, piece) have no conversion table; macros are approximated.
 - [ ] **`usedInPlans`, `lastUsed`, `isFavorite`** — hardcoded in `foods-api.ts:toFoodItem()`.
+- [ ] **⚠️ Food micronutrient unit verification — BLOCKER before any vitamin dosing use.**
+      The Hoteit et al. lab-verified Lebanese dishes/sweets (seeded 2026-08, `source: "lebanese"`,
+      `verified: true`, `dataSource: "Hoteit et al., lab-analyzed"`) populate the new
+      `vitaminA/D/E/C` and `iron` fields on `Food`. The source tables did **not** label vitamin
+      units — the stored numbers are RAW as published (likely mcg for Vit A/D, mg for Vit E/C,
+      **but unconfirmed**). Verify every vitamin column against the original papers
+      (F1000Research 2020 / Nutrients 2021 / PLOS One 2024) before these values feed any clinical
+      calculation involving vitamin dosing. `iron` is mg and NaCl→sodium (mg) conversion is
+      confirmed; the caveat is vitamins only. See the ⚠️ comment block in
+      `backend/src/modules/foods/food.model.js` and the header comment in
+      `backend/src/modules/foods/foods.seed.js`.
+- [ ] **`Tr` / `<x` / `NA` all collapse to `null` on the lab foods (decision, documented).** The
+      Hoteit source tables distinguish "Tr" (trace: present but below quantification), "<0.1"/"<1"
+      (below detection limit) and "NA" (not analyzed). A single nullable numeric column can't
+      preserve that distinction, so all three are stored as `null` — deliberately NOT `0` (0 would
+      falsely assert a measured, confirmed-absent value). Consequence: **a `null` micronutrient on
+      these foods does not mean zero.** If that distinction ever matters clinically, it'd need a
+      per-field status/enum, not just the number. Logic + rationale live in
+      `foods.seed.js` (`cell()` helper + header comment).
+- [ ] **No dedicated "sweets"/"dessert" category — 37 Arabic sweets seeded as `category: "prepared"`.**
+      The 37 sweets share the `prepared` backend category with the composite dishes because the
+      frontend `CATEGORY_MAP` (`frontend/.../lib/foods-api.ts`) has no sweets key and falls back to
+      `"protein"` for any unknown category (and frontend is DO-NOT-MODIFY). Decide whether to add a
+      real dessert category — that's a coordinated change: `Food` model/seed conventions **and** the
+      frontend `CATEGORY_MAP` / `CATEGORY_REVERSE` / `CATEGORY_TO_BACKEND` maps. Until then, sweets
+      are only distinguishable from savoury prepared dishes by name/`dataSource`, not category.
+- [ ] **2 sweets seeded name-only, unusable until data supplied** — `Maakaron` (معكرون) and
+      `Mafrouka fostok` (مفروكة بالفستق) were "NA" across every field in the source, so they have
+      **null** for all macros/micros and `verified: false`. They exist as placeholders (findable by
+      name) but must not be used in any calculation until real nutrition data is added.
 
 ---
 

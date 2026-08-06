@@ -16,6 +16,12 @@ export const createFoodSchema = z.object({
     fiber: z.number().min(0).optional(),
     sugar: z.number().min(0).nullable().optional(),
     sodium: z.number().min(0).nullable().optional(),
+    vitaminA: z.number().min(0).nullable().optional(),
+    vitaminD: z.number().min(0).nullable().optional(),
+    vitaminE: z.number().min(0).nullable().optional(),
+    vitaminC: z.number().min(0).nullable().optional(),
+    iron: z.number().min(0).nullable().optional(),
+    dataSource: z.string().nullable().optional(),
   }),
 });
 
@@ -36,6 +42,12 @@ export const updateFoodSchema = z.object({
     fiber: z.number().min(0).optional(),
     sugar: z.number().min(0).nullable().optional(),
     sodium: z.number().min(0).nullable().optional(),
+    vitaminA: z.number().min(0).nullable().optional(),
+    vitaminD: z.number().min(0).nullable().optional(),
+    vitaminE: z.number().min(0).nullable().optional(),
+    vitaminC: z.number().min(0).nullable().optional(),
+    iron: z.number().min(0).nullable().optional(),
+    dataSource: z.string().nullable().optional(),
     verified: z.boolean().optional(),
   }),
 });
