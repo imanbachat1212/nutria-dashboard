@@ -38,7 +38,8 @@ const CATEGORY_MAP: Record<string, FoodCategory> = {
   fats_oils: "fats",
   nuts_seeds: "snacks",
   prepared: "prepared",
-  condiments: "condiments",
+  sweets: "sweets",
+  beverages: "beverages",
 };
 
 function mapCategory(cat?: string): FoodCategory {
@@ -61,7 +62,11 @@ const CATEGORY_TO_BACKEND: Record<string, string> = {
   produce: "vegetables",
   fats: "fats_oils",
   snacks: "nuts_seeds",
-  beverages: "condiments",
+  // Was "condiments" — that backend category was retired (2026-08). "beverages" has no distinct
+  // backend bucket of its own; store/read it as a literal "beverages" string so it at least
+  // round-trips correctly (see matching CATEGORY_MAP entry above), instead of silently aliasing
+  // onto a category that no longer exists.
+  beverages: "beverages",
 };
 
 function toFoodItem(f: APIFood): FoodItem {

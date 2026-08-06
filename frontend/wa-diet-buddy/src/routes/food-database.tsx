@@ -100,8 +100,8 @@ const CATEGORIES: (FoodCategory | "all")[] = [
   "fats",
   "snacks",
   "beverages",
-  "condiments",
   "prepared",
+  "sweets",
 ];
 
 const SOURCES: (FoodSource | "all")[] = ["all", "usda", "lebanese", "custom"];

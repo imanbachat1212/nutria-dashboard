@@ -7,8 +7,8 @@ export type FoodCategory =
   | "fats"
   | "beverages"
   | "snacks"
-  | "condiments"
-  | "prepared";
+  | "prepared"
+  | "sweets";
 
 export type FoodSource = "usda" | "lebanese" | "custom";
 
@@ -53,8 +53,8 @@ export const CATEGORY_META: Record<FoodCategory, { label: string; emoji: string 
   fats: { label: "Fats & oils", emoji: "🫒" },
   beverages: { label: "Beverages", emoji: "🥤" },
   snacks: { label: "Snacks", emoji: "🍿" },
-  condiments: { label: "Condiments", emoji: "🧂" },
   prepared: { label: "Prepared", emoji: "🥡" },
+  sweets: { label: "Sweets", emoji: "🍰" },
 };
 
 export const SOURCE_META: Record<FoodSource, { label: string; color: string }> = {
@@ -197,7 +197,7 @@ export const FOODS: FoodItem[] = [
     id: "f-008",
     name: "Tahini",
     arabicName: "طحينة",
-    category: "condiments",
+    category: "fats",
     source: "lebanese",
     macros: { kcal: 595, protein: 17, carbs: 21.2, fat: 53.8, fiber: 9.3, sugar: 0.5, sodium: 115 },
     servings: [
