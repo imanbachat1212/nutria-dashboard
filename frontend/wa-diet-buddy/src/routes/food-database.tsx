@@ -33,9 +33,14 @@ import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import {
+  Accordion,
+  AccordionItem,
+  AccordionTrigger,
+  AccordionContent,
+} from "@/components/ui/accordion";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -64,6 +69,8 @@ import { cn } from "@/lib/utils";
 import {
   CATEGORY_META,
   SOURCE_META,
+  MICRO_FIELD_GROUPS,
+  EMPTY_MICROS,
   type FoodItem,
   type FoodCategory,
   type FoodSource,
@@ -261,28 +268,30 @@ function FoodDatabasePage() {
               </Button>
             </div>
             <Separator className="my-3" />
-            <ScrollArea>
-              <div className="flex gap-1.5 pb-1">
-                {CATEGORIES.map((c) => {
-                  const active = category === c;
-                  const meta = c === "all" ? null : CATEGORY_META[c];
-                  return (
-                    <button
-                      key={c}
-                      onClick={() => setCategory(c)}
-                      className={cn(
-                        "shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition-colors",
-                        active
-                          ? "border-primary bg-primary text-primary-foreground"
-                          : "border-input bg-background hover:bg-accent",
-                      )}
-                    >
-                      {meta ? `${meta.emoji} ${meta.label}` : "All categories"}
-                    </button>
-                  );
-                })}
-              </div>
-            </ScrollArea>
+            {/* flex-wrap, not ScrollArea — with 11+ category pills this row doesn't fit in one
+                line at standard viewport widths, and ScrollArea here had no horizontal ScrollBar
+                affordance so overflow pills (e.g. Sweets) just clipped invisibly. Wrapping to a
+                second line keeps every pill visible and clickable instead. */}
+            <div className="flex flex-wrap gap-1.5">
+              {CATEGORIES.map((c) => {
+                const active = category === c;
+                const meta = c === "all" ? null : CATEGORY_META[c];
+                return (
+                  <button
+                    key={c}
+                    onClick={() => setCategory(c)}
+                    className={cn(
+                      "shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                      active
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-input bg-background hover:bg-accent",
+                    )}
+                  >
+                    {meta ? `${meta.emoji} ${meta.label}` : "All categories"}
+                  </button>
+                );
+              })}
+            </div>
           </Card>
 
           {/* Table */}
@@ -850,6 +859,10 @@ function FoodDrawer({ food, onClose }: { food: FoodItem | null; onClose: () => v
             </div>
           </section>
 
+          {/* Micronutrients — full profile, collapsed by default. Does not touch the macro
+              grid/MicroStat row above; "No Data" is the expected state for most USDA imports. */}
+          <MicronutrientSection food={food} />
+
           {/* Servings */}
           <section>
             <h3 className="mb-2 text-sm font-semibold">Common servings</h3>
@@ -977,5 +990,101 @@ function MicroStat({ label, value }: { label: string; value: string }) {
       <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
       <div className="text-sm font-medium tabular-nums">{value}</div>
     </div>
+  );
+}
+
+// Sums whichever of the given sub-component values are present; null (not 0) if none are, so
+// "no data at all" and "measured zero" stay visually distinct downstream.
+function partialSum(values: (number | null)[]): number | null {
+  const present = values.filter((v): v is number => v != null);
+  if (present.length === 0) return null;
+  return Math.round(present.reduce((a, b) => a + b, 0) * 100) / 100;
+}
+
+function MicronutrientSection({ food }: { food: FoodItem }) {
+  const micros = food.micros ?? EMPTY_MICROS;
+  const netCarbs = Math.round((food.macros.carbs - food.macros.fiber) * 10) / 10;
+  const omega3Sum = partialSum([micros.omega3Ala, micros.omega3Epa, micros.omega3Dha]);
+  const omega6Sum = partialSum([micros.omega6La, micros.omega6Aa]);
+  const omega6IsApprox = micros.omega6LaApprox || micros.omega6AaApprox;
+
+  return (
+    <section>
+      <h3 className="mb-2 text-sm font-semibold">Micronutrients</h3>
+
+      <div className="mb-2 grid grid-cols-3 gap-2 text-xs">
+        <MicroStat label="Net carbs" value={`${netCarbs} g`} />
+        <MicroStat
+          label="Omega-3 (partial)"
+          value={omega3Sum == null ? "No Data" : `${omega3Sum} g`}
+        />
+        <MicroStat
+          label={`Omega-6 (partial)${omega6IsApprox ? "*" : ""}`}
+          value={omega6Sum == null ? "No Data" : `${omega6Sum} g`}
+        />
+      </div>
+      <p className="mb-3 text-[10px] leading-snug text-muted-foreground">
+        Net carbs = carbs − fiber, computed here, not stored. Omega-3/6 are a partial sum of
+        only the named sub-components below — USDA never reports one verified total, and other
+        unmeasured fatty acids in the family may exist.
+        {omega6IsApprox &&
+          " * includes a sub-component pulled from USDA's generic (non-n-6-confirmed) fatty acid id — see that field below."}
+      </p>
+
+      <Accordion type="multiple" className="rounded-md border px-3">
+        {MICRO_FIELD_GROUPS.map((group) => (
+          <AccordionItem key={group.id} value={group.id} className="last:border-b-0">
+            <AccordionTrigger>{group.label}</AccordionTrigger>
+            <AccordionContent>
+              <div className="grid grid-cols-2 gap-1.5">
+                {group.fields.map((f) => {
+                  const value = micros[f.key];
+                  const isApproxOmega =
+                    (f.key === "omega6La" && micros.omega6LaApprox) ||
+                    (f.key === "omega6Aa" && micros.omega6AaApprox);
+                  const sourceUnit =
+                    f.key === "vitaminA"
+                      ? micros.vitaminASourceUnit
+                      : f.key === "vitaminD"
+                        ? micros.vitaminDSourceUnit
+                        : null;
+                  return (
+                    <div
+                      key={f.key}
+                      className="flex items-center justify-between rounded-md border bg-muted/20 px-2 py-1.5 text-xs"
+                    >
+                      <span className="text-muted-foreground">{f.label}</span>
+                      <span className="flex items-center gap-1 font-medium tabular-nums">
+                        {value == null ? (
+                          <span className="text-muted-foreground">No Data</span>
+                        ) : (
+                          `${value} ${f.unit}`
+                        )}
+                        {sourceUnit === "iu" && (
+                          <Badge
+                            variant="outline"
+                            className="border-amber-300 px-1 py-0 text-[9px] text-amber-700"
+                          >
+                            IU
+                          </Badge>
+                        )}
+                        {isApproxOmega && (
+                          <Badge
+                            variant="outline"
+                            className="border-amber-300 px-1 py-0 text-[9px] text-amber-700"
+                          >
+                            approx
+                          </Badge>
+                        )}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </AccordionContent>
+          </AccordionItem>
+        ))}
+      </Accordion>
+    </section>
   );
 }

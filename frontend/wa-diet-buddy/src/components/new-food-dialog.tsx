@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { createFood } from "@/lib/foods-api";
+import { createFood, updateFood, type UnitWeightMatch } from "@/lib/foods-api";
 import {
   Sparkles,
   Flame,
@@ -15,6 +15,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CheckCircle2,
+  X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -39,13 +40,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Accordion,
+  AccordionItem,
+  AccordionTrigger,
+  AccordionContent,
+} from "@/components/ui/accordion";
 import { cn } from "@/lib/utils";
 import {
   CATEGORY_META,
   SOURCE_META,
+  MICRO_FIELD_GROUPS,
   type FoodCategory,
   type FoodSource,
   type ServingSize,
+  type NumericMicroKey,
 } from "@/lib/food-database-mock";
 
 interface NewFoodDialogProps {
@@ -55,11 +64,26 @@ interface NewFoodDialogProps {
 
 const ALLERGENS = ["gluten", "dairy", "nuts", "eggs", "soy", "shellfish", "sesame"] as const;
 
+// Renders only the units a matched FNDDS entry actually had data for — most foods have 1-2
+// of the 4, not all 4 (see fndds-common-servings.json's sparse servingsGrams shape).
+const UNIT_WEIGHT_LABELS: [keyof UnitWeightMatch["fields"], string][] = [
+  ["gramsPerCup", "cup"],
+  ["gramsPerTbsp", "tbsp"],
+  ["gramsPerTsp", "tsp"],
+  ["gramsPerPiece", "piece"],
+];
+function formatUnitWeightLines(fields: UnitWeightMatch["fields"]): string[] {
+  return UNIT_WEIGHT_LABELS.filter(([key]) => fields[key] != null).map(
+    ([key, label]) => `1 ${label} = ${fields[key]}g`,
+  );
+}
+
 const STEPS = [
   { id: 1, label: "Identity" },
   { id: 2, label: "Macros / 100g" },
-  { id: 3, label: "Servings & tags" },
-  { id: 4, label: "Review" },
+  { id: 3, label: "Micronutrients" },
+  { id: 4, label: "Servings & tags" },
+  { id: 5, label: "Review" },
 ];
 
 export function NewFoodDialog({ open, onOpenChange }: NewFoodDialogProps) {
@@ -83,12 +107,37 @@ export function NewFoodDialog({ open, onOpenChange }: NewFoodDialogProps) {
   const [sugar, setSugar] = useState(0);
   const [sodium, setSodium] = useState(0);
 
+  // micronutrients — sparse: a key is only present here once the dietitian actually types a
+  // value, so unfilled fields are omitted from the save payload entirely (stay null server-side)
+  // rather than being sent as 0.
+  const [micros, setMicros] = useState<Partial<Record<NumericMicroKey, number>>>({});
+
+  const updateMicro = (key: NumericMicroKey, raw: string) => {
+    setMicros((prev) => {
+      const next = { ...prev };
+      if (raw.trim() === "") {
+        delete next[key];
+      } else {
+        const n = Number(raw);
+        if (!Number.isNaN(n)) next[key] = n;
+      }
+      return next;
+    });
+  };
+
   // servings & tags
   const [servings, setServings] = useState<ServingSize[]>([{ label: "1 serving", grams: 100 }]);
   const [allergens, setAllergens] = useState<string[]>([]);
   const [verified, setVerified] = useState(false);
   const [favorite, setFavorite] = useState(false);
   const [notes, setNotes] = useState("");
+
+  // Set once the food has been created and the server found a unit-weight match — kept
+  // separate from `saving` since the dialog stays open past save to show this result. Cleared
+  // (not re-fetched) once the dietitian applies/clears/dismisses it.
+  const [savedFoodId, setSavedFoodId] = useState<string | null>(null);
+  const [unitWeightMatch, setUnitWeightMatch] = useState<UnitWeightMatch | null>(null);
+  const [matchActionLoading, setMatchActionLoading] = useState(false);
 
   const computedKcal = useMemo(
     () => Math.round(protein * 4 + carbs * 4 + fat * 9),
@@ -110,11 +159,14 @@ export function NewFoodDialog({ open, onOpenChange }: NewFoodDialogProps) {
     setFiber(0);
     setSugar(0);
     setSodium(0);
+    setMicros({});
     setServings([{ label: "1 serving", grams: 100 }]);
     setAllergens([]);
     setVerified(false);
     setFavorite(false);
     setNotes("");
+    setSavedFoodId(null);
+    setUnitWeightMatch(null);
   };
 
   const handleClose = (o: boolean) => {
@@ -132,11 +184,46 @@ export function NewFoodDialog({ open, onOpenChange }: NewFoodDialogProps) {
 
   const useComputedKcal = () => setKcal(computedKcal);
 
+  const handleClearMatch = async () => {
+    if (!savedFoodId) return;
+    setMatchActionLoading(true);
+    try {
+      await updateFood(savedFoodId, {
+        gramsPerCup: null,
+        gramsPerTbsp: null,
+        gramsPerTsp: null,
+        gramsPerPiece: null,
+      });
+      setUnitWeightMatch(null);
+    } catch (err) {
+      console.error("Failed to clear auto-filled unit weights:", err);
+    } finally {
+      setMatchActionLoading(false);
+    }
+  };
+
+  const handleApplySuggestion = async () => {
+    if (!savedFoodId || !unitWeightMatch) return;
+    setMatchActionLoading(true);
+    try {
+      await updateFood(savedFoodId, unitWeightMatch.fields);
+      // Converges to the same "auto-filled, here's how to undo it" state as a direct match.
+      setUnitWeightMatch({ ...unitWeightMatch, tier: "match" });
+    } catch (err) {
+      console.error("Failed to apply suggested unit weights:", err);
+    } finally {
+      setMatchActionLoading(false);
+    }
+  };
+
+  const handleDismissSuggestion = () => setUnitWeightMatch(null);
+
   const canNext =
     (step === 1 && name.trim().length > 0) ||
     (step === 2 && (kcal > 0 || protein + carbs + fat > 0)) ||
-    (step === 3 && servings.every((s) => s.label.trim() && s.grams > 0)) ||
-    step === 4;
+    step === 3 || // Micronutrients — every field optional, never blocks
+    (step === 4 && servings.every((s) => s.label.trim() && s.grams > 0)) ||
+    step === 5;
 
   const meta = CATEGORY_META[category];
   const src = SOURCE_META[source];
@@ -312,7 +399,119 @@ export function NewFoodDialog({ open, onOpenChange }: NewFoodDialogProps) {
           )}
 
           {step === 3 && (
+            <div className="space-y-3">
+              <div>
+                <h3 className="text-sm font-semibold">Micronutrients (optional)</h3>
+                <p className="text-xs text-muted-foreground">
+                  Fill in whatever you have from a lab report or label — everything here is
+                  optional and defaults to no data.
+                </p>
+              </div>
+              <Accordion type="multiple" className="rounded-md border px-3">
+                {MICRO_FIELD_GROUPS.map((group) => {
+                  const filledCount = group.fields.filter((f) => micros[f.key] != null).length;
+                  return (
+                    <AccordionItem key={group.id} value={group.id} className="last:border-b-0">
+                      <AccordionTrigger>
+                        <span>
+                          {group.label}
+                          {filledCount > 0 && (
+                            <span className="ml-2 text-xs font-normal text-muted-foreground">
+                              {filledCount} filled
+                            </span>
+                          )}
+                        </span>
+                      </AccordionTrigger>
+                      <AccordionContent>
+                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                          {group.fields.map((f) => (
+                            <div key={f.key} className="space-y-1.5">
+                              <Label className="text-xs">
+                                {f.label} <span className="text-muted-foreground">({f.unit})</span>
+                              </Label>
+                              <Input
+                                type="number"
+                                value={micros[f.key] ?? ""}
+                                onChange={(e) => updateMicro(f.key, e.target.value)}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </AccordionContent>
+                    </AccordionItem>
+                  );
+                })}
+              </Accordion>
+            </div>
+          )}
+
+          {step === 4 && (
             <div className="space-y-5">
+              {unitWeightMatch && (
+                <div
+                  className={cn(
+                    "rounded-lg border p-3 text-sm",
+                    unitWeightMatch.tier === "match"
+                      ? "border-emerald-500/30 bg-emerald-500/10"
+                      : "border-amber-500/30 bg-amber-500/10",
+                  )}
+                >
+                  {unitWeightMatch.tier === "match" ? (
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-start gap-2">
+                        <Sparkles className="size-4 mt-0.5 text-emerald-500 shrink-0" />
+                        <div>
+                          <p className="font-medium">Auto-filled from USDA data</p>
+                          <p className="text-xs text-muted-foreground">
+                            Matched to "{unitWeightMatch.matchedDescription}" — looks right?
+                          </p>
+                          <ul className="mt-1 text-xs text-muted-foreground/90">
+                            {formatUnitWeightLines(unitWeightMatch.fields).map((line) => (
+                              <li key={line}>{line}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={matchActionLoading}
+                        onClick={handleClearMatch}
+                      >
+                        Clear
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="size-4 mt-0.5 text-amber-500 shrink-0" />
+                        <div>
+                          <p className="font-medium">Possible serving-weight match</p>
+                          <p className="text-xs text-muted-foreground">
+                            Matched to "{unitWeightMatch.matchedDescription}" (
+                            {unitWeightMatch.score}% confidence) — apply its serving weights?
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Button size="sm" disabled={matchActionLoading} onClick={handleApplySuggestion}>
+                          Apply
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          disabled={matchActionLoading}
+                          onClick={handleDismissSuggestion}
+                        >
+                          <X className="size-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <section>
                 <div className="mb-2 flex items-center justify-between">
                   <h3 className="text-sm font-semibold">Common servings</h3>
@@ -415,7 +614,7 @@ export function NewFoodDialog({ open, onOpenChange }: NewFoodDialogProps) {
             </div>
           )}
 
-          {step === 4 && (
+          {step === 5 && (
             <div className="space-y-4">
               <h3 className="text-sm font-semibold">Review</h3>
               <div className="rounded-lg border bg-card p-4">
@@ -459,55 +658,102 @@ export function NewFoodDialog({ open, onOpenChange }: NewFoodDialogProps) {
                   {allergens.length > 0 ? `${allergens.length} allergen(s)` : "no allergens"}
                 </div>
               </div>
+
+              {/* Only the fields actually filled in — not all ~44, which would mostly be blank */}
+              <div>
+                <h3 className="mb-2 text-sm font-semibold">Micronutrients</h3>
+                {Object.keys(micros).length === 0 ? (
+                  <p className="text-xs text-muted-foreground">None entered.</p>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {MICRO_FIELD_GROUPS.flatMap((group) =>
+                      group.fields
+                        .filter((f) => micros[f.key] != null)
+                        .map((f) => (
+                          <Badge key={f.key} variant="secondary">
+                            {f.label}: {micros[f.key]}
+                            {f.unit}
+                          </Badge>
+                        )),
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
 
         <DialogFooter className="flex items-center justify-between sm:justify-between">
-          <Button
-            variant="ghost"
-            onClick={() => setStep((s) => Math.max(1, s - 1))}
-            disabled={step === 1}
-          >
-            <ChevronLeft className="size-4" /> Back
-          </Button>
-          {step < STEPS.length ? (
-            <Button onClick={() => setStep((s) => s + 1)} disabled={!canNext}>
-              Next <ChevronRight className="size-4" />
-            </Button>
-          ) : (
-            <Button
-              disabled={saving}
-              onClick={async () => {
-                setSaving(true);
-                try {
-                  await createFood({
-                    name: name.trim(),
-                    arabicName: arabicName.trim() || undefined,
-                    brand: brand.trim() || undefined,
-                    category,
-                    source,
-                    kcal,
-                    protein,
-                    carbs,
-                    fat,
-                    fiber,
-                    sugar: sugar || null,
-                    sodium: sodium || null,
-                    servingSize: servings[0]?.grams || 100,
-                    servingUnit: "g",
-                  });
+          {savedFoodId ? (
+            <>
+              <div />
+              <Button
+                onClick={() => {
                   queryClient.invalidateQueries({ queryKey: ["foods"] });
                   handleClose(false);
-                } catch (err) {
-                  console.error("Failed to create food:", err);
-                } finally {
-                  setSaving(false);
-                }
-              }}
-            >
-              <CheckCircle2 className="size-4" /> {saving ? "Saving…" : "Save food"}
-            </Button>
+                }}
+              >
+                <CheckCircle2 className="size-4" /> Done
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                variant="ghost"
+                onClick={() => setStep((s) => Math.max(1, s - 1))}
+                disabled={step === 1}
+              >
+                <ChevronLeft className="size-4" /> Back
+              </Button>
+              {step < STEPS.length ? (
+                <Button onClick={() => setStep((s) => s + 1)} disabled={!canNext}>
+                  Next <ChevronRight className="size-4" />
+                </Button>
+              ) : (
+                <Button
+                  disabled={saving}
+                  onClick={async () => {
+                    setSaving(true);
+                    try {
+                      const { food, unitWeightMatch: match } = await createFood({
+                        name: name.trim(),
+                        arabicName: arabicName.trim() || undefined,
+                        brand: brand.trim() || undefined,
+                        category,
+                        source,
+                        kcal,
+                        protein,
+                        carbs,
+                        fat,
+                        fiber,
+                        sugar: sugar || null,
+                        sodium: sodium || null,
+                        servingSize: servings[0]?.grams || 100,
+                        servingUnit: "g",
+                        micros,
+                      });
+                      queryClient.invalidateQueries({ queryKey: ["foods"] });
+                      if (match) {
+                        // Stay open on the Servings & tags step so the dietitian can review the
+                        // auto-fill/suggestion right next to the serving-weight fields it
+                        // affects, instead of it flashing by in a generic confirmation.
+                        setSavedFoodId(food.id);
+                        setUnitWeightMatch(match);
+                        setStep(4);
+                      } else {
+                        handleClose(false);
+                      }
+                    } catch (err) {
+                      console.error("Failed to create food:", err);
+                    } finally {
+                      setSaving(false);
+                    }
+                  }}
+                >
+                  <CheckCircle2 className="size-4" /> {saving ? "Saving…" : "Save food"}
+                </Button>
+              )}
+            </>
           )}
         </DialogFooter>
       </DialogContent>

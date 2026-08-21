@@ -15,6 +15,20 @@ const foodSchema = new mongoose.Schema(
     },
     servingSize: { type: Number, required: true },
     servingUnit: { type: String, required: true, default: "g" },
+    // ── Per-food unit weights ──────────────────────────────────────────────────────────
+    // Real gram weight of 1 cup / tbsp / tsp / piece of THIS specific food, for
+    // recipeMacros.js's unit conversion to look up instead of applying one flat constant
+    // (cup=240g, tbsp=15g, tsp=5g, piece=50g) to every food regardless of density — see
+    // UNIT_TO_GRAMS in lib/calc/recipeMacros.js. Distinct from the free-text "common
+    // servings" label+grams rows in the Add Food UI (display-only, not currently
+    // persisted); these are a structured, unit-keyed lookup consumed directly by
+    // conversion logic. All nullable — null means "use the flat UNIT_TO_GRAMS fallback
+    // for this food," same fallback semantics as unset on every existing food until
+    // backfilled.
+    gramsPerCup: { type: Number, default: null },
+    gramsPerTbsp: { type: Number, default: null },
+    gramsPerTsp: { type: Number, default: null },
+    gramsPerPiece: { type: Number, default: null },
     calories: { type: Number, required: true },
     protein: { type: Number, required: true },
     carbs: { type: Number, required: true },
@@ -37,6 +51,84 @@ const foodSchema = new mongoose.Schema(
     vitaminE: { type: Number, default: null },
     vitaminC: { type: Number, default: null },
     iron: { type: Number, default: null },
+    // Which unit the vitaminA/vitaminD value above was actually captured in. USDA FoodData
+    // Central reports these two nutrients in µg (RAE / D2+D3) on Foundation/SR Legacy records
+    // but ONLY in IU on many Branded records — the two units are not interchangeable by a
+    // fixed multiplier without knowing the specific compound, so the raw value is stored as-is
+    // and tagged here rather than silently normalized. null on lab/hand-entered foods that
+    // predate this field (assume µg — see the UNIT CAVEAT above) or where no value is set.
+    vitaminASourceUnit: { type: String, enum: ["mcg", "iu", null], default: null },
+    vitaminDSourceUnit: { type: String, enum: ["mcg", "iu", null], default: null },
+
+    // ── Fiber / carbs ──────────────────────────────────────────────────────────────────
+    fiberSoluble: { type: Number, default: null },
+    // Rarely populated — see usda-client.js comment on NUTRIENT_IDS.fiberInsoluble. Expect
+    // null on the overwhelming majority of foods, including USDA imports.
+    fiberInsoluble: { type: Number, default: null },
+    starch: { type: Number, default: null },
+    // netCarbs is NOT stored here — it's carbs minus fiber, always computed at display time
+    // so it can't drift when either source value is edited independently.
+
+    // ── Fats ───────────────────────────────────────────────────────────────────────────
+    fatSaturated: { type: Number, default: null },
+    fatMonounsaturated: { type: Number, default: null },
+    fatPolyunsaturated: { type: Number, default: null },
+    fatTrans: { type: Number, default: null },
+    cholesterol: { type: Number, default: null },
+    omega3Ala: { type: Number, default: null },
+    omega3Epa: { type: Number, default: null },
+    omega3Dha: { type: Number, default: null },
+    omega6La: { type: Number, default: null },
+    omega6Aa: { type: Number, default: null },
+    // True when omega6La/omega6Aa came from USDA's generic, non-stereo-labeled fatty acid ids
+    // (18:2 / 20:4) instead of the n-6-specific ids — see usda-client.js. Lets the frontend
+    // mark these as approximate instead of presenting them with the same confidence as a
+    // directly-confirmed n-6 value. Always false for manually-entered values.
+    omega6LaApprox: { type: Boolean, default: false },
+    omega6AaApprox: { type: Boolean, default: false },
+    // omega3Total/omega6Total are NOT stored — USDA never returns a single total for either,
+    // and summing only the named sub-components above would silently under-report any
+    // unmeasured fatty acid in the family. Computed as a labeled "partial sum" at display time.
+
+    // ── Amino acids ────────────────────────────────────────────────────────────────────
+    aminoCystine: { type: Number, default: null },
+    aminoHistidine: { type: Number, default: null },
+    aminoIsoleucine: { type: Number, default: null },
+    aminoLeucine: { type: Number, default: null },
+    aminoLysine: { type: Number, default: null },
+    aminoMethionine: { type: Number, default: null },
+    aminoPhenylalanine: { type: Number, default: null },
+    aminoThreonine: { type: Number, default: null },
+    aminoTryptophan: { type: Number, default: null },
+    aminoTyrosine: { type: Number, default: null },
+    aminoValine: { type: Number, default: null },
+
+    // ── Vitamins (vitaminA/D/E/C already declared above) ──────────────────────────────
+    vitaminB1: { type: Number, default: null },
+    vitaminB2: { type: Number, default: null },
+    vitaminB3: { type: Number, default: null },
+    vitaminB5: { type: Number, default: null },
+    vitaminB6: { type: Number, default: null },
+    vitaminB12: { type: Number, default: null },
+    folate: { type: Number, default: null },
+    vitaminK: { type: Number, default: null },
+
+    // ── Minerals (iron/sodium already declared above) ─────────────────────────────────
+    calcium: { type: Number, default: null },
+    copper: { type: Number, default: null },
+    magnesium: { type: Number, default: null },
+    manganese: { type: Number, default: null },
+    phosphorus: { type: Number, default: null },
+    potassium: { type: Number, default: null },
+    selenium: { type: Number, default: null },
+    zinc: { type: Number, default: null },
+
+    // ── Other ──────────────────────────────────────────────────────────────────────────
+    // Manual-entry only — confirmed absent from FDC entirely (see TODO.md), never populated
+    // by usda-import.
+    oxalate: { type: Number, default: null },
+    phytate: { type: Number, default: null },
+
     // Provenance/citation for the numbers on this food (e.g. "Hoteit et al., lab-analyzed").
     // Absent on hand-estimated and USDA-imported foods.
     dataSource: { type: String, trim: true, default: null },

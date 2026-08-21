@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createMeal, updateMeal, getMeal, type PhotoItem } from "@/lib/meals-api";
 import { fetchFoods } from "@/lib/foods-api";
+import type { UnitWeights } from "@/lib/food-database-mock";
 import { uploadMedia } from "@/lib/api";
+import { fetchDietaryPreferences } from "@/lib/settings-api";
 import {
   Plus,
   Trash2,
@@ -31,6 +33,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
@@ -52,7 +56,6 @@ import {
 import { cn } from "@/lib/utils";
 import {
   CATEGORY_META,
-  DIET_LABEL,
   ALLERGEN_LABEL,
   type RecipeCategory,
   type RecipeCuisine,
@@ -72,9 +75,44 @@ const UNIT_TO_GRAMS: Record<Unit, number> = {
   tbsp: 15,
   tsp: 5,
   oz: 28.35,
-  // TODO: unit conversion — "piece" needs per-food gram weights
   piece: 50,
 };
+
+// Mirrors gramsPerUnitForFood in backend/src/lib/calc/recipeMacros.js — this dialog's macro
+// preview is only an estimate shown while editing (the backend recomputes the authoritative
+// totals from scratch on save), but it should still resolve unit weights the same way so the
+// preview doesn't drift from what actually gets saved.
+function gramsPerUnitForFood(unitWeights: UnitWeights | undefined, unit: Unit): number {
+  const override =
+    unit === "cup"
+      ? unitWeights?.cup
+      : unit === "tbsp"
+        ? unitWeights?.tbsp
+        : unit === "tsp"
+          ? unitWeights?.tsp
+          : unit === "piece"
+            ? unitWeights?.piece
+            : null;
+  if (override != null) return override;
+  return UNIT_TO_GRAMS[unit] ?? 1;
+}
+
+// g/ml/oz are always exact regardless of which food, so they never need the indicator — only
+// cup/tbsp/tsp/piece vary by food density and can silently fall back to a flat guess.
+const APPROXIMATE_UNITS: Unit[] = ["cup", "tbsp", "tsp", "piece"];
+
+function isApproximateUnit(unitWeights: UnitWeights | undefined, unit: Unit): boolean {
+  if (!APPROXIMATE_UNITS.includes(unit)) return false;
+  const override =
+    unit === "cup"
+      ? unitWeights?.cup
+      : unit === "tbsp"
+        ? unitWeights?.tbsp
+        : unit === "tsp"
+          ? unitWeights?.tsp
+          : unitWeights?.piece;
+  return override == null;
+}
 
 interface IngredientMacros {
   kcal: number;
@@ -90,6 +128,7 @@ interface IngredientDraft {
   quantity: number | "";
   unit: Unit;
   per100g: IngredientMacros | null;
+  unitWeights?: UnitWeights;
 }
 
 interface NewRecipeDialogProps {
@@ -106,17 +145,6 @@ const CUISINES: RecipeCuisine[] = [
   "international",
   "asian",
   "italian",
-];
-const DIETS: DietTag[] = [
-  "vegan",
-  "vegetarian",
-  "high-protein",
-  "low-carb",
-  "keto",
-  "gluten-free",
-  "dairy-free",
-  "pcos-friendly",
-  "ramadan",
 ];
 const ALLERGENS: Allergen[] = ["gluten", "dairy", "nuts", "eggs", "soy", "shellfish", "sesame"];
 
@@ -182,6 +210,11 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
     queryFn: () => getMeal(editId as string),
     enabled: open && isEdit,
   });
+
+  const { data: dietOptions = [] } = useQuery({
+    queryKey: ["settings", "dietary-preferences"],
+    queryFn: fetchDietaryPreferences,
+  });
   const formReady = !isEdit || !!editData;
 
   useEffect(() => {
@@ -221,7 +254,7 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
       if (!ing.per100g) continue;
       matched++;
       const qty = typeof ing.quantity === "number" ? ing.quantity : 0;
-      const grams = qty * (UNIT_TO_GRAMS[ing.unit] ?? 1);
+      const grams = qty * gramsPerUnitForFood(ing.unitWeights, ing.unit);
       const factor = grams / 100;
       kcal += ing.per100g.kcal * factor;
       protein += ing.per100g.protein * factor;
@@ -489,7 +522,7 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
               )}
 
               {step === 2 && (
-                <div className="space-y-3">
+                <div className="space-y-8">
                   <div className="sticky top-0 z-10 -mt-5 -mx-6 bg-background px-6 pt-5 pb-3 flex items-center justify-between">
                     <div>
                       <div className="text-sm font-semibold">Ingredients</div>
@@ -520,14 +553,26 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                         <FoodSearchInput
                           value={ing.name}
                           foodId={ing.foodId}
-                          onSelect={(id, label, macros) => {
+                          onSelect={(id, label, macros, unitWeights) => {
                             const copy = [...ingredients];
-                            copy[idx] = { ...copy[idx], foodId: id, name: label, per100g: macros };
+                            copy[idx] = {
+                              ...copy[idx],
+                              foodId: id,
+                              name: label,
+                              per100g: macros,
+                              unitWeights,
+                            };
                             setIngredients(copy);
                           }}
                           onChange={(val) => {
                             const copy = [...ingredients];
-                            copy[idx] = { ...copy[idx], name: val, foodId: "", per100g: null };
+                            copy[idx] = {
+                              ...copy[idx],
+                              name: val,
+                              foodId: "",
+                              per100g: null,
+                              unitWeights: undefined,
+                            };
                             setIngredients(copy);
                           }}
                         />
@@ -567,6 +612,17 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                             ))}
                           </SelectContent>
                         </Select>
+                        {isApproximateUnit(ing.unitWeights, ing.unit) && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                            </TooltipTrigger>
+                            <TooltipContent className="max-w-56 text-xs">
+                              Approximate — real weight not available for this food, enter in
+                              grams for exact accuracy.
+                            </TooltipContent>
+                          </Tooltip>
+                        )}
                         <Button
                           variant="ghost"
                           size="icon"
@@ -719,7 +775,7 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                   <div className="space-y-2">
                     <Label>Diet tags</Label>
                     <div className="flex flex-wrap gap-1.5">
-                      {DIETS.map((d) => {
+                      {dietOptions.map((d) => {
                         const active = diets.includes(d);
                         return (
                           <button
@@ -736,7 +792,7 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                                 : "bg-background border-border hover:bg-muted",
                             )}
                           >
-                            {DIET_LABEL[d]}
+                            {d}
                           </button>
                         );
                       })}
@@ -852,7 +908,7 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                       <div className="flex flex-wrap gap-1">
                         {diets.map((d) => (
                           <Badge key={d} variant="secondary" className="text-[10px]">
-                            {DIET_LABEL[d]}
+                            {d}
                           </Badge>
                         ))}
                       </div>
@@ -1032,6 +1088,7 @@ interface FoodSearchResult {
   arabicName?: string;
   category: string;
   macros: IngredientMacros;
+  unitWeights?: UnitWeights;
 }
 
 function FoodSearchInput({
@@ -1042,7 +1099,12 @@ function FoodSearchInput({
 }: {
   value: string;
   foodId: string;
-  onSelect: (id: string, label: string, macros: IngredientMacros) => void;
+  onSelect: (
+    id: string,
+    label: string,
+    macros: IngredientMacros,
+    unitWeights: UnitWeights | undefined,
+  ) => void;
   onChange: (val: string) => void;
 }) {
   const [query, setQuery] = useState("");
@@ -1059,7 +1121,7 @@ function FoodSearchInput({
     }
     setLoading(true);
     try {
-      const res = await fetchFoods({ search: q, limit: 8 });
+      const res = await fetchFoods({ search: q, limit: 20 });
       setResults(
         res.foods.map((f) => ({
           id: f.id,
@@ -1067,6 +1129,7 @@ function FoodSearchInput({
           arabicName: f.arabicName,
           category: f.category,
           macros: f.macros,
+          unitWeights: f.unitWeights,
         })),
       );
     } catch {
@@ -1086,7 +1149,7 @@ function FoodSearchInput({
 
   const pick = (r: FoodSearchResult) => {
     selectingRef.current = true;
-    onSelect(r.id, r.name, r.macros);
+    onSelect(r.id, r.name, r.macros, r.unitWeights);
     setQuery(r.name);
     setOpen(false);
     setResults([]);
@@ -1098,65 +1161,85 @@ function FoodSearchInput({
   const showResults = open && (results.length > 0 || (query.length >= 2 && !loading));
 
   return (
-    <div className="relative flex-1" style={{ overflow: "visible" }}>
-      <div className="relative">
-        <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-        <Input
-          placeholder="Search food…"
-          value={foodId ? value : query || value}
-          onChange={(e) => handleType(e.target.value)}
-          onFocus={() => {
-            if (results.length) setOpen(true);
-          }}
-          onBlur={() => {
-            setTimeout(() => {
-              if (!selectingRef.current) setOpen(false);
-            }, 200);
-          }}
-          className={cn("pl-7", foodId && "border-emerald-300 bg-emerald-50/50")}
-        />
-        {loading && (
-          <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-muted-foreground" />
-        )}
-      </div>
-      {showResults && (
-        <div
-          className="absolute left-0 right-0 top-full mt-1 bg-popover border rounded-md shadow-lg max-h-56 overflow-y-auto"
-          style={{ zIndex: 9999 }}
-        >
-          {results.length > 0 ? (
-            results.map((r) => (
-              <div
-                key={r.id}
-                role="button"
-                className="w-full text-left px-3 py-2.5 text-sm hover:bg-muted cursor-pointer flex items-center justify-between border-b last:border-0"
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  pick(r);
-                }}
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="font-medium truncate">{r.name}</div>
-                  <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                    {r.arabicName && <span>{r.arabicName}</span>}
-                    <span>
-                      {r.macros.kcal} kcal · P{r.macros.protein} C{r.macros.carbs} F{r.macros.fat}
-                    </span>
-                  </div>
-                </div>
-                <Badge variant="outline" className="text-[9px] capitalize shrink-0 ml-2">
-                  {r.category}
-                </Badge>
-              </div>
-            ))
-          ) : (
-            <div className="p-3 text-xs text-muted-foreground text-center">
-              No foods found for "{query}"
-            </div>
+    <Popover open={showResults}>
+      <PopoverAnchor asChild>
+        <div className="relative flex-1">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+          <Input
+            placeholder="Search food…"
+            value={foodId ? value : query || value}
+            onChange={(e) => handleType(e.target.value)}
+            onFocus={() => {
+              if (results.length) setOpen(true);
+            }}
+            onBlur={() => {
+              setTimeout(() => {
+                if (!selectingRef.current) setOpen(false);
+              }, 200);
+            }}
+            className={cn("pl-7", foodId && "border-emerald-300 bg-emerald-50/50")}
+          />
+          {loading && (
+            <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-muted-foreground" />
           )}
         </div>
-      )}
-    </div>
+      </PopoverAnchor>
+      {/* Portal-rendered (Radix), so this escapes the Ingredients step's scrollable container
+          entirely instead of being clipped by its overflow-y-auto — a plain absolute+z-index
+          div here was getting cut off / painted under the dialog's sticky Back/Next footer for
+          rows near the bottom of a long ingredient list. */}
+      <PopoverContent
+        align="start"
+        sideOffset={4}
+        onOpenAutoFocus={(e) => e.preventDefault()}
+        onCloseAutoFocus={(e) => e.preventDefault()}
+        className="p-0 max-h-56 overflow-y-auto"
+        style={{ width: "max(var(--radix-popover-trigger-width), 420px)" }}
+        // Radix Dialog locks page scroll via react-remove-scroll while open, allow-listing
+        // only the Dialog's own content ref as a scrollable "shard" — this Popover renders
+        // into a separate Portal, so real wheel/touch scroll gestures over it get silently
+        // swallowed by that lock even though its own overflow-y-auto/max-height are correct.
+        // Driving scrollTop from the wheel delta ourselves sidesteps the native scroll action
+        // entirely, so it works regardless of the lock. (React attaches onWheel as a passive
+        // listener, so e.preventDefault() here would no-op with a console warning — omitted
+        // since the manual scrollTop update doesn't need it anyway.)
+        onWheel={(e) => {
+          e.currentTarget.scrollTop += e.deltaY;
+        }}
+      >
+        {results.length > 0 ? (
+          results.map((r) => (
+            <div
+              key={r.id}
+              role="button"
+              title={r.name}
+              className="w-full text-left px-3 py-2.5 text-sm hover:bg-muted cursor-pointer flex items-center justify-between border-b last:border-0"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                pick(r);
+              }}
+            >
+              <div className="min-w-0 flex-1">
+                <div className="font-medium truncate">{r.name}</div>
+                <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                  {r.arabicName && <span>{r.arabicName}</span>}
+                  <span>
+                    {r.macros.kcal} kcal · P{r.macros.protein} C{r.macros.carbs} F{r.macros.fat}
+                  </span>
+                </div>
+              </div>
+              <Badge variant="outline" className="text-[9px] capitalize shrink-0 ml-2">
+                {r.category}
+              </Badge>
+            </div>
+          ))
+        ) : (
+          <div className="p-3 text-xs text-muted-foreground text-center">
+            No foods found for "{query}"
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }

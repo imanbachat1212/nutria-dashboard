@@ -27,6 +27,249 @@ export interface ServingSize {
   grams: number;
 }
 
+// Per-food gram weight overrides for cup/tbsp/tsp/piece — null means "no stored data for
+// this food/unit, use the flat fallback conversion" (see UNIT_TO_GRAMS in
+// new-recipe-dialog.tsx, mirroring the backend's recipeMacros.js).
+export interface UnitWeights {
+  cup: number | null;
+  tbsp: number | null;
+  tsp: number | null;
+  piece: number | null;
+}
+
+// Full micronutrient profile per 100g. Every value is null unless the source (USDA import or
+// manual entry) actually provided it — null is the expected, common case, not an error state.
+// Grouped to match the Food model's schema comments and the dialog/drawer's collapsible
+// sections one-to-one.
+export interface Micronutrients {
+  // Fiber / carbs
+  fiberSoluble: number | null;
+  fiberInsoluble: number | null;
+  starch: number | null;
+
+  // Fats
+  fatSaturated: number | null;
+  fatMonounsaturated: number | null;
+  fatPolyunsaturated: number | null;
+  fatTrans: number | null;
+  cholesterol: number | null;
+  omega3Ala: number | null;
+  omega3Epa: number | null;
+  omega3Dha: number | null;
+  omega6La: number | null;
+  omega6LaApprox: boolean;
+  omega6Aa: number | null;
+  omega6AaApprox: boolean;
+
+  // Amino acids
+  aminoCystine: number | null;
+  aminoHistidine: number | null;
+  aminoIsoleucine: number | null;
+  aminoLeucine: number | null;
+  aminoLysine: number | null;
+  aminoMethionine: number | null;
+  aminoPhenylalanine: number | null;
+  aminoThreonine: number | null;
+  aminoTryptophan: number | null;
+  aminoTyrosine: number | null;
+  aminoValine: number | null;
+
+  // Vitamins
+  vitaminA: number | null;
+  vitaminASourceUnit: "mcg" | "iu" | null;
+  vitaminB1: number | null;
+  vitaminB2: number | null;
+  vitaminB3: number | null;
+  vitaminB5: number | null;
+  vitaminB6: number | null;
+  vitaminB12: number | null;
+  vitaminC: number | null;
+  vitaminD: number | null;
+  vitaminDSourceUnit: "mcg" | "iu" | null;
+  vitaminE: number | null;
+  folate: number | null;
+  vitaminK: number | null;
+
+  // Minerals
+  calcium: number | null;
+  copper: number | null;
+  iron: number | null;
+  magnesium: number | null;
+  manganese: number | null;
+  phosphorus: number | null;
+  potassium: number | null;
+  selenium: number | null;
+  zinc: number | null;
+
+  // Other — manual-entry only, never populated from USDA
+  oxalate: number | null;
+  phytate: number | null;
+}
+
+// All-null placeholder — used for legacy/mock FoodItems that predate the micronutrient
+// panel, so the drawer/dialog can treat "no micros object" identically to "every field null"
+// instead of needing an extra optional-chaining branch at every call site.
+export const EMPTY_MICROS: Micronutrients = {
+  fiberSoluble: null,
+  fiberInsoluble: null,
+  starch: null,
+  fatSaturated: null,
+  fatMonounsaturated: null,
+  fatPolyunsaturated: null,
+  fatTrans: null,
+  cholesterol: null,
+  omega3Ala: null,
+  omega3Epa: null,
+  omega3Dha: null,
+  omega6La: null,
+  omega6LaApprox: false,
+  omega6Aa: null,
+  omega6AaApprox: false,
+  aminoCystine: null,
+  aminoHistidine: null,
+  aminoIsoleucine: null,
+  aminoLeucine: null,
+  aminoLysine: null,
+  aminoMethionine: null,
+  aminoPhenylalanine: null,
+  aminoThreonine: null,
+  aminoTryptophan: null,
+  aminoTyrosine: null,
+  aminoValine: null,
+  vitaminA: null,
+  vitaminASourceUnit: null,
+  vitaminB1: null,
+  vitaminB2: null,
+  vitaminB3: null,
+  vitaminB5: null,
+  vitaminB6: null,
+  vitaminB12: null,
+  vitaminC: null,
+  vitaminD: null,
+  vitaminDSourceUnit: null,
+  vitaminE: null,
+  folate: null,
+  vitaminK: null,
+  calcium: null,
+  copper: null,
+  iron: null,
+  magnesium: null,
+  manganese: null,
+  phosphorus: null,
+  potassium: null,
+  selenium: null,
+  zinc: null,
+  oxalate: null,
+  phytate: null,
+};
+
+// Micronutrients keys that are plain optional numbers — excludes the two boolean "approx"
+// flags and the two vitamin source-unit enums, which aren't rendered as numeric inputs.
+export type NumericMicroKey = Exclude<
+  keyof Micronutrients,
+  "omega6LaApprox" | "omega6AaApprox" | "vitaminASourceUnit" | "vitaminDSourceUnit"
+>;
+
+// Drives both the New Food dialog's Micronutrients step and the detail drawer's expanded
+// micronutrient section, so field labels/units/grouping only need to be defined once.
+export interface MicroFieldDef {
+  key: NumericMicroKey;
+  label: string;
+  unit: string;
+}
+
+export interface MicroFieldGroup {
+  id: string;
+  label: string;
+  fields: MicroFieldDef[];
+}
+
+export const MICRO_FIELD_GROUPS: MicroFieldGroup[] = [
+  {
+    id: "fiber",
+    label: "Fiber & carbs",
+    fields: [
+      { key: "fiberSoluble", label: "Soluble fiber", unit: "g" },
+      { key: "fiberInsoluble", label: "Insoluble fiber", unit: "g" },
+      { key: "starch", label: "Starch", unit: "g" },
+    ],
+  },
+  {
+    id: "fats",
+    label: "Fats",
+    fields: [
+      { key: "fatSaturated", label: "Saturated", unit: "g" },
+      { key: "fatMonounsaturated", label: "Monounsaturated", unit: "g" },
+      { key: "fatPolyunsaturated", label: "Polyunsaturated", unit: "g" },
+      { key: "fatTrans", label: "Trans", unit: "g" },
+      { key: "cholesterol", label: "Cholesterol", unit: "mg" },
+      { key: "omega3Ala", label: "Omega-3 (ALA)", unit: "g" },
+      { key: "omega3Epa", label: "Omega-3 (EPA)", unit: "g" },
+      { key: "omega3Dha", label: "Omega-3 (DHA)", unit: "g" },
+      { key: "omega6La", label: "Omega-6 (LA)", unit: "g" },
+      { key: "omega6Aa", label: "Omega-6 (AA)", unit: "g" },
+    ],
+  },
+  {
+    id: "amino",
+    label: "Amino acids",
+    fields: [
+      { key: "aminoCystine", label: "Cystine", unit: "g" },
+      { key: "aminoHistidine", label: "Histidine", unit: "g" },
+      { key: "aminoIsoleucine", label: "Isoleucine", unit: "g" },
+      { key: "aminoLeucine", label: "Leucine", unit: "g" },
+      { key: "aminoLysine", label: "Lysine", unit: "g" },
+      { key: "aminoMethionine", label: "Methionine", unit: "g" },
+      { key: "aminoPhenylalanine", label: "Phenylalanine", unit: "g" },
+      { key: "aminoThreonine", label: "Threonine", unit: "g" },
+      { key: "aminoTryptophan", label: "Tryptophan", unit: "g" },
+      { key: "aminoTyrosine", label: "Tyrosine", unit: "g" },
+      { key: "aminoValine", label: "Valine", unit: "g" },
+    ],
+  },
+  {
+    id: "vitamins",
+    label: "Vitamins",
+    fields: [
+      { key: "vitaminA", label: "Vitamin A", unit: "mcg" },
+      { key: "vitaminB1", label: "B1 (thiamine)", unit: "mg" },
+      { key: "vitaminB2", label: "B2 (riboflavin)", unit: "mg" },
+      { key: "vitaminB3", label: "B3 (niacin)", unit: "mg" },
+      { key: "vitaminB5", label: "B5 (pantothenic acid)", unit: "mg" },
+      { key: "vitaminB6", label: "B6 (pyridoxine)", unit: "mg" },
+      { key: "vitaminB12", label: "B12 (cobalamin)", unit: "mcg" },
+      { key: "vitaminC", label: "Vitamin C", unit: "mg" },
+      { key: "vitaminD", label: "Vitamin D", unit: "mcg" },
+      { key: "vitaminE", label: "Vitamin E", unit: "mg" },
+      { key: "folate", label: "Folate", unit: "mcg" },
+      { key: "vitaminK", label: "Vitamin K", unit: "mcg" },
+    ],
+  },
+  {
+    id: "minerals",
+    label: "Minerals",
+    fields: [
+      { key: "calcium", label: "Calcium", unit: "mg" },
+      { key: "copper", label: "Copper", unit: "mg" },
+      { key: "iron", label: "Iron", unit: "mg" },
+      { key: "magnesium", label: "Magnesium", unit: "mg" },
+      { key: "manganese", label: "Manganese", unit: "mg" },
+      { key: "phosphorus", label: "Phosphorus", unit: "mg" },
+      { key: "potassium", label: "Potassium", unit: "mg" },
+      { key: "selenium", label: "Selenium", unit: "mcg" },
+      { key: "zinc", label: "Zinc", unit: "mg" },
+    ],
+  },
+  {
+    id: "other",
+    label: "Other",
+    fields: [
+      { key: "oxalate", label: "Oxalate", unit: "mg" },
+      { key: "phytate", label: "Phytate", unit: "mg" },
+    ],
+  },
+];
+
 export interface FoodItem {
   id: string;
   name: string;
@@ -35,7 +278,9 @@ export interface FoodItem {
   category: FoodCategory;
   source: FoodSource;
   macros: FoodMacrosPer100g;
+  micros?: Micronutrients;
   servings: ServingSize[];
+  unitWeights?: UnitWeights;
   allergens: string[];
   verified: boolean;
   usedInPlans: number;

@@ -3,22 +3,41 @@ import { api, getToken } from "./api";
 const BASE = import.meta.env.VITE_API_URL || "http://localhost:4000";
 import {
   SLOT_META,
+  DRI_FIELDS,
   type MealPlan,
   type DayPlan,
   type MealEntry,
   type DayKey,
   type MealSlot,
   type PlanStatus,
+  type Micros,
 } from "./meal-plans-mock";
 
 // ── API types ──
+
+// The 22 DRI-matched micronutrient fields, as returned flat on each plan item (mirrors
+// meal-plan.model.js's planItemSchema) and on client.driTargets. Read generically via
+// DRI_FIELDS (extractMicros below) rather than declared individually here, since both call
+// sites already share that field list with the backend — declared as an index signature would
+// conflict with this interface's other, differently-typed fields.
+type APIMicros = Record<string, number | null>;
 
 interface APIPlanItem {
   _id: string;
   day: number;
   slot: string;
   type: "food" | "recipe";
-  food?: { _id: string; name: string } | string | null;
+  food?:
+    | {
+        _id: string;
+        name: string;
+        gramsPerCup?: number | null;
+        gramsPerTbsp?: number | null;
+        gramsPerTsp?: number | null;
+        gramsPerPiece?: number | null;
+      }
+    | string
+    | null;
   meal?: { _id: string; name: string } | string | null;
   name: string;
   quantity: number;
@@ -28,6 +47,28 @@ interface APIPlanItem {
   protein: number;
   carbs: number;
   fat: number;
+}
+
+// cup/tbsp/tsp/piece weigh differently per food (a cup of oats != a cup of spinach) — g/ml/oz
+// are always exact regardless of which food. Mirrors gramsPerUnitForFood in the backend's
+// lib/calc/recipeMacros.js and the equivalent map in new-recipe-dialog.tsx.
+const UNIT_TO_FOOD_FIELD: Record<string, "gramsPerCup" | "gramsPerTbsp" | "gramsPerTsp" | "gramsPerPiece"> = {
+  cup: "gramsPerCup",
+  tbsp: "gramsPerTbsp",
+  tsp: "gramsPerTsp",
+  piece: "gramsPerPiece",
+};
+
+// True when this item's macros were computed using the flat UNIT_TO_GRAMS fallback constant
+// rather than this specific food's real stored weight for the unit — i.e. an estimate, not a
+// verified number. Recipe items are never flagged: they're scaled by servings, not a
+// per-unit gram conversion, so there's no fallback-vs-real distinction to make.
+function isApproximateItem(i: APIPlanItem): boolean {
+  if (i.type !== "food") return false;
+  const fieldName = UNIT_TO_FOOD_FIELD[i.unit];
+  if (!fieldName) return false;
+  const food = i.food && typeof i.food === "object" ? i.food : null;
+  return food ? food[fieldName] == null : true;
 }
 
 interface APIPlan {
@@ -42,6 +83,7 @@ interface APIPlan {
       carbs?: number;
       fat?: number;
     };
+    driTargets?: (APIMicros & { method?: string; computedAt?: string }) | null;
   };
   startDate: string;
   endDate: string;
@@ -51,9 +93,21 @@ interface APIPlan {
   targetProtein: number;
   targetCarbs: number;
   targetFat: number;
+  // Per-slot time overrides for the whole plan (e.g. { breakfast: "08:00" }) — sparse, a slot
+  // with no entry falls back to SLOT_META's default in buildDays() below. Absent entirely on
+  // plans created before this field existed.
+  slotTimes?: Record<string, string>;
   items?: APIPlanItem[];
   createdAt: string;
   updatedAt: string;
+}
+
+function extractMicros(source: APIMicros | null | undefined): Micros {
+  const result: Micros = {};
+  for (const field of DRI_FIELDS) {
+    result[field] = source?.[field] ?? null;
+  }
+  return result;
 }
 
 interface APIListResult {
@@ -102,7 +156,7 @@ function relativeTime(iso: string): string {
   return `${Math.round(days / 7)}w ago`;
 }
 
-function buildDays(items: APIPlanItem[]): DayPlan[] {
+function buildDays(items: APIPlanItem[], slotTimes?: Record<string, string>): DayPlan[] {
   return DAY_KEYS.map((dayKey, dayIdx) => {
     const dayItems = items.filter((i) => i.day === dayIdx);
 
@@ -112,7 +166,7 @@ function buildDays(items: APIPlanItem[]): DayPlan[] {
         id: `${dayKey}-${slotIdx}-${slot}`,
         slot,
         title: SLOT_META[slot].label,
-        time: SLOT_META[slot].defaultTime,
+        time: slotTimes?.[slot] ?? SLOT_META[slot].defaultTime,
         items: slotItems.map((i) => ({
           id: i._id,
           name: i.name,
@@ -126,6 +180,8 @@ function buildDays(items: APIPlanItem[]): DayPlan[] {
             carbs: i.carbs || 0,
             fat: i.fat || 0,
           },
+          micros: extractMicros(i as unknown as APIMicros),
+          isApproximate: isApproximateItem(i),
         })),
       };
     });
@@ -152,8 +208,9 @@ function toPlan(p: APIPlan): MealPlan {
       carbs: p.targetCarbs || 0,
       fat: p.targetFat || 0,
     },
+    driTargets: p.client?.driTargets ? extractMicros(p.client.driTargets) : null,
     adherencePct: 0,
-    days: buildDays(p.items || []),
+    days: buildDays(p.items || [], p.slotTimes),
     updatedAt: relativeTime(p.updatedAt),
   };
 }
@@ -249,6 +306,22 @@ export async function copyPlanDay(
   data: { fromDay: number; toDays: number[] },
 ): Promise<MealPlan> {
   const raw = await api.post<APIPlan>(`/api/mealplans/${planId}/copy-day`, data);
+  return toPlan(raw);
+}
+
+export async function copyMealSlot(
+  planId: string,
+  data: { fromDay: number; slot: string; toDays: number[] },
+): Promise<MealPlan> {
+  const raw = await api.post<APIPlan>(`/api/mealplans/${planId}/copy-meal-slot`, data);
+  return toPlan(raw);
+}
+
+export async function updateSlotTime(
+  planId: string,
+  data: { slot: string; time: string },
+): Promise<MealPlan> {
+  const raw = await api.patch<APIPlan>(`/api/mealplans/${planId}/slot-time`, data);
   return toPlan(raw);
 }
 

@@ -32,6 +32,18 @@ export const copyDay = asyncHandler(async (req, res) => {
   res.json({ data: plan });
 });
 
+export const copyMealSlot = asyncHandler(async (req, res) => {
+  const { fromDay, slot, toDays } = req.validated.body;
+  const plan = await svc.copyMealSlot(req.params.id, fromDay, slot, toDays);
+  res.json({ data: plan });
+});
+
+export const updateSlotTime = asyncHandler(async (req, res) => {
+  const { slot, time } = req.validated.body;
+  const plan = await svc.updateSlotTime(req.params.id, slot, time);
+  res.json({ data: plan });
+});
+
 export const pdfExport = asyncHandler(async (req, res) => {
   const { pdf, name } = await svc.exportPlanToPdf(req.params.id);
   const safe = name.replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "_") || "meal-plan";

@@ -12,12 +12,15 @@ import {
   FileText,
   CheckCircle2,
   Clock,
+  Pencil,
   Users,
   Flame,
   Beef,
   Wheat,
   Droplet,
   Archive,
+  Pill,
+  Info,
 } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
@@ -31,14 +34,24 @@ import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import {
   DAYS,
   SLOT_META,
+  DRI_FIELD_GROUPS,
   dayMacros,
   mealMacros,
+  dayMicros,
   type MealPlan,
   type DayKey,
   type MealSlot,
@@ -50,6 +63,8 @@ import {
   removePlanItem,
   downloadPlanPdf,
   copyPlanDay,
+  copyMealSlot,
+  updateSlotTime,
 } from "@/lib/mealplans-api";
 import { NewPlanDialog } from "@/components/new-plan-dialog";
 import { DuplicatePlanDialog } from "@/components/duplicate-plan-dialog";
@@ -94,6 +109,16 @@ function MealPlansPage() {
   const [copyDayOpen, setCopyDayOpen] = useState(false);
   const [copyTargetDays, setCopyTargetDays] = useState<number[]>([]);
   const [copying, setCopying] = useState(false);
+  const [microsOpen, setMicrosOpen] = useState(false);
+  const [slotAction, setSlotAction] = useState<{
+    mealId: string;
+    slot: string;
+    mode: "copy" | "time";
+  } | null>(null);
+  const [copyTargetDaysForSlot, setCopyTargetDaysForSlot] = useState<number[]>([]);
+  const [copyingSlot, setCopyingSlot] = useState(false);
+  const [editTimeValue, setEditTimeValue] = useState("");
+  const [savingTime, setSavingTime] = useState(false);
 
   const { data: listData } = useQuery({
     queryKey: ["mealplans"],
@@ -123,6 +148,7 @@ function MealPlansPage() {
 
   const totals = day ? dayMacros(day) : { kcal: 0, protein: 0, carbs: 0, fat: 0 };
   const targets = plan?.targets ?? { kcal: 0, protein: 0, carbs: 0, fat: 0 };
+  const microTotals = day ? dayMicros(day) : {};
 
   async function handleRemoveItem(itemId: string) {
     if (!effectiveId) return;
@@ -198,6 +224,55 @@ function MealPlansPage() {
       setCopyTargetDays([]);
     } finally {
       setCopying(false);
+    }
+  }
+
+  function openCopySlot(mealId: string, slot: string) {
+    setSlotAction({ mealId, slot, mode: "copy" });
+    setCopyTargetDaysForSlot([]);
+  }
+
+  function openEditTime(mealId: string, slot: string, currentTime: string) {
+    setSlotAction({ mealId, slot, mode: "time" });
+    setEditTimeValue(currentTime);
+  }
+
+  function closeSlotAction() {
+    setSlotAction(null);
+    setCopyTargetDaysForSlot([]);
+  }
+
+  function toggleCopyTargetForSlot(idx: number) {
+    setCopyTargetDaysForSlot((prev) =>
+      prev.includes(idx) ? prev.filter((d) => d !== idx) : [...prev, idx],
+    );
+  }
+
+  async function handleCopyMealSlot() {
+    if (!effectiveId || !slotAction || copyTargetDaysForSlot.length === 0) return;
+    setCopyingSlot(true);
+    try {
+      await copyMealSlot(effectiveId, {
+        fromDay: activeDayIdx,
+        slot: slotAction.slot,
+        toDays: copyTargetDaysForSlot,
+      });
+      qc.invalidateQueries({ queryKey: ["mealplan", effectiveId] });
+      closeSlotAction();
+    } finally {
+      setCopyingSlot(false);
+    }
+  }
+
+  async function handleSaveSlotTime() {
+    if (!effectiveId || !slotAction || !editTimeValue) return;
+    setSavingTime(true);
+    try {
+      await updateSlotTime(effectiveId, { slot: slotAction.slot, time: editTimeValue });
+      qc.invalidateQueries({ queryKey: ["mealplan", effectiveId] });
+      closeSlotAction();
+    } finally {
+      setSavingTime(false);
     }
   }
 
@@ -425,38 +500,51 @@ function MealPlansPage() {
                   </div>
 
                   {/* macros vs targets */}
-                  <div className="grid grid-cols-4 gap-2">
-                    <MacroBar
-                      icon={Flame}
-                      label="kcal"
-                      value={totals.kcal}
-                      target={targets.kcal}
-                      tone="primary"
-                    />
-                    <MacroBar
-                      icon={Beef}
-                      label="Protein"
-                      value={totals.protein}
-                      target={targets.protein}
-                      unit="g"
-                      tone="rose"
-                    />
-                    <MacroBar
-                      icon={Wheat}
-                      label="Carbs"
-                      value={totals.carbs}
-                      target={targets.carbs}
-                      unit="g"
-                      tone="amber"
-                    />
-                    <MacroBar
-                      icon={Droplet}
-                      label="Fat"
-                      value={totals.fat}
-                      target={targets.fat}
-                      unit="g"
-                      tone="violet"
-                    />
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-end">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={() => setMicrosOpen(true)}
+                      >
+                        <Pill className="h-3.5 w-3.5" />
+                        Micronutrients
+                      </Button>
+                    </div>
+                    <div className="grid grid-cols-4 gap-2">
+                      <MacroBar
+                        icon={Flame}
+                        label="kcal"
+                        value={totals.kcal}
+                        target={targets.kcal}
+                        tone="primary"
+                      />
+                      <MacroBar
+                        icon={Beef}
+                        label="Protein"
+                        value={totals.protein}
+                        target={targets.protein}
+                        unit="g"
+                        tone="rose"
+                      />
+                      <MacroBar
+                        icon={Wheat}
+                        label="Carbs"
+                        value={totals.carbs}
+                        target={targets.carbs}
+                        unit="g"
+                        tone="amber"
+                      />
+                      <MacroBar
+                        icon={Droplet}
+                        label="Fat"
+                        value={totals.fat}
+                        target={targets.fat}
+                        unit="g"
+                        tone="violet"
+                      />
+                    </div>
                   </div>
 
                   {/* day tabs */}
@@ -580,9 +668,27 @@ function MealPlansPage() {
                                     P{mm.protein} · C{mm.carbs} · F{mm.fat}
                                   </p>
                                 </div>
-                                <Button variant="ghost" size="icon" className="h-7 w-7">
-                                  <MoreHorizontal className="h-3.5 w-3.5" />
-                                </Button>
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <Button variant="ghost" size="icon" className="h-7 w-7">
+                                      <MoreHorizontal className="h-3.5 w-3.5" />
+                                    </Button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end">
+                                    <DropdownMenuItem
+                                      onSelect={() => openCopySlot(meal.id, meal.slot)}
+                                    >
+                                      <Repeat2 className="h-3.5 w-3.5" />
+                                      Copy to another day
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                      onSelect={() => openEditTime(meal.id, meal.slot, meal.time)}
+                                    >
+                                      <Pencil className="h-3.5 w-3.5" />
+                                      Edit time
+                                    </DropdownMenuItem>
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
                               </div>
                             </div>
                             <div className="divide-y divide-border/40">
@@ -595,7 +701,20 @@ function MealPlansPage() {
                                     <div className="flex items-center gap-2">
                                       <span className="text-sm truncate">{it.name}</span>
                                     </div>
-                                    <p className="text-[10px] text-muted-foreground">{it.amount}</p>
+                                    <p className="text-[10px] text-muted-foreground flex items-center gap-1">
+                                      {it.amount}
+                                      {it.isApproximate && (
+                                        <Tooltip>
+                                          <TooltipTrigger asChild>
+                                            <Info className="h-2.5 w-2.5 text-amber-500 shrink-0" />
+                                          </TooltipTrigger>
+                                          <TooltipContent className="max-w-56 text-xs">
+                                            Approximate — real weight not available for this
+                                            food, enter in grams for exact accuracy.
+                                          </TooltipContent>
+                                        </Tooltip>
+                                      )}
+                                    </p>
                                   </div>
                                   <div className="flex items-center gap-3">
                                     <div className="text-right text-[10px] text-muted-foreground tabular-nums">
@@ -677,6 +796,122 @@ function MealPlansPage() {
             slot={pickerState.slot}
           />
         )}
+
+        <Dialog open={!!slotAction} onOpenChange={(o) => !o && closeSlotAction()}>
+          <DialogContent className="sm:max-w-80">
+            {slotAction?.mode === "copy" ? (
+              <>
+                <DialogHeader>
+                  <DialogTitle className="text-base">
+                    Copy {SLOT_META[slotAction.slot as MealSlot]?.label ?? slotAction.slot} to:
+                  </DialogTitle>
+                </DialogHeader>
+                <div className="space-y-1">
+                  <button
+                    className="w-full text-left text-xs px-1.5 py-1.5 rounded hover:bg-muted/40 text-primary font-medium"
+                    onClick={() => setCopyTargetDaysForSlot(otherDayIndices)}
+                  >
+                    All other days
+                  </button>
+                  <Separator />
+                  {DAYS.map((d, idx) => {
+                    if (idx === activeDayIdx) return null;
+                    const checked = copyTargetDaysForSlot.includes(idx);
+                    return (
+                      <button
+                        key={d.key}
+                        className="w-full flex items-center gap-2 text-xs px-1.5 py-1.5 rounded hover:bg-muted/40"
+                        onClick={() => toggleCopyTargetForSlot(idx)}
+                      >
+                        <Checkbox
+                          checked={checked}
+                          onCheckedChange={() => toggleCopyTargetForSlot(idx)}
+                          className="h-3.5 w-3.5"
+                        />
+                        {d.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <Button
+                  size="sm"
+                  className="w-full h-8 text-xs"
+                  disabled={copyingSlot || copyTargetDaysForSlot.length === 0}
+                  onClick={handleCopyMealSlot}
+                >
+                  {copyingSlot
+                    ? "Copying…"
+                    : copyTargetDaysForSlot.length === 0
+                      ? "Select days"
+                      : `Copy to ${copyTargetDaysForSlot.length} day${copyTargetDaysForSlot.length !== 1 ? "s" : ""}`}
+                </Button>
+              </>
+            ) : slotAction?.mode === "time" ? (
+              <>
+                <DialogHeader>
+                  <DialogTitle className="text-base">
+                    Edit {SLOT_META[slotAction.slot as MealSlot]?.label ?? slotAction.slot} time
+                  </DialogTitle>
+                </DialogHeader>
+                <p className="text-xs text-muted-foreground -mt-2">
+                  Applies to this slot on every day in the plan.
+                </p>
+                <Input
+                  type="time"
+                  value={editTimeValue}
+                  onChange={(e) => setEditTimeValue(e.target.value)}
+                  className="h-9 text-sm"
+                />
+                <Button
+                  size="sm"
+                  className="w-full h-8 text-xs"
+                  disabled={savingTime || !editTimeValue}
+                  onClick={handleSaveSlotTime}
+                >
+                  {savingTime ? "Saving…" : "Save time"}
+                </Button>
+              </>
+            ) : null}
+          </DialogContent>
+        </Dialog>
+
+        <Sheet open={microsOpen} onOpenChange={setMicrosOpen}>
+          <SheetContent className="w-full sm:max-w-md overflow-y-auto">
+            <SheetHeader>
+              <SheetTitle>
+                Micronutrients — {DAYS.find((d) => d.key === activeDay)?.label}
+              </SheetTitle>
+            </SheetHeader>
+            <div className="px-4 pb-6">
+              {!plan?.driTargets ? (
+                <p className="text-sm text-muted-foreground">
+                  Set client's age, sex, and activity level to see DRI targets.
+                </p>
+              ) : (
+                <div className="space-y-5">
+                  {DRI_FIELD_GROUPS.map((group) => (
+                    <div key={group.id} className="space-y-2.5">
+                      <h4 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        {group.label}
+                      </h4>
+                      <div className="space-y-2.5">
+                        {group.fields.map((f) => (
+                          <MicroRow
+                            key={f.key}
+                            label={f.label}
+                            unit={f.unit}
+                            value={microTotals[f.key] ?? null}
+                            target={plan.driTargets?.[f.key] ?? null}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </SheetContent>
+        </Sheet>
       </div>
     </TooltipProvider>
   );
@@ -758,6 +993,39 @@ function MacroBar({
         </span>
       </div>
       <Progress value={pct} className="h-1" />
+    </div>
+  );
+}
+
+// Same value/target/% presentation as MacroBar, laid out as a compact list row rather than a
+// card — 22 of these need to fit in one Sheet without the height MacroBar's card padding would
+// take. `target == null` (no DRI value at all — shouldn't happen for these 22 fields when
+// plan.driTargets exists, but handled defensively) shows the raw amount with no percentage,
+// same as `value == null` ("no data available" — not the same as zero, see meal-plans-mock.ts).
+function MicroRow({
+  label,
+  unit,
+  value,
+  target,
+}: {
+  label: string;
+  unit: string;
+  value: number | null;
+  target: number | null;
+}) {
+  const hasTarget = target != null && target > 0;
+  const pct = hasTarget && value != null ? Math.round((value / target) * 100) : null;
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-xs">
+        <span className="font-medium">{label}</span>
+        <span className="text-muted-foreground tabular-nums">
+          {value != null ? value : "—"}
+          {hasTarget ? ` / ${target}` : ""} {unit}
+          {pct != null && <span className="ml-1.5 font-semibold text-foreground">{pct}%</span>}
+        </span>
+      </div>
+      {hasTarget && <Progress value={Math.min(100, pct ?? 0)} className="h-1" />}
     </div>
   );
 }

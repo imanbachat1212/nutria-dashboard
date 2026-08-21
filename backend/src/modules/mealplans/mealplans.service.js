@@ -6,6 +6,13 @@ import Meal from "../meals/meal.model.js";
 import { ApiError } from "../../lib/ApiError.js";
 import { buildPlanHtml } from "../../lib/pdf/buildPlanHtml.js";
 import { env } from "../../config/env.js";
+import {
+  MICRO_FIELDS,
+  microTotalKey,
+  addMicronutrients,
+  finalizeMicronutrients,
+  gramsPerUnitForFood,
+} from "../../lib/calc/recipeMacros.js";
 
 export async function createPlan(data, actor) {
   const client = await Client.findById(data.client).lean();
@@ -32,7 +39,7 @@ export async function listPlans({ page, limit, status, client }) {
   const skip = (page - 1) * limit;
   const [mealPlans, total] = await Promise.all([
     MealPlan.find(filter)
-      .populate("client", "profile.firstName profile.lastName targets")
+      .populate("client", "profile.firstName profile.lastName targets driTargets")
       .select("-items")
       .skip(skip)
       .limit(limit)
@@ -95,7 +102,7 @@ export async function duplicatePlan(id, { name, client: clientId } = {}, actor) 
 
 export async function exportPlanToPdf(id) {
   const plan = await MealPlan.findById(id)
-    .populate("client", "profile.firstName profile.lastName targets")
+    .populate("client", "profile.firstName profile.lastName targets driTargets")
     .populate("items.food", "name nameAr servingSize servingUnit")
     .populate("items.meal", "name nameAr servings")
     .lean();
@@ -145,6 +152,40 @@ export async function copyDay(planId, fromDay, toDays) {
   return populatePlan(plan._id);
 }
 
+// Copies one meal slot's items from one day to others. Deliberately NOT built on top of
+// copyDay — that function has no slot filter and destructively wipes every item already on
+// the target day first. This is additive: existing items already in the target day/slot are
+// left untouched, and the copied items are added alongside them. That means copying to a day
+// that already has that slot filled results in BOTH sets of items, not a replacement — the
+// safer default (no silent data loss), at the cost of leaving duplicate cleanup to the
+// dietitian if a replacement was actually what they wanted.
+export async function copyMealSlot(planId, fromDay, slot, toDays) {
+  const plan = await MealPlan.findById(planId);
+  if (!plan) throw new ApiError(404, "Meal plan not found");
+
+  const sourceItems = plan.items.filter((i) => i.day === fromDay && i.slot === slot);
+
+  for (const targetDay of toDays) {
+    for (const item of sourceItems) {
+      const { _id, day, ...rest } = item.toObject();
+      plan.items.push({ ...rest, day: targetDay });
+    }
+  }
+
+  await plan.save();
+  return populatePlan(plan._id);
+}
+
+// Slot times are whole-plan scoped (not per-item, not per-day) — see meal-plan.model.js.
+export async function updateSlotTime(planId, slot, time) {
+  const plan = await MealPlan.findById(planId);
+  if (!plan) throw new ApiError(404, "Meal plan not found");
+
+  plan.slotTimes.set(slot, time);
+  await plan.save();
+  return populatePlan(plan._id);
+}
+
 export async function deletePlan(id) {
   const plan = await MealPlan.findByIdAndDelete(id);
   if (!plan) throw new ApiError(404, "Meal plan not found");
@@ -173,8 +214,11 @@ export async function removeItem(planId, itemId) {
 
 async function populatePlan(id) {
   return MealPlan.findById(id)
-    .populate("client", "profile.firstName profile.lastName targets")
-    .populate("items.food", "name servingSize servingUnit")
+    .populate("client", "profile.firstName profile.lastName targets driTargets")
+    .populate(
+      "items.food",
+      "name servingSize servingUnit gramsPerCup gramsPerTbsp gramsPerTsp gramsPerPiece",
+    )
     .populate("items.meal", "name servings")
     .lean();
 }
@@ -183,13 +227,27 @@ async function computeItemDetails(item) {
   if (item.type === "food") {
     const food = await Food.findById(item.food).lean();
     if (!food) throw new ApiError(404, "Food not found");
-    const factor = (item.quantity || 0) / (food.servingSize || 100);
+    // Same conversion as recipeMacros.js's computeRecipeMacros: quantity -> grams via
+    // gramsPerUnitForFood (per-food override, falling back to the flat UNIT_TO_GRAMS table),
+    // then a per-100g factor. Previously this divided by food.servingSize instead of
+    // converting item.unit at all, silently ignoring any non-gram unit — fixed to match the
+    // recipe path exactly rather than reimplementing a second conversion.
+    const qty = item.quantity || 0;
+    const gramsPerUnit = gramsPerUnitForFood(food, item.unit);
+    const grams = qty * gramsPerUnit;
+    const factor = grams / 100;
+
+    const microTotals = {};
+    const microSeen = {};
+    addMicronutrients(microTotals, microSeen, food, factor);
+
     return {
       name: food.name,
       calories: Math.round(food.calories * factor),
       protein: Math.round(food.protein * factor * 10) / 10,
       carbs: Math.round(food.carbs * factor * 10) / 10,
       fat: Math.round(food.fat * factor * 10) / 10,
+      ...finalizeMicronutrients(microTotals, microSeen),
     };
   }
 
@@ -197,12 +255,20 @@ async function computeItemDetails(item) {
     const meal = await Meal.findById(item.meal).lean();
     if (!meal) throw new ApiError(404, "Recipe not found");
     const s = (item.servings || 1) / (meal.servings || 1);
+
+    const micros = {};
+    for (const field of MICRO_FIELDS) {
+      const mealValue = meal[microTotalKey(field)];
+      micros[field] = mealValue == null ? null : Math.round(mealValue * s * 100) / 100;
+    }
+
     return {
       name: meal.name,
       calories: Math.round(meal.totalCalories * s),
       protein: Math.round(meal.totalProtein * s * 10) / 10,
       carbs: Math.round(meal.totalCarbs * s * 10) / 10,
       fat: Math.round(meal.totalFat * s * 10) / 10,
+      ...micros,
     };
   }
 

@@ -34,7 +34,12 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { PACKAGES, fmtMoney, type PackageDef } from "@/lib/billing-mock";
-import { fetchClassTypes, updateClassTypes } from "@/lib/settings-api";
+import {
+  fetchClassTypes,
+  updateClassTypes,
+  fetchDietaryPreferences,
+  updateDietaryPreferences,
+} from "@/lib/settings-api";
 
 export const Route = createFileRoute("/settings")({
   head: () => ({
@@ -612,104 +617,150 @@ function PackageEditor({
   );
 }
 
-/* ---------- Services (group class types) ----------
- * Backed by a real endpoint (GET/PATCH /api/settings/class-types) — this is the one Settings
- * tab that isn't mock-only. It's also what the New Appointment dialog's Group class dropdown
- * reads from (@/lib/settings-api, same fetchClassTypes query key), so an edit saved here shows
- * up there on next fetch — no separate hardcoded list to keep in sync.
+/* ---------- Services (group class types + dietary preferences) ----------
+ * Both cards below are backed by real endpoints (GET/PATCH /api/settings/<key>) — the two
+ * Settings cards that aren't mock-only. Group class types feeds the New Appointment dialog's
+ * Group class dropdown; Dietary preferences feeds the New Client dialog's Dietary preferences
+ * multi-select. Both read via @/lib/settings-api with the matching ["settings", <key>] query
+ * key, so an edit saved here shows up in the consuming dialog on next fetch — no separate
+ * hardcoded list to keep in sync in either case.
  */
 
-function ServicesTab() {
+function EditableStringListCard({
+  title,
+  description,
+  queryKey,
+  fetchFn,
+  updateFn,
+  itemPlaceholder,
+  addLabel,
+  emptyErrorLabel,
+  savedToast,
+}: {
+  title: string;
+  description: string;
+  queryKey: string[];
+  fetchFn: () => Promise<string[]>;
+  updateFn: (next: string[]) => Promise<string[]>;
+  itemPlaceholder: string;
+  addLabel: string;
+  emptyErrorLabel: string;
+  savedToast: string;
+}) {
   const qc = useQueryClient();
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ["settings", "class-types"],
-    queryFn: fetchClassTypes,
-  });
+  const { data, isLoading, isError } = useQuery({ queryKey, queryFn: fetchFn });
 
-  const [types, setTypes] = useState<string[]>([]);
+  const [items, setItems] = useState<string[]>([]);
   const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
     if (data) {
-      setTypes(data);
+      setItems(data);
       setDirty(false);
     }
   }, [data]);
 
   const mutation = useMutation({
-    mutationFn: (next: string[]) => updateClassTypes(next),
+    mutationFn: (next: string[]) => updateFn(next),
     onSuccess: (saved) => {
-      qc.setQueryData(["settings", "class-types"], saved);
+      qc.setQueryData(queryKey, saved);
       setDirty(false);
-      toast.success("Class types saved");
+      toast.success(savedToast);
     },
   });
 
-  const updateType = (i: number, v: string) => {
-    setTypes((cur) => cur.map((t, idx) => (idx === i ? v : t)));
+  const updateItem = (i: number, v: string) => {
+    setItems((cur) => cur.map((t, idx) => (idx === i ? v : t)));
     setDirty(true);
   };
-  const removeType = (i: number) => {
-    setTypes((cur) => cur.filter((_, idx) => idx !== i));
+  const removeItem = (i: number) => {
+    setItems((cur) => cur.filter((_, idx) => idx !== i));
     setDirty(true);
   };
-  const addType = () => {
-    setTypes((cur) => [...cur, ""]);
+  const addItem = () => {
+    setItems((cur) => [...cur, ""]);
     setDirty(true);
   };
 
-  const canSave = dirty && types.length > 0 && types.every((t) => t.trim().length > 0);
+  const canSave = dirty && items.length > 0 && items.every((t) => t.trim().length > 0);
 
   return (
+    <Section
+      title={title}
+      description={description}
+      footer={
+        <Button
+          size="sm"
+          disabled={!canSave || mutation.isPending}
+          onClick={() => mutation.mutate(items.map((t) => t.trim()))}
+        >
+          <Save className="mr-2 h-4 w-4" />
+          {mutation.isPending ? "Saving…" : "Save"}
+        </Button>
+      }
+    >
+      {isLoading ? (
+        <p className="text-sm text-muted-foreground">Loading…</p>
+      ) : isError ? (
+        <p className="text-sm text-destructive">{emptyErrorLabel}</p>
+      ) : (
+        <div className="grid gap-2">
+          {items.map((t, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <Input
+                value={t}
+                onChange={(e) => updateItem(i, e.target.value)}
+                placeholder={itemPlaceholder}
+              />
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 shrink-0"
+                disabled={items.length === 1}
+                onClick={() => removeItem(i)}
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          ))}
+          <Button variant="outline" size="sm" className="w-fit" onClick={addItem}>
+            <Plus className="mr-1.5 h-3.5 w-3.5" />
+            {addLabel}
+          </Button>
+        </div>
+      )}
+      {mutation.isError && (
+        <p className="mt-2 text-xs text-destructive">{(mutation.error as Error).message}</p>
+      )}
+    </Section>
+  );
+}
+
+function ServicesTab() {
+  return (
     <div className="grid gap-4">
-      <Section
+      <EditableStringListCard
         title="Group class types"
         description="The options shown in the Group class dropdown when scheduling a new appointment."
-        footer={
-          <Button
-            size="sm"
-            disabled={!canSave || mutation.isPending}
-            onClick={() => mutation.mutate(types.map((t) => t.trim()))}
-          >
-            <Save className="mr-2 h-4 w-4" />
-            {mutation.isPending ? "Saving…" : "Save"}
-          </Button>
-        }
-      >
-        {isLoading ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
-        ) : isError ? (
-          <p className="text-sm text-destructive">Couldn't load class types.</p>
-        ) : (
-          <div className="grid gap-2">
-            {types.map((t, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <Input
-                  value={t}
-                  onChange={(e) => updateType(i, e.target.value)}
-                  placeholder="e.g. Pilates"
-                />
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-9 w-9 shrink-0"
-                  disabled={types.length === 1}
-                  onClick={() => removeType(i)}
-                >
-                  <X className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-            ))}
-            <Button variant="outline" size="sm" className="w-fit" onClick={addType}>
-              <Plus className="mr-1.5 h-3.5 w-3.5" />
-              Add class type
-            </Button>
-          </div>
-        )}
-        {mutation.isError && (
-          <p className="mt-2 text-xs text-destructive">{(mutation.error as Error).message}</p>
-        )}
-      </Section>
+        queryKey={["settings", "class-types"]}
+        fetchFn={fetchClassTypes}
+        updateFn={updateClassTypes}
+        itemPlaceholder="e.g. Pilates"
+        addLabel="Add class type"
+        emptyErrorLabel="Couldn't load class types."
+        savedToast="Class types saved"
+      />
+      <EditableStringListCard
+        title="Dietary preferences"
+        description="Shared across the app: the Dietary preferences multi-select in the New Client dialog, the Meal Library Diet & tags filter, and the New Recipe dialog's diet-tag picker."
+        queryKey={["settings", "dietary-preferences"]}
+        fetchFn={fetchDietaryPreferences}
+        updateFn={updateDietaryPreferences}
+        itemPlaceholder="e.g. Mediterranean"
+        addLabel="Add preference"
+        emptyErrorLabel="Couldn't load dietary preferences."
+        savedToast="Dietary preferences saved"
+      />
     </div>
   );
 }

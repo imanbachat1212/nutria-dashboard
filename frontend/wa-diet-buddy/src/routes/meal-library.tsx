@@ -52,13 +52,13 @@ import {
 import { cn } from "@/lib/utils";
 import {
   CATEGORY_META,
-  DIET_LABEL,
   ALLERGEN_LABEL,
   type Recipe,
   type RecipeCategory,
   type DietTag,
 } from "@/lib/meal-library-mock";
 import { fetchMeals, deleteMeal } from "@/lib/meals-api";
+import { fetchDietaryPreferences } from "@/lib/settings-api";
 import { NewRecipeDialog } from "@/components/new-recipe-dialog";
 
 export const Route = createFileRoute("/meal-library")({
@@ -84,17 +84,6 @@ const CATEGORIES: (RecipeCategory | "all")[] = [
   "drink",
 ];
 
-const DIET_FILTERS: DietTag[] = [
-  "high-protein",
-  "vegan",
-  "vegetarian",
-  "low-carb",
-  "gluten-free",
-  "dairy-free",
-  "pcos-friendly",
-  "ramadan",
-];
-
 function MealLibraryPage() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
@@ -114,6 +103,11 @@ function MealLibraryPage() {
         category: category !== "all" ? category : undefined,
         limit: 100,
       }),
+  });
+
+  const { data: dietFilters = [] } = useQuery({
+    queryKey: ["settings", "dietary-preferences"],
+    queryFn: fetchDietaryPreferences,
   });
 
   const deleteMutation = useMutation({
@@ -185,7 +179,7 @@ function MealLibraryPage() {
             Diet & tags
           </h3>
           <div className="flex flex-wrap gap-1.5">
-            {DIET_FILTERS.map((d) => {
+            {dietFilters.map((d) => {
               const active = activeDiets.includes(d);
               return (
                 <button
@@ -198,7 +192,7 @@ function MealLibraryPage() {
                       : "bg-background border-border hover:bg-muted",
                   )}
                 >
-                  {DIET_LABEL[d]}
+                  {d}
                 </button>
               );
             })}
@@ -407,7 +401,7 @@ function RecipeCard({ recipe, onOpen }: { recipe: Recipe; onOpen: () => void }) 
           {recipe.diets.slice(0, 3).map((d) => (
             <Badge key={d} variant="outline" className="text-[10px] h-5 px-1.5">
               <Leaf className="h-2.5 w-2.5 mr-0.5" />
-              {DIET_LABEL[d]}
+              {d}
             </Badge>
           ))}
           {recipe.diets.length > 3 && (
@@ -608,7 +602,7 @@ function RecipeDrawer({
                   {recipe.diets.map((d) => (
                     <Badge key={d} variant="secondary" className="text-[11px]">
                       <Leaf className="h-3 w-3 mr-1" />
-                      {DIET_LABEL[d]}
+                      {d}
                     </Badge>
                   ))}
                 </div>

@@ -23,6 +23,7 @@ import {
   Download,
   Lock,
   Loader2,
+  Pill,
 } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
@@ -42,7 +43,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { bmiBand, calcBMI, type ClientRecord } from "@/lib/clients-mock";
+import {
+  bmiBand,
+  calcBMI,
+  DRI_VITAMIN_FIELDS,
+  DRI_MINERAL_FIELDS,
+  type ClientRecord,
+} from "@/lib/clients-mock";
 import { fetchClient } from "@/lib/clients-api";
 import { fetchMealPlans } from "@/lib/mealplans-api";
 import { NewPlanDialog } from "@/components/new-plan-dialog";
@@ -760,6 +767,56 @@ function GoalsTab({ c }: { c: ClientRecord }) {
         <Button variant="outline" size="sm" className="mt-4 w-full">
           Edit targets
         </Button>
+      </SectionCard>
+
+      <SectionCard
+        title="DRI targets"
+        icon={Pill}
+        description="NAM Dietary Reference Intakes — vitamins & minerals, based on age, sex, and life stage"
+        action={
+          c.driTargets?.method === "manual" && (
+            <Badge variant="outline" className="text-[10px]">
+              Manual
+            </Badge>
+          )
+        }
+      >
+        {!c.driTargets ? (
+          <p className="text-xs text-muted-foreground">
+            Not yet computed — needs date of birth and sex on the client's profile.
+          </p>
+        ) : (
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Vitamins
+              </div>
+              <div className="space-y-0">
+                {DRI_VITAMIN_FIELDS.map((f) => (
+                  <KV
+                    key={f.key}
+                    label={f.label}
+                    value={c.driTargets?.[f.key] != null ? `${c.driTargets[f.key]} ${f.unit}` : "—"}
+                  />
+                ))}
+              </div>
+            </div>
+            <div>
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Minerals
+              </div>
+              <div className="space-y-0">
+                {DRI_MINERAL_FIELDS.map((f) => (
+                  <KV
+                    key={f.key}
+                    label={f.label}
+                    value={c.driTargets?.[f.key] != null ? `${c.driTargets[f.key]} ${f.unit}` : "—"}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
       </SectionCard>
     </div>
   );

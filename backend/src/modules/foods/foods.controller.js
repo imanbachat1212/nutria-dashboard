@@ -2,8 +2,12 @@ import { asyncHandler } from "../../lib/asyncHandler.js";
 import * as foodsService from "./foods.service.js";
 
 export const create = asyncHandler(async (req, res) => {
-  const food = await foodsService.createFood(req.validated.body, req.user);
-  res.status(201).json({ data: food });
+  const { food, unitWeightMatch } = await foodsService.createFood(req.validated.body, req.user);
+  // unitWeightMatch nested inside `data` (not a sibling key) so the frontend's generic
+  // json.data-unwrapping `api` client carries it through automatically. food.toObject() is
+  // needed here (unlike update's already-.lean() result) since Food.create() returns a live
+  // Mongoose document, whose own .toJSON() would silently drop an ad-hoc extra property.
+  res.status(201).json({ data: { ...food.toObject(), unitWeightMatch } });
 });
 
 export const list = asyncHandler(async (req, res) => {
@@ -17,8 +21,12 @@ export const getOne = asyncHandler(async (req, res) => {
 });
 
 export const update = asyncHandler(async (req, res) => {
-  const food = await foodsService.updateFood(req.params.id, req.validated.body);
-  res.json({ data: food });
+  const { food, unitWeightMatch } = await foodsService.updateFood(
+    req.params.id,
+    req.validated.body,
+  );
+  // food is already .lean() (plain object) here, so a direct spread is enough.
+  res.json({ data: { ...food, unitWeightMatch } });
 });
 
 export const remove = asyncHandler(async (req, res) => {
@@ -27,7 +35,8 @@ export const remove = asyncHandler(async (req, res) => {
 });
 
 export const usdaSearch = asyncHandler(async (req, res) => {
-  const results = await foodsService.searchUsda(req.validated.query.q);
+  const { q, limit } = req.validated.query;
+  const results = await foodsService.searchUsda(q, limit);
   res.json({ data: { results } });
 });
 

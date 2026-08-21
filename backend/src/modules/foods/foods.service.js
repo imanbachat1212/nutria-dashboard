@@ -6,9 +6,29 @@ import JournalEntry from "../journal/journal-entry.model.js";
 import { ApiError } from "../../lib/ApiError.js";
 import { deleteImage } from "../../lib/storage.js";
 import { searchUsdaFoods, getUsdaFoodDetails } from "./lib/usda-client.js";
+import { matchFoodName } from "../../lib/foodMatching.js";
+
+// Shapes a foodMatching.js result into what the API/frontend actually needs — never returned
+// for "no-match" (nothing to show), and never exposes the internal coreMismatch/compositeDish
+// debug flags that only the historical CSV report cares about.
+function toUnitWeightMatch(match) {
+  if (!match || match.tier === "no-match") return null;
+  return {
+    tier: match.tier,
+    score: match.score,
+    matchedDescription: match.matchedDescription,
+    matchedCategory: match.matchedCategory,
+    fields: match.fields,
+  };
+}
 
 export async function createFood(data, actor) {
-  return Food.create({ ...data, createdBy: actor._id });
+  const match = matchFoodName(data.name);
+  // Auto-populate only on a high-confidence match — low-confidence is surfaced as a
+  // suggestion for the dietitian to accept, never written without confirmation.
+  const autoFields = match.tier === "match" ? match.fields : {};
+  const food = await Food.create({ ...data, ...autoFields, createdBy: actor._id });
+  return { food, unitWeightMatch: toUnitWeightMatch(match) };
 }
 
 export async function listFoods({ page, limit, search, category, source }) {
@@ -37,9 +57,28 @@ export async function getFoodById(id) {
 }
 
 export async function updateFood(id, data) {
-  const food = await Food.findByIdAndUpdate(id, data, { new: true }).lean();
+  let unitWeightMatch = null;
+  let autoFields = {};
+
+  // Only re-run when the name is actually part of this edit — an update that just flips
+  // `verified` or tweaks calories shouldn't re-trigger matching.
+  if (data.name) {
+    const match = matchFoodName(data.name);
+    unitWeightMatch = toUnitWeightMatch(match);
+
+    if (match.tier === "match") {
+      // Don't clobber a value that's already set (e.g. a prior manual correction, or a
+      // previously-accepted match) just because the name was edited — only fill in gaps.
+      const existing = await Food.findById(id, Object.keys(match.fields).join(" ")).lean();
+      for (const [key, value] of Object.entries(match.fields)) {
+        if (existing?.[key] == null) autoFields[key] = value;
+      }
+    }
+  }
+
+  const food = await Food.findByIdAndUpdate(id, { ...data, ...autoFields }, { new: true }).lean();
   if (!food) throw new ApiError(404, "Food not found");
-  return food;
+  return { food, unitWeightMatch };
 }
 
 // Food is referenced by ObjectId (embedded, not top-level) from four other collections.
@@ -80,8 +119,8 @@ export async function getImportedUsdaFdcIds(fdcIds) {
 
 // Ephemeral — proxies USDA's live catalog, no DB write. Results carry fdcId as their
 // identifier since they have no Food document (and may never get one).
-export async function searchUsda(query) {
-  return searchUsdaFoods(query);
+export async function searchUsda(query, limit) {
+  return searchUsdaFoods(query, { pageSize: limit });
 }
 
 // "Add to library" — the only point a USDA result becomes a real, referenceable Food
@@ -112,6 +151,62 @@ export async function importUsdaFood(fdcId, actor) {
     sodium: details.sodium,
     fdcId: details.fdcId,
     createdBy: actor._id,
+
+    // Micronutrients — all optional/nullable, null on the majority of USDA records (see
+    // usda-client.js's toFullNutrition; this is expected, not a bug).
+    fiberSoluble: details.fiberSoluble,
+    fiberInsoluble: details.fiberInsoluble,
+    starch: details.starch,
+
+    fatSaturated: details.fatSaturated,
+    fatMonounsaturated: details.fatMonounsaturated,
+    fatPolyunsaturated: details.fatPolyunsaturated,
+    fatTrans: details.fatTrans,
+    cholesterol: details.cholesterol,
+    omega3Ala: details.omega3Ala,
+    omega3Epa: details.omega3Epa,
+    omega3Dha: details.omega3Dha,
+    omega6La: details.omega6La,
+    omega6LaApprox: details.omega6LaApprox,
+    omega6Aa: details.omega6Aa,
+    omega6AaApprox: details.omega6AaApprox,
+
+    aminoCystine: details.aminoCystine,
+    aminoHistidine: details.aminoHistidine,
+    aminoIsoleucine: details.aminoIsoleucine,
+    aminoLeucine: details.aminoLeucine,
+    aminoLysine: details.aminoLysine,
+    aminoMethionine: details.aminoMethionine,
+    aminoPhenylalanine: details.aminoPhenylalanine,
+    aminoThreonine: details.aminoThreonine,
+    aminoTryptophan: details.aminoTryptophan,
+    aminoTyrosine: details.aminoTyrosine,
+    aminoValine: details.aminoValine,
+
+    vitaminB1: details.vitaminB1,
+    vitaminB2: details.vitaminB2,
+    vitaminB3: details.vitaminB3,
+    vitaminB5: details.vitaminB5,
+    vitaminB6: details.vitaminB6,
+    vitaminB12: details.vitaminB12,
+    folate: details.folate,
+    vitaminK: details.vitaminK,
+    vitaminC: details.vitaminC,
+    vitaminE: details.vitaminE,
+    vitaminA: details.vitaminA,
+    vitaminASourceUnit: details.vitaminASourceUnit,
+    vitaminD: details.vitaminD,
+    vitaminDSourceUnit: details.vitaminDSourceUnit,
+
+    iron: details.iron,
+    calcium: details.calcium,
+    copper: details.copper,
+    magnesium: details.magnesium,
+    manganese: details.manganese,
+    phosphorus: details.phosphorus,
+    potassium: details.potassium,
+    selenium: details.selenium,
+    zinc: details.zinc,
   });
   return { food, created: true };
 }

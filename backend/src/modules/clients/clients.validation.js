@@ -6,6 +6,7 @@ const profileSchema = z.object({
   email: z.string().email().optional(),
   dateOfBirth: z.string().optional(),
   sex: z.enum(["male", "female"]).optional(),
+  lifeStage: z.enum(["none", "pregnant", "lactating"]).optional(),
   height: z.number().positive().optional(),
   weight: z.number().positive().optional(),
   startWeight: z.number().positive().optional(),
@@ -47,6 +48,33 @@ const targetsSchema = z.object({
   fiber: z.number().min(0).optional(),
 }).optional();
 
+const driTargetsSchema = z.object({
+  method: z.enum(["auto", "manual"]).optional(),
+  computedAt: z.string().optional(),
+  vitaminA: z.number().min(0).optional(),
+  vitaminC: z.number().min(0).optional(),
+  vitaminD: z.number().min(0).optional(),
+  vitaminE: z.number().min(0).optional(),
+  vitaminK: z.number().min(0).optional(),
+  vitaminB1: z.number().min(0).optional(),
+  vitaminB2: z.number().min(0).optional(),
+  vitaminB3: z.number().min(0).optional(),
+  vitaminB5: z.number().min(0).optional(),
+  vitaminB6: z.number().min(0).optional(),
+  vitaminB12: z.number().min(0).optional(),
+  folate: z.number().min(0).optional(),
+  calcium: z.number().min(0).optional(),
+  iron: z.number().min(0).optional(),
+  magnesium: z.number().min(0).optional(),
+  phosphorus: z.number().min(0).optional(),
+  potassium: z.number().min(0).optional(),
+  sodium: z.number().min(0).optional(),
+  zinc: z.number().min(0).optional(),
+  copper: z.number().min(0).optional(),
+  manganese: z.number().min(0).optional(),
+  selenium: z.number().min(0).optional(),
+}).optional();
+
 export const createClientSchema = z.object({
   body: z.object({
     phone: z.string().min(1),
@@ -55,6 +83,7 @@ export const createClientSchema = z.object({
     profile: profileSchema,
     clinical: clinicalSchema,
     targets: targetsSchema,
+    driTargets: driTargetsSchema,
     assignedTo: z.string().optional(),
   }),
 });
@@ -68,6 +97,7 @@ export const updateClientSchema = z.object({
     profile: profileSchema,
     clinical: clinicalSchema,
     targets: targetsSchema,
+    driTargets: driTargetsSchema,
     assignedTo: z.string().nullable().optional(),
   }),
 });

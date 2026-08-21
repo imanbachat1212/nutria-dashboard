@@ -64,6 +64,23 @@ export const copyDaySchema = z.object({
   }),
 });
 
+export const copyMealSlotSchema = z.object({
+  params: z.object({ id: z.string().min(1) }),
+  body: z.object({
+    fromDay: z.number().int().min(0).max(6),
+    slot: z.string().min(1),
+    toDays: z.array(z.number().int().min(0).max(6)).min(1),
+  }),
+});
+
+export const updateSlotTimeSchema = z.object({
+  params: z.object({ id: z.string().min(1) }),
+  body: z.object({
+    slot: z.string().min(1),
+    time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Time must be in HH:mm 24h format"),
+  }),
+});
+
 export const duplicatePlanSchema = z.object({
   params: z.object({ id: z.string().min(1) }),
   body: z.object({

@@ -5,6 +5,8 @@ import type {
   ServiceType,
   ClientStatus,
   ClientGoal,
+  LifeStage,
+  DriTargets,
 } from "./clients-mock";
 
 // ── Activity-level enum ↔ numeric factor (mirrors backend calc/targets.js) ──
@@ -91,6 +93,7 @@ interface APIClient {
     email?: string;
     dateOfBirth?: string;
     sex?: string;
+    lifeStage?: string;
     height?: number;
     weight?: number;
     startWeight?: number;
@@ -115,6 +118,7 @@ interface APIClient {
     fat?: number;
     fiber?: number;
   };
+  driTargets?: DriTargets;
   clinical?: {
     labs?: { name: string; value: string; reference: string; date: string }[];
     medicalHistory?: string[];
@@ -151,6 +155,7 @@ function toClientRecord(c: APIClient): ClientRecord {
     joinedAt: c.createdAt?.split("T")[0] || "",
     age: ageFromDOB(p.dateOfBirth),
     sex: mapSexFromAPI(p.sex),
+    lifeStage: (p.lifeStage as LifeStage | undefined) || "none",
     heightCm: p.height || 0,
     weightKg: p.weight || 0,
     startWeightKg: p.startWeight || p.weight || 0,
@@ -163,6 +168,7 @@ function toClientRecord(c: APIClient): ClientRecord {
       carbs: t?.carbs || 0,
       fat: t?.fat || 0,
     },
+    driTargets: c.driTargets,
     occupation: p.occupation || "—",
     sleepHours: p.sleepHours || 0,
     dietaryPrefs: p.dietaryPreferences || [],
@@ -207,6 +213,7 @@ interface CreatePayload {
   status: ClientStatus;
   age: number;
   sex: "F" | "M";
+  lifeStage: LifeStage;
   heightCm: number;
   weightKg: number;
   startWeightKg: number;
@@ -237,10 +244,17 @@ function toAPIBody(d: CreatePayload) {
     serviceType: d.serviceType,
     profile: {
       firstName,
-      lastName,
+      // A single-word name (e.g. "Cher", a business name) leaves lastName empty — omit it
+      // rather than send "" here. The backend's lastName field is z.string().min(1).optional(),
+      // which allows the key to be absent but rejects a present-but-empty string, so sending ""
+      // caused single-word names to fail validation entirely.
+      lastName: lastName || undefined,
       email: d.email || undefined,
       dateOfBirth,
       sex: mapSexToAPI(d.sex),
+      // Only meaningful when sex is female — sent regardless since the backend defaults it to
+      // "none" and getDriTargets() only consults it when sex === "female" anyway.
+      lifeStage: d.lifeStage,
       height: d.heightCm,
       weight: d.weightKg,
       startWeight: d.startWeightKg,
@@ -325,7 +339,9 @@ export async function updateClient(
   if (data.name) {
     const parts = data.name.trim().split(/\s+/);
     profile.firstName = parts[0];
-    profile.lastName = parts.slice(1).join(" ");
+    // Same empty-string-vs-omitted fix as toAPIBody above — a single-word name must omit
+    // lastName, not send it as "".
+    profile.lastName = parts.slice(1).join(" ") || undefined;
   }
   if (data.weightKg) profile.weight = data.weightKg;
   if (data.heightCm) profile.height = data.heightCm;

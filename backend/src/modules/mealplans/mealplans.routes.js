@@ -9,6 +9,8 @@ import {
   updatePlanSchema,
   listPlansSchema,
   copyDaySchema,
+  copyMealSlotSchema,
+  updateSlotTimeSchema,
   duplicatePlanSchema,
   addItemSchema,
   removeItemSchema,
@@ -51,6 +53,22 @@ router.post(
   validate(copyDaySchema),
   auditAction("update", "mealplan"),
   ctrl.copyDay
+);
+
+router.post(
+  "/:id/copy-meal-slot",
+  requirePermission("mealplans.update"),
+  validate(copyMealSlotSchema),
+  auditAction("update", "mealplan"),
+  ctrl.copyMealSlot
+);
+
+router.patch(
+  "/:id/slot-time",
+  requirePermission("mealplans.update"),
+  validate(updateSlotTimeSchema),
+  auditAction("update", "mealplan"),
+  ctrl.updateSlotTime
 );
 
 router.post(

@@ -23,16 +23,9 @@ export type Allergen =
   | "shellfish"
   | "sesame";
 
-export type DietTag =
-  | "vegan"
-  | "vegetarian"
-  | "high-protein"
-  | "low-carb"
-  | "keto"
-  | "gluten-free"
-  | "dairy-free"
-  | "pcos-friendly"
-  | "ramadan";
+// Diet tags are free-form display strings sourced from the shared dietaryPreferences Setting
+// (Settings → Services), not a fixed enum — dietitians can add/rename tags there.
+export type DietTag = string;
 
 export interface Ingredient {
   name: string;
@@ -82,18 +75,6 @@ export const CATEGORY_META: Record<RecipeCategory, { label: string; emoji: strin
   snack: { label: "Snack", emoji: "🥜" },
   dessert: { label: "Dessert", emoji: "🍰" },
   drink: { label: "Drink", emoji: "🥤" },
-};
-
-export const DIET_LABEL: Record<DietTag, string> = {
-  vegan: "Vegan",
-  vegetarian: "Vegetarian",
-  "high-protein": "High protein",
-  "low-carb": "Low carb",
-  keto: "Keto",
-  "gluten-free": "Gluten-free",
-  "dairy-free": "Dairy-free",
-  "pcos-friendly": "PCOS-friendly",
-  ramadan: "Ramadan",
 };
 
 export const ALLERGEN_LABEL: Record<Allergen, string> = {

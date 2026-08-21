@@ -26,6 +26,43 @@ const targetsSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// DRI (Dietary Reference Intake) vitamin/mineral targets — see lib/calc/dri.js for the source
+// tables. Mirrors targetsSchema's method/manual pattern exactly: "auto" is recomputed whenever
+// age/sex/lifeStage change, "manual" is left untouched by the auto-recompute path. Field names
+// match the Food model's micronutrient fields 1:1. Fields not covered by an official DRI
+// (amino acids, omega-3/6, oxalate, phytate) are intentionally absent here, not zeroed.
+const driTargetsSchema = new mongoose.Schema(
+  {
+    method: { type: String, enum: ["auto", "manual"], default: "auto" },
+    computedAt: { type: Date },
+    // Vitamins
+    vitaminA: { type: Number },
+    vitaminC: { type: Number },
+    vitaminD: { type: Number },
+    vitaminE: { type: Number },
+    vitaminK: { type: Number },
+    vitaminB1: { type: Number },
+    vitaminB2: { type: Number },
+    vitaminB3: { type: Number },
+    vitaminB5: { type: Number },
+    vitaminB6: { type: Number },
+    vitaminB12: { type: Number },
+    folate: { type: Number },
+    // Minerals
+    calcium: { type: Number },
+    iron: { type: Number },
+    magnesium: { type: Number },
+    phosphorus: { type: Number },
+    potassium: { type: Number },
+    sodium: { type: Number },
+    zinc: { type: Number },
+    copper: { type: Number },
+    manganese: { type: Number },
+    selenium: { type: Number },
+  },
+  { _id: false }
+);
+
 const clientSchema = new mongoose.Schema(
   {
     phone: { type: String, required: true, unique: true, index: true },
@@ -40,6 +77,9 @@ const clientSchema = new mongoose.Schema(
       email: { type: String, lowercase: true, trim: true },
       dateOfBirth: { type: Date },
       sex: { type: String, enum: ["male", "female"] },
+      // Life-stage for DRI purposes (lib/calc/dri.js) — only meaningful when sex is "female";
+      // drives whether the pregnancy/lactation DRI tables are used instead of standard female.
+      lifeStage: { type: String, enum: ["none", "pregnant", "lactating"], default: "none" },
       height: { type: Number },
       weight: { type: Number },
       startWeight: { type: Number },
@@ -59,6 +99,7 @@ const clientSchema = new mongoose.Schema(
     },
 
     targets: { type: targetsSchema, default: null },
+    driTargets: { type: driTargetsSchema, default: null },
 
     clinical: {
       labs: [labSchema],

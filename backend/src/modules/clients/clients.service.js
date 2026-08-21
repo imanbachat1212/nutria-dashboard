@@ -5,6 +5,7 @@ import { ApiError } from "../../lib/ApiError.js";
 import { guardClinicalWrite } from "./client.serializer.js";
 import { deleteImage } from "../../lib/storage.js";
 import { calcTargets, canComputeTargets, ageFromDOB } from "../../lib/calc/targets.js";
+import { getDriTargets } from "../../lib/calc/dri.js";
 
 function computeTargetsIfEligible(profile, existingTargets) {
   if (existingTargets?.method === "manual") return existingTargets;
@@ -23,6 +24,22 @@ function computeTargetsIfEligible(profile, existingTargets) {
   });
 }
 
+// Mirrors computeTargetsIfEligible exactly — "manual" is left untouched, otherwise recomputed
+// from age/sex/lifeStage whenever eligible. Only needs dateOfBirth + sex (unlike macro targets,
+// DRI values don't depend on weight/height/activityLevel), so its eligibility bar is lower.
+function computeDriTargetsIfEligible(profile, existingDriTargets) {
+  if (existingDriTargets?.method === "manual") return existingDriTargets;
+  if (!profile?.dateOfBirth || !profile?.sex) return existingDriTargets || null;
+
+  const age = ageFromDOB(profile.dateOfBirth);
+  if (!age || age <= 0) return existingDriTargets || null;
+
+  const dri = getDriTargets({ age, sex: profile.sex, lifeStage: profile.lifeStage || "none" });
+  if (!dri) return existingDriTargets || null;
+
+  return { method: "auto", computedAt: new Date(), ...dri };
+}
+
 export async function createClient(data, actor) {
   guardClinicalWrite(data, actor.permissions);
   data.phone = normalizePhone(data.phone);
@@ -34,6 +51,12 @@ export async function createClient(data, actor) {
     // keep manual targets as provided
   } else {
     data.targets = computeTargetsIfEligible(data.profile, null);
+  }
+
+  if (data.driTargets?.method === "manual") {
+    // keep manual DRI targets as provided
+  } else {
+    data.driTargets = computeDriTargetsIfEligible(data.profile, null);
   }
 
   return Client.create(data);
@@ -71,11 +94,18 @@ export async function updateClient(id, data, actor) {
   const existing = await Client.findById(id).lean();
   if (!existing) throw new ApiError(404, "Client not found");
 
+  const mergedProfile = data.profile ? { ...existing.profile, ...data.profile } : null;
+
   if (data.targets?.method === "manual") {
     // explicit manual override — use as-is
-  } else if (data.profile) {
-    const merged = { ...existing.profile, ...data.profile };
-    data.targets = computeTargetsIfEligible(merged, existing.targets);
+  } else if (mergedProfile) {
+    data.targets = computeTargetsIfEligible(mergedProfile, existing.targets);
+  }
+
+  if (data.driTargets?.method === "manual") {
+    // explicit manual override — use as-is
+  } else if (mergedProfile) {
+    data.driTargets = computeDriTargetsIfEligible(mergedProfile, existing.driTargets);
   }
 
   const client = await Client.findByIdAndUpdate(id, data, { new: true }).lean();

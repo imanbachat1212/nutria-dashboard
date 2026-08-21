@@ -7,6 +7,7 @@ import Role from "./src/modules/users/role.model.js";
 import User from "./src/modules/users/user.model.js";
 import Client from "./src/modules/clients/client.model.js";
 import Food from "./src/modules/foods/food.model.js";
+import Meal from "./src/modules/meals/meal.model.js";
 import Setting from "./src/modules/settings/setting.model.js";
 import { calcTargets } from "./src/lib/calc/targets.js";
 import SEED_FOODS from "./src/modules/foods/foods.seed.js";
@@ -179,10 +180,40 @@ async function seed() {
   );
   console.log("Seeded gymClassTypes setting");
 
+  // Dietary preferences (Settings → Services) — shared by every diet/preference picker in the
+  // app: the New Client dialog's Dietary preferences multi-select, the Meal Library "Diet & tags"
+  // filter, and the New Recipe dialog's diet-tag picker. One editable list, one Settings card.
+  // Non-destructive: only sets the default if the key doesn't already exist.
+  await Setting.findOneAndUpdate(
+    { key: "dietaryPreferences" },
+    {
+      $setOnInsert: {
+        key: "dietaryPreferences",
+        value: [
+          "Mediterranean",
+          "Vegetarian-leaning",
+          "High protein",
+          "Low carb",
+          "Vegan",
+          "Gluten-free",
+          "Dairy-free",
+          "Pescatarian",
+          "Keto",
+          "PCOS-friendly",
+          "Ramadan",
+        ],
+        description: "Dietary preference options — populates the Dietary preferences multi-select in the New Client dialog, the Meal Library Diet & tags filter, and the New Recipe dialog's diet-tag picker.",
+      },
+    },
+    { upsert: true }
+  );
+  console.log("Seeded dietaryPreferences setting");
+
   // Foods
   await seedFoods();
   await migrateSugarSodiumToNull();
   await migrateBarcodeRemoval();
+  await migrateMealDietTagsToDisplayStrings();
 
   await mongoose.disconnect();
   console.log("Seed complete");
@@ -255,6 +286,36 @@ async function migrateBarcodeRemoval() {
     console.log("Migration: dropped barcode_1 index");
   } catch {
     // index doesn't exist — nothing to do
+  }
+}
+
+// One-time migration: Meal.dietTags used to store the frontend's old kebab-case DietTag ids
+// (e.g. "high-protein"). The filter/picker UIs now source display strings directly from the
+// mealDietTags Setting (e.g. "High protein"), so existing meal docs need their stored tags
+// translated to match. Idempotent — only touches docs containing a known legacy id; already-
+// migrated or custom tag values pass through unchanged.
+const LEGACY_DIET_TAG_LABELS = {
+  vegan: "Vegan",
+  vegetarian: "Vegetarian",
+  "high-protein": "High protein",
+  "low-carb": "Low carb",
+  keto: "Keto",
+  "gluten-free": "Gluten-free",
+  "dairy-free": "Dairy-free",
+  "pcos-friendly": "PCOS-friendly",
+  ramadan: "Ramadan",
+};
+
+async function migrateMealDietTagsToDisplayStrings() {
+  const meals = await Meal.find({ dietTags: { $in: Object.keys(LEGACY_DIET_TAG_LABELS) } });
+  let updated = 0;
+  for (const meal of meals) {
+    meal.dietTags = meal.dietTags.map((tag) => LEGACY_DIET_TAG_LABELS[tag] ?? tag);
+    await meal.save();
+    updated++;
+  }
+  if (updated > 0) {
+    console.log(`Migration: converted dietTags to display strings on ${updated} meals`);
   }
 }
 

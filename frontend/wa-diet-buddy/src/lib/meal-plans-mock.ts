@@ -8,12 +8,75 @@ export interface Macros {
   fat: number;
 }
 
+// The 22 DRI-matched micronutrient fields (see backend lib/calc/dri.js) — keyed the same as
+// Food/Client.driTargets. A missing/null value means "no data available", not zero.
+export type Micros = Record<string, number | null>;
+
+export interface MicroFieldDef {
+  key: string;
+  label: string;
+  unit: string;
+}
+
+export interface MicroFieldGroup {
+  id: string;
+  label: string;
+  fields: MicroFieldDef[];
+}
+
+// Labels/units mirror the Food Database detail view's MICRO_FIELD_GROUPS (food-database-mock.ts)
+// for consistency, scoped down to only the 22 fields that have a real DRI target — plus Sodium,
+// which that view shows separately as a standalone stat rather than in its micronutrient panel.
+export const DRI_FIELD_GROUPS: MicroFieldGroup[] = [
+  {
+    id: "vitamins",
+    label: "Vitamins",
+    fields: [
+      { key: "vitaminA", label: "Vitamin A", unit: "mcg" },
+      { key: "vitaminB1", label: "B1 (thiamine)", unit: "mg" },
+      { key: "vitaminB2", label: "B2 (riboflavin)", unit: "mg" },
+      { key: "vitaminB3", label: "B3 (niacin)", unit: "mg" },
+      { key: "vitaminB5", label: "B5 (pantothenic acid)", unit: "mg" },
+      { key: "vitaminB6", label: "B6 (pyridoxine)", unit: "mg" },
+      { key: "vitaminB12", label: "B12 (cobalamin)", unit: "mcg" },
+      { key: "vitaminC", label: "Vitamin C", unit: "mg" },
+      { key: "vitaminD", label: "Vitamin D", unit: "mcg" },
+      { key: "vitaminE", label: "Vitamin E", unit: "mg" },
+      { key: "folate", label: "Folate", unit: "mcg" },
+      { key: "vitaminK", label: "Vitamin K", unit: "mcg" },
+    ],
+  },
+  {
+    id: "minerals",
+    label: "Minerals",
+    fields: [
+      { key: "calcium", label: "Calcium", unit: "mg" },
+      { key: "copper", label: "Copper", unit: "mg" },
+      { key: "iron", label: "Iron", unit: "mg" },
+      { key: "magnesium", label: "Magnesium", unit: "mg" },
+      { key: "manganese", label: "Manganese", unit: "mg" },
+      { key: "phosphorus", label: "Phosphorus", unit: "mg" },
+      { key: "potassium", label: "Potassium", unit: "mg" },
+      { key: "selenium", label: "Selenium", unit: "mcg" },
+      { key: "sodium", label: "Sodium", unit: "mg" },
+      { key: "zinc", label: "Zinc", unit: "mg" },
+    ],
+  },
+];
+
+export const DRI_FIELDS: string[] = DRI_FIELD_GROUPS.flatMap((g) => g.fields.map((f) => f.key));
+
 export interface FoodItem {
   id: string;
   name: string;
   amount: string; // e.g. "120 g", "1 cup"
   macros: Macros;
+  micros?: Micros;
   tags?: string[]; // "lebanese", "vegan", "high-protein", etc.
+  // True when amount used a flat fallback gram conversion instead of this food's own stored
+  // weight for the unit (cup/tbsp/tsp/piece only — see isApproximateItem in mealplans-api.ts).
+  // Undefined on mock data, which doesn't model per-food unit weights.
+  isApproximate?: boolean;
 }
 
 export interface MealEntry {
@@ -43,6 +106,9 @@ export interface MealPlan {
   startDate: string;
   endDate: string;
   targets: Macros;
+  // Client's DRI targets (see backend lib/calc/dri.js) — null when the client is missing the
+  // age/sex data needed to compute them, not when they're simply zero.
+  driTargets: Micros | null;
   adherencePct: number;
   days: DayPlan[];
   updatedAt: string;
@@ -94,6 +160,36 @@ export function mealMacros(m: MealEntry): Macros {
 
 export function dayMacros(d: DayPlan): Macros {
   return sumMacros(d.meals.map((m) => ({ macros: mealMacros(m) })));
+}
+
+// Partial-sum-with-null, same rule as the backend (addMicronutrients/finalizeMicronutrients in
+// recipeMacros.js): a field stays null in the result unless at least one item actually had a
+// non-null value for it — summing missing data as 0 would misrepresent "unknown" as "none".
+export function sumMicros(items: { micros?: Micros }[]): Micros {
+  const totals: Record<string, number> = {};
+  const seen: Record<string, boolean> = {};
+  for (const item of items) {
+    if (!item.micros) continue;
+    for (const field of DRI_FIELDS) {
+      const v = item.micros[field];
+      if (v == null) continue;
+      seen[field] = true;
+      totals[field] = (totals[field] ?? 0) + v;
+    }
+  }
+  const result: Micros = {};
+  for (const field of DRI_FIELDS) {
+    result[field] = seen[field] ? Math.round(totals[field] * 100) / 100 : null;
+  }
+  return result;
+}
+
+export function mealMicros(m: MealEntry): Micros {
+  return sumMicros(m.items);
+}
+
+export function dayMicros(d: DayPlan): Micros {
+  return sumMicros(d.meals.map((m) => ({ micros: mealMicros(m) })));
 }
 
 // ---------- Helpers / generators ----------
@@ -296,6 +392,7 @@ export const MEAL_PLANS: MealPlan[] = [
     startDate: "2026-06-02",
     endDate: "2026-06-29",
     targets: { kcal: 1650, protein: 130, carbs: 170, fat: 55 },
+    driTargets: null,
     adherencePct: 88,
     days: buildWeek({ mon: ranaMonday, tue: ranaTuesday }, ranaMonday),
     updatedAt: "2 hours ago",
@@ -312,6 +409,7 @@ export const MEAL_PLANS: MealPlan[] = [
     startDate: "2026-05-12",
     endDate: "2026-07-06",
     targets: { kcal: 3180, protein: 175, carbs: 360, fat: 90 },
+    driTargets: null,
     adherencePct: 92,
     days: buildWeek({}, [
       {
@@ -377,6 +475,7 @@ export const MEAL_PLANS: MealPlan[] = [
     startDate: "2026-05-20",
     endDate: "2026-06-30",
     targets: { kcal: 1500, protein: 110, carbs: 150, fat: 50 },
+    driTargets: null,
     adherencePct: 71,
     days: buildWeek({}, ranaMonday),
     updatedAt: "3 days ago",
@@ -393,6 +492,7 @@ export const MEAL_PLANS: MealPlan[] = [
     startDate: "2026-06-01",
     endDate: "2026-07-31",
     targets: { kcal: 1850, protein: 135, carbs: 195, fat: 60 },
+    driTargets: null,
     adherencePct: 84,
     days: buildWeek({}, ranaMonday),
     updatedAt: "1 hour ago",
@@ -409,6 +509,7 @@ export const MEAL_PLANS: MealPlan[] = [
     startDate: "2026-06-22",
     endDate: "2026-07-22",
     targets: { kcal: 2400, protein: 165, carbs: 240, fat: 80 },
+    driTargets: null,
     adherencePct: 0,
     days: buildWeek({}, ranaMonday),
     updatedAt: "Just now",
@@ -424,6 +525,7 @@ export const MEAL_PLANS: MealPlan[] = [
     startDate: "2026-04-10",
     endDate: "2026-06-07",
     targets: { kcal: 1450, protein: 105, carbs: 150, fat: 48 },
+    driTargets: null,
     adherencePct: 0,
     days: buildWeek({}, ranaMonday),
     updatedAt: "2 weeks ago",

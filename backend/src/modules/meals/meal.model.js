@@ -41,6 +41,33 @@ const mealSchema = new mongoose.Schema(
     totalCarbs: { type: Number, default: 0 },
     totalFat: { type: Number, default: 0 },
     totalFiber: { type: Number, default: 0 },
+    // DRI-matched micronutrient totals — same 22 fields as Client.driTargets (see
+    // lib/calc/dri.js), computed by recipeMacros.js alongside the macros above. Nullable: null
+    // means "no ingredient had verified data for this nutrient", not "zero" — see
+    // computeRecipeMacros for the partial-sum-vs-null rule. Lets the Meal Plan micronutrient
+    // breakdown sum recipe items the same way it sums direct food items.
+    totalVitaminA: { type: Number, default: null },
+    totalVitaminC: { type: Number, default: null },
+    totalVitaminD: { type: Number, default: null },
+    totalVitaminE: { type: Number, default: null },
+    totalVitaminK: { type: Number, default: null },
+    totalVitaminB1: { type: Number, default: null },
+    totalVitaminB2: { type: Number, default: null },
+    totalVitaminB3: { type: Number, default: null },
+    totalVitaminB5: { type: Number, default: null },
+    totalVitaminB6: { type: Number, default: null },
+    totalVitaminB12: { type: Number, default: null },
+    totalFolate: { type: Number, default: null },
+    totalCalcium: { type: Number, default: null },
+    totalIron: { type: Number, default: null },
+    totalMagnesium: { type: Number, default: null },
+    totalPhosphorus: { type: Number, default: null },
+    totalPotassium: { type: Number, default: null },
+    totalSodium: { type: Number, default: null },
+    totalZinc: { type: Number, default: null },
+    totalCopper: { type: Number, default: null },
+    totalManganese: { type: Number, default: null },
+    totalSelenium: { type: Number, default: null },
     verified: { type: Boolean, default: false },
     notes: { type: String },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },

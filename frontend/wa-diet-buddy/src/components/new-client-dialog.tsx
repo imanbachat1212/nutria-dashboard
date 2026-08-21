@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
   Plus,
   ChevronLeft,
@@ -53,7 +55,12 @@ import {
   type ClientRecord,
   type ClientGoal,
   type ClientMacros,
+  type LifeStage,
+  DRI_VITAMIN_FIELDS,
+  DRI_MINERAL_FIELDS,
 } from "@/lib/clients-mock";
+import { getDriTargets } from "@/lib/dri";
+import { fetchDietaryPreferences } from "@/lib/settings-api";
 
 interface NewClientDialogProps {
   open: boolean;
@@ -96,6 +103,7 @@ export function NewClientDialog({ open, onOpenChange, onCreate }: NewClientDialo
   // Body & goals
   const [age, setAge] = useState("");
   const [sex, setSex] = useState<"F" | "M">("F");
+  const [lifeStage, setLifeStage] = useState<LifeStage>("none");
   const [heightCm, setHeightCm] = useState("");
   const [weightKg, setWeightKg] = useState("");
   const [startWeightKg, setStartWeightKg] = useState("");
@@ -107,9 +115,18 @@ export function NewClientDialog({ open, onOpenChange, onCreate }: NewClientDialo
   // Lifestyle
   const [occupation, setOccupation] = useState("");
   const [sleepHours, setSleepHours] = useState("");
-  const [dietaryPrefsRaw, setDietaryPrefsRaw] = useState("");
+  const [dietaryPrefs, setDietaryPrefs] = useState<string[]>([]);
   const [allergiesRaw, setAllergiesRaw] = useState("");
   const [medicalHistoryRaw, setMedicalHistoryRaw] = useState("");
+
+  const { data: dietaryPreferenceOptions = [] } = useQuery({
+    queryKey: ["settings", "dietary-preferences"],
+    queryFn: fetchDietaryPreferences,
+  });
+
+  const toggleDietaryPref = (pref: string) => {
+    setDietaryPrefs((cur) => (cur.includes(pref) ? cur.filter((p) => p !== pref) : [...cur, pref]));
+  };
 
   // Targets
   const [targets, setTargets] = useState<ClientMacros>({
@@ -151,6 +168,19 @@ export function NewClientDialog({ open, onOpenChange, onCreate }: NewClientDialo
     if (!overrideTargets) setTargets(computedTargets);
   }, [computedTargets, overrideTargets]);
 
+  // lifeStage only applies to female clients — reset it if sex is switched to male so a stale
+  // pregnant/lactating value can't silently linger unseen.
+  useEffect(() => {
+    if (sex === "M" && lifeStage !== "none") setLifeStage("none");
+  }, [sex, lifeStage]);
+
+  // Preview only — same client-side-duplicate pattern as bmr/tdee/computedTargets above. The
+  // backend recomputes this authoritatively via computeDriTargetsIfEligible on save.
+  const driPreview = useMemo(() => {
+    if (!ageN) return null;
+    return getDriTargets(ageN, sex === "M" ? "male" : "female", lifeStage);
+  }, [ageN, sex, lifeStage]);
+
   const reset = () => {
     setStep(1);
     setName("");
@@ -160,6 +190,7 @@ export function NewClientDialog({ open, onOpenChange, onCreate }: NewClientDialo
     setStatus("active");
     setAge("");
     setSex("F");
+    setLifeStage("none");
     setHeightCm("");
     setWeightKg("");
     setStartWeightKg("");
@@ -169,15 +200,18 @@ export function NewClientDialog({ open, onOpenChange, onCreate }: NewClientDialo
     setTargetDate("");
     setOccupation("");
     setSleepHours("");
-    setDietaryPrefsRaw("");
+    setDietaryPrefs([]);
     setAllergiesRaw("");
     setMedicalHistoryRaw("");
     setTargets({ calories: 0, protein: 0, carbs: 0, fat: 0 });
     setOverrideTargets(false);
   };
 
+  // Deliberately does NOT reset the form — closing via X, Cancel, or Escape should preserve
+  // whatever was typed, so reopening the dialog (e.g. clicking "New client" again without
+  // having saved) shows the form exactly as it was left, not blank. reset() is only called
+  // after a successful save, in handleSave below — that's the one case a blank form is wanted.
   const handleClose = (o: boolean) => {
-    if (!o) reset();
     onOpenChange(o);
   };
 
@@ -212,6 +246,7 @@ export function NewClientDialog({ open, onOpenChange, onCreate }: NewClientDialo
       lastActivity: "Just now",
       age: ageN,
       sex,
+      lifeStage,
       heightCm: heightN,
       weightKg: weightN,
       startWeightKg: startWeightN,
@@ -223,7 +258,7 @@ export function NewClientDialog({ open, onOpenChange, onCreate }: NewClientDialo
       adherencePct: 0,
       occupation: occupation.trim() || "—",
       sleepHours: sleepN,
-      dietaryPrefs: parseList(dietaryPrefsRaw),
+      dietaryPrefs,
       allergies: parseList(allergiesRaw),
       medicalHistory: parseList(medicalHistoryRaw),
       labs: [],
@@ -239,9 +274,14 @@ export function NewClientDialog({ open, onOpenChange, onCreate }: NewClientDialo
     setSaving(true);
     try {
       await onCreate(newClient);
+      // Only the success path resets the form — see handleClose's comment.
+      reset();
       handleClose(false);
     } catch (err) {
       console.error("Failed to create client:", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't save client — please check the form and try again",
+      );
     } finally {
       setSaving(false);
     }
@@ -260,7 +300,10 @@ export function NewClientDialog({ open, onOpenChange, onCreate }: NewClientDialo
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent
+        className="max-w-2xl max-h-[90vh] overflow-y-auto"
+        onPointerDownOutside={(e) => e.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle>New client</DialogTitle>
           <DialogDescription>
@@ -447,6 +490,30 @@ export function NewClientDialog({ open, onOpenChange, onCreate }: NewClientDialo
                 </div>
               </div>
 
+              {sex === "F" && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label>Life stage</Label>
+                    <Select
+                      value={lifeStage}
+                      onValueChange={(v) => setLifeStage(v as LifeStage)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">None</SelectItem>
+                        <SelectItem value="pregnant">Pregnant</SelectItem>
+                        <SelectItem value="lactating">Lactating</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-[11px] text-muted-foreground">
+                      Adjusts DRI vitamin/mineral targets for pregnancy or lactation.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <Label htmlFor="startWeight">Start weight (kg)</Label>
@@ -565,16 +632,36 @@ export function NewClientDialog({ open, onOpenChange, onCreate }: NewClientDialo
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="prefs" className="flex items-center gap-1.5">
+                <Label className="flex items-center gap-1.5">
                   <Apple className="size-4" /> Dietary preferences
+                  {dietaryPrefs.length === 0 && (
+                    <span className="text-xs font-normal text-muted-foreground">(none selected)</span>
+                  )}
                 </Label>
-                <Textarea
-                  id="prefs"
-                  value={dietaryPrefsRaw}
-                  onChange={(e) => setDietaryPrefsRaw(e.target.value)}
-                  placeholder="e.g. Mediterranean, Vegetarian-leaning, High protein (comma or line separated)"
-                  rows={2}
-                />
+                {dietaryPreferenceOptions.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">Loading options…</p>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {dietaryPreferenceOptions.map((pref) => {
+                      const active = dietaryPrefs.includes(pref);
+                      return (
+                        <button
+                          key={pref}
+                          type="button"
+                          onClick={() => toggleDietaryPref(pref)}
+                          className={cn(
+                            "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                            active
+                              ? "border-primary bg-primary-soft text-primary"
+                              : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                          )}
+                        >
+                          {pref}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               <div className="space-y-1.5">
@@ -691,6 +778,45 @@ export function NewClientDialog({ open, onOpenChange, onCreate }: NewClientDialo
 
               <Separator />
 
+              <div>
+                <h3 className="text-sm font-semibold">DRI targets</h3>
+                <p className="text-xs text-muted-foreground">
+                  Vitamin/mineral targets from NAM Dietary Reference Intakes, based on age, sex
+                  {sex === "F" && lifeStage !== "none" ? ", and life stage" : ""}. Read-only for
+                  now — recomputes automatically if age/sex/life stage change later.
+                </p>
+                {!driPreview ? (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Enter age to preview DRI targets.
+                  </p>
+                ) : (
+                  <div className="mt-2 grid grid-cols-2 gap-4">
+                    <div>
+                      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        Vitamins
+                      </div>
+                      <div className="space-y-0.5">
+                        {DRI_VITAMIN_FIELDS.map((f) => (
+                          <DriRow key={f.key} label={f.label} value={driPreview[f.key]} unit={f.unit} />
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        Minerals
+                      </div>
+                      <div className="space-y-0.5">
+                        {DRI_MINERAL_FIELDS.map((f) => (
+                          <DriRow key={f.key} label={f.label} value={driPreview[f.key]} unit={f.unit} />
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <Separator />
+
               <div className="space-y-1.5">
                 <h3 className="text-sm font-semibold">Review</h3>
                 <div className="rounded-lg border bg-card p-4">
@@ -783,6 +909,25 @@ function StatBox({ label, value }: { label: string; value: string | number }) {
     <div className="rounded-md border bg-background px-2.5 py-1.5 text-center">
       <div className="text-sm font-semibold tabular-nums">{value}</div>
       <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
+    </div>
+  );
+}
+
+function DriRow({
+  label,
+  value,
+  unit,
+}: {
+  label: string;
+  value: number | undefined;
+  unit: string;
+}) {
+  return (
+    <div className="flex items-center justify-between text-xs">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="font-medium tabular-nums">
+        {value == null ? "—" : `${value} ${unit}`}
+      </span>
     </div>
   );
 }

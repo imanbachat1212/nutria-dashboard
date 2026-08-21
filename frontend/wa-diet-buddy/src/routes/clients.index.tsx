@@ -278,6 +278,7 @@ function ClientsListPage() {
             status: client.status,
             age: client.age,
             sex: client.sex,
+            lifeStage: client.lifeStage || "none",
             heightCm: client.heightCm,
             weightKg: client.weightKg,
             startWeightKg: client.startWeightKg,
