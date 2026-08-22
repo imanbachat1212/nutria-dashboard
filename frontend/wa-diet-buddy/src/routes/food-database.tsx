@@ -23,6 +23,9 @@ import {
   XCircle,
   MoreHorizontal,
   Trash2,
+  Pencil,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -74,12 +77,24 @@ import {
   type FoodItem,
   type FoodCategory,
   type FoodSource,
+  type Micronutrients,
 } from "@/lib/food-database-mock";
-import { fetchFoods, updateFood, deleteFood } from "@/lib/foods-api";
+import {
+  fetchFoods,
+  fetchFoodStats,
+  updateFood,
+  deleteFood,
+  addFavoriteFood,
+  removeFavoriteFood,
+  bulkDeleteFoods,
+  toMicronutrients,
+  type BulkDeleteResult,
+} from "@/lib/foods-api";
 import {
   searchUsda,
   importUsdaFood,
   fetchImportedUsdaFdcIds,
+  fetchUsdaFoodDetails,
   type UsdaSearchResult,
 } from "@/lib/usda-api";
 import { NewFoodDialog } from "@/components/new-food-dialog";
@@ -113,6 +128,22 @@ const CATEGORIES: (FoodCategory | "all")[] = [
 
 const SOURCES: (FoodSource | "all")[] = ["all", "usda", "lebanese", "custom"];
 
+const FOODS_PAGE_SIZE = 100;
+
+// Windowed page numbers with ellipsis once there are enough pages that showing every number
+// would crowd the bar — always keeps first, last, and a small run around the current page.
+function getPageNumbers(current: number, total: number): (number | "ellipsis")[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages = new Set<number>([1, total, current - 1, current, current + 1]);
+  const sorted = [...pages].filter((p) => p >= 1 && p <= total).sort((a, b) => a - b);
+  const result: (number | "ellipsis")[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    if (i > 0 && sorted[i] - sorted[i - 1] > 1) result.push("ellipsis");
+    result.push(sorted[i]);
+  }
+  return result;
+}
+
 function FoodDatabasePage() {
   const qc = useQueryClient();
   const [mode, setMode] = useState<"library" | "usda">("library");
@@ -121,23 +152,68 @@ function FoodDatabasePage() {
   const [source, setSource] = useState<FoodSource | "all">("all");
   const [onlyVerified, setOnlyVerified] = useState(false);
   const [onlyFavorites, setOnlyFavorites] = useState(false);
+  const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<FoodItem | null>(null);
   const [newOpen, setNewOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<FoodItem | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<FoodItem | null>(null);
+  // Bulk-select for the table below — id -> name (name kept alongside the id so the confirm
+  // dialog can list foods selected on a page the dietitian has since navigated away from,
+  // without an extra fetch). Persists across page changes; cleared on any filter change.
+  const [bulkSelection, setBulkSelection] = useState<Map<string, string>>(new Map());
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+
+  // A stale page number after changing any filter could otherwise land on an empty page (e.g.
+  // page 3 of "All sources", then filtering down to a source with only 1 page). A selection made
+  // under a different filter/search may no longer make sense either, so it's cleared too.
+  useEffect(() => {
+    setPage(1);
+    setBulkSelection(new Map());
+  }, [query, category, source, onlyVerified, onlyFavorites]);
 
   const { data, isLoading } = useQuery({
-    queryKey: ["foods", query, category, source],
+    queryKey: ["foods", query, category, source, onlyVerified, onlyFavorites, page],
     queryFn: () =>
       fetchFoods({
         search: query || undefined,
         category: category !== "all" ? category : undefined,
         source: source !== "all" ? source : undefined,
-        limit: 100,
+        verified: onlyVerified || undefined,
+        favorites: onlyFavorites || undefined,
+        page,
+        limit: FOODS_PAGE_SIZE,
       }),
     enabled: mode === "library",
   });
 
   const allFoods = data?.foods ?? [];
+  const pageTotal = data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(pageTotal / FOODS_PAGE_SIZE));
+  const rangeStart = pageTotal === 0 ? 0 : (page - 1) * FOODS_PAGE_SIZE + 1;
+  const rangeEnd = Math.min(page * FOODS_PAGE_SIZE, pageTotal);
+
+  // Deleting enough foods (single or bulk) can shrink totalPages below the page currently being
+  // viewed — land back on the new last page instead of showing an empty one.
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
+  // True total/verified/lebanese counts for the current filter, from a dedicated backend
+  // aggregate — NOT derived from `allFoods`, which is capped at the 100-row page size above
+  // and would silently freeze these KPIs once the library passed that size (it already has).
+  const { data: statsData } = useQuery({
+    queryKey: ["foods", "stats", query, category, source, onlyVerified, onlyFavorites],
+    queryFn: () =>
+      fetchFoodStats({
+        search: query || undefined,
+        category: category !== "all" ? category : undefined,
+        source: source !== "all" ? source : undefined,
+        verified: onlyVerified || undefined,
+        favorites: onlyFavorites || undefined,
+      }),
+    enabled: mode === "library",
+  });
+  const stats = statsData ?? { total: 0, verified: 0, lebanese: 0 };
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deleteFood(id),
@@ -150,23 +226,58 @@ function FoodDatabasePage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  // Source is now a server-side filter (fetchFoods above) — only verified/favorites stay
-  // client-side, since those have no backend param yet and only ever apply to the page of
-  // local-library results already in hand.
-  const filtered = useMemo(() => {
-    return allFoods.filter((f) => {
-      if (onlyVerified && !f.verified) return false;
-      if (onlyFavorites && !f.isFavorite) return false;
-      return true;
-    });
-  }, [allFoods, onlyVerified, onlyFavorites]);
+  // verified/source/category/search/favorites are now all real server-side filters (see
+  // fetchFoods above) — allFoods is already exactly the matching, paginated set, no further
+  // client-side narrowing needed.
+  const filtered = allFoods;
 
-  const stats = useMemo(() => {
-    const total = allFoods.length;
-    const verified = allFoods.filter((f) => f.verified).length;
-    const lebanese = allFoods.filter((f) => f.source === "lebanese").length;
-    return { total, verified, lebanese };
-  }, [allFoods]);
+  const allOnPageSelected =
+    filtered.length > 0 && filtered.every((f) => bulkSelection.has(f.id));
+  const someOnPageSelected = filtered.some((f) => bulkSelection.has(f.id));
+
+  function toggleSelectOne(food: FoodItem) {
+    setBulkSelection((prev) => {
+      const next = new Map(prev);
+      if (next.has(food.id)) next.delete(food.id);
+      else next.set(food.id, food.name);
+      return next;
+    });
+  }
+
+  // Scoped to the CURRENT page only, per the task's explicit "don't let a dietitian
+  // accidentally select hundreds of foods without realizing it" — never the full 407-food
+  // library at once.
+  function toggleSelectAllOnPage() {
+    setBulkSelection((prev) => {
+      const next = new Map(prev);
+      if (allOnPageSelected) {
+        for (const f of filtered) next.delete(f.id);
+      } else {
+        for (const f of filtered) next.set(f.id, f.name);
+      }
+      return next;
+    });
+  }
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: (ids: string[]) => bulkDeleteFoods(ids),
+    onSuccess: (result: BulkDeleteResult) => {
+      qc.invalidateQueries({ queryKey: ["foods"] });
+      setBulkSelection(new Map());
+      setBulkDeleteOpen(false);
+      const { deleted, blocked, notFound } = result;
+      if (blocked.length === 0 && notFound.length === 0) {
+        toast.success(`${deleted.length} food${deleted.length === 1 ? "" : "s"} removed from library`);
+      } else {
+        const skipped = blocked.length + notFound.length;
+        toast.warning(
+          `${deleted.length} removed, ${skipped} skipped` +
+            (blocked.length > 0 ? ` (${blocked.length} in use)` : ""),
+        );
+      }
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
 
   return (
     <>
@@ -294,11 +405,46 @@ function FoodDatabasePage() {
             </div>
           </Card>
 
+          {/* Bulk-action bar — only shown once at least one food is selected */}
+          {bulkSelection.size > 0 && (
+            <Card className="mb-4 flex items-center justify-between gap-3 border-primary/30 bg-primary-soft/40 px-4 py-2.5">
+              <div className="text-sm font-medium text-primary">
+                {bulkSelection.size} selected
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setBulkSelection(new Map())}
+                >
+                  Clear selection
+                </Button>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={() => setBulkDeleteOpen(true)}
+                >
+                  <Trash2 className="size-3.5" />
+                  Delete selected
+                </Button>
+              </div>
+            </Card>
+          )}
+
           {/* Table */}
           <Card className="overflow-hidden">
             <div className="flex items-center justify-between border-b px-4 py-2.5">
               <div className="text-sm text-muted-foreground">
-                <span className="font-medium text-foreground">{filtered.length}</span> foods
+                {pageTotal === 0 ? (
+                  <span className="font-medium text-foreground">0</span>
+                ) : (
+                  <>
+                    Showing <span className="font-medium text-foreground">{rangeStart}</span>–
+                    <span className="font-medium text-foreground">{rangeEnd}</span> of{" "}
+                    <span className="font-medium text-foreground">{pageTotal}</span>
+                  </>
+                )}{" "}
+                foods
               </div>
               <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
                 Macros per 100 g
@@ -312,7 +458,14 @@ function FoodDatabasePage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="pl-4">Food</TableHead>
+                    <TableHead className="w-10 pl-4">
+                      <Checkbox
+                        checked={allOnPageSelected ? true : someOnPageSelected ? "indeterminate" : false}
+                        onCheckedChange={toggleSelectAllOnPage}
+                        aria-label="Select all foods on this page"
+                      />
+                    </TableHead>
+                    <TableHead>Food</TableHead>
                     <TableHead>Source</TableHead>
                     <TableHead className="text-right">kcal</TableHead>
                     <TableHead className="text-right">P</TableHead>
@@ -332,7 +485,14 @@ function FoodDatabasePage() {
                         onClick={() => setSelected(f)}
                         className="cursor-pointer"
                       >
-                        <TableCell className="pl-4">
+                        <TableCell className="w-10 pl-4" onClick={(e) => e.stopPropagation()}>
+                          <Checkbox
+                            checked={bulkSelection.has(f.id)}
+                            onCheckedChange={() => toggleSelectOne(f)}
+                            aria-label={`Select ${f.name}`}
+                          />
+                        </TableCell>
+                        <TableCell>
                           <div className="min-w-0">
                             <div className="flex items-center gap-1.5">
                               <span className="font-medium text-foreground truncate">{f.name}</span>
@@ -378,6 +538,10 @@ function FoodDatabasePage() {
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
+                              <DropdownMenuItem onSelect={() => setEditTarget(f)}>
+                                <Pencil className="h-3.5 w-3.5" />
+                                Edit
+                              </DropdownMenuItem>
                               <DropdownMenuItem
                                 className="text-rose-600"
                                 onSelect={() => setDeleteTarget(f)}
@@ -393,7 +557,7 @@ function FoodDatabasePage() {
                   })}
                   {filtered.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={9} className="py-12 text-center text-muted-foreground">
+                      <TableCell colSpan={10} className="py-12 text-center text-muted-foreground">
                         No foods match your filters.
                       </TableCell>
                     </TableRow>
@@ -401,12 +565,66 @@ function FoodDatabasePage() {
                 </TableBody>
               </Table>
             )}
+            {!isLoading && totalPages > 1 && (
+              <div className="flex items-center justify-between border-t px-4 py-2.5">
+                <div className="text-xs text-muted-foreground">
+                  Page {page} of {totalPages}
+                </div>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={page === 1}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  >
+                    Previous
+                  </Button>
+                  {getPageNumbers(page, totalPages).map((p, i) =>
+                    p === "ellipsis" ? (
+                      <span
+                        key={`ellipsis-${i}`}
+                        className="px-1.5 text-xs text-muted-foreground"
+                      >
+                        …
+                      </span>
+                    ) : (
+                      <Button
+                        key={p}
+                        variant={p === page ? "default" : "outline"}
+                        size="sm"
+                        className="w-8 px-0"
+                        onClick={() => setPage(p)}
+                      >
+                        {p}
+                      </Button>
+                    ),
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={page === totalPages}
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            )}
           </Card>
         </>
       )}
 
       <FoodDrawer food={selected} onClose={() => setSelected(null)} />
-      <NewFoodDialog open={newOpen} onOpenChange={setNewOpen} />
+      <NewFoodDialog
+        open={newOpen || !!editTarget}
+        onOpenChange={(o) => {
+          if (!o) {
+            setNewOpen(false);
+            setEditTarget(null);
+          }
+        }}
+        editFoodId={editTarget?.id ?? null}
+      />
 
       <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
         <AlertDialogContent>
@@ -425,6 +643,47 @@ function FoodDatabasePage() {
               onClick={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
             >
               {deleteMutation.isPending ? "Removing…" : "Remove"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={bulkDeleteOpen} onOpenChange={(o) => !o && setBulkDeleteOpen(false)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Remove {bulkSelection.size} food{bulkSelection.size === 1 ? "" : "s"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2">
+                <p>
+                  This permanently removes the selected food{bulkSelection.size === 1 ? "" : "s"}{" "}
+                  from your library. This can't be undone. Any that are used in a recipe, meal
+                  plan, or journal entry will be skipped instead of deleted — same protection as
+                  removing one food at a time.
+                </p>
+                {bulkSelection.size <= 10 && (
+                  <ul className="list-inside list-disc text-muted-foreground">
+                    {Array.from(bulkSelection.values()).map((name, i) => (
+                      <li key={i} className="truncate">
+                        {name}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={bulkDeleteMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-rose-600 text-white hover:bg-rose-700"
+              disabled={bulkDeleteMutation.isPending}
+              onClick={() => bulkDeleteMutation.mutate(Array.from(bulkSelection.keys()))}
+            >
+              {bulkDeleteMutation.isPending
+                ? "Removing…"
+                : `Remove ${bulkSelection.size}`}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -457,6 +716,9 @@ function UsdaSearchPanel() {
   const [bulkState, setBulkState] = useState<{ total: number; results: BulkImportResult[] } | null>(
     null,
   );
+  // Only one result's micronutrient preview open at a time — keeps this to at most one lazy
+  // details fetch in flight rather than a fetch per expanded row.
+  const [expandedFdcId, setExpandedFdcId] = useState<number | null>(null);
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(query.trim()), 400);
@@ -467,6 +729,7 @@ function UsdaSearchPanel() {
   useEffect(() => {
     setSelected(new Set());
     setBulkState(null);
+    setExpandedFdcId(null);
   }, [debounced]);
 
   const searching = debounced.length > 1;
@@ -675,6 +938,7 @@ function UsdaSearchPanel() {
                     aria-label="Select all USDA results"
                   />
                 </TableHead>
+                <TableHead className="w-8" />
                 <TableHead>Food</TableHead>
                 <TableHead className="text-right">kcal</TableHead>
                 <TableHead className="text-right">P</TableHead>
@@ -688,7 +952,9 @@ function UsdaSearchPanel() {
               {results.map((r: UsdaSearchResult) => {
                 const importing = importMutation.isPending && importMutation.variables === r.fdcId;
                 const alreadyAdded = importedSet.has(r.fdcId);
+                const expanded = expandedFdcId === r.fdcId;
                 return (
+                  <>
                   <TableRow key={r.fdcId}>
                     <TableCell className="w-10 pl-4">
                       <Checkbox
@@ -697,6 +963,21 @@ function UsdaSearchPanel() {
                         disabled={bulkRunning || alreadyAdded}
                         aria-label={`Select ${r.name}`}
                       />
+                    </TableCell>
+                    <TableCell className="w-8">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-6"
+                        onClick={() => setExpandedFdcId(expanded ? null : r.fdcId)}
+                        aria-label={expanded ? "Hide micronutrients" : "View micronutrients"}
+                      >
+                        {expanded ? (
+                          <ChevronDown className="size-3.5" />
+                        ) : (
+                          <ChevronRight className="size-3.5" />
+                        )}
+                      </Button>
                     </TableCell>
                     <TableCell>
                       <div className="min-w-0">
@@ -745,6 +1026,14 @@ function UsdaSearchPanel() {
                       )}
                     </TableCell>
                   </TableRow>
+                  {expanded && (
+                    <TableRow key={`${r.fdcId}-details`}>
+                      <TableCell colSpan={8} className="bg-muted/20 p-4">
+                        <UsdaDetailsPreview fdcId={r.fdcId} />
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  </>
                 );
               })}
             </TableBody>
@@ -752,6 +1041,43 @@ function UsdaSearchPanel() {
         </Card>
       )}
     </div>
+  );
+}
+
+// Lazy, on-demand preview of a single USDA result's full micronutrient breakdown — only fetched
+// once its row is expanded, never eagerly for the whole result list. Reuses the exact same
+// getUsdaFoodDetails/previewUsdaFood call and toMicronutrients mapping the actual import uses,
+// so what's previewed here is guaranteed to match what gets stored if this result is imported.
+function UsdaDetailsPreview({ fdcId }: { fdcId: number }) {
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["foods", "usda-details", fdcId],
+    queryFn: () => fetchUsdaFoodDetails(fdcId),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-6">
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (isError || !data) {
+    return (
+      <p className="py-2 text-center text-sm text-destructive">
+        Couldn't load micronutrient details for this result. Try again shortly.
+      </p>
+    );
+  }
+
+  return (
+    <MicronutrientSection
+      food={{
+        macros: { carbs: data.carbs, fiber: data.fiber },
+        micros: toMicronutrients(data),
+      }}
+    />
   );
 }
 
@@ -781,6 +1107,7 @@ function KpiCard({
 function FoodDrawer({ food, onClose }: { food: FoodItem | null; onClose: () => void }) {
   const qc = useQueryClient();
   const [toggling, setToggling] = useState(false);
+  const [favoriting, setFavoriting] = useState(false);
   if (!food) return null;
   const meta = CATEGORY_META[food.category];
   const src = SOURCE_META[food.source];
@@ -951,7 +1278,26 @@ function FoodDrawer({ food, onClose }: { food: FoodItem | null; onClose: () => v
               <ShieldCheck className="size-4" />
               {toggling ? "Saving…" : food.verified ? "Verified" : "Mark verified"}
             </Button>
-            <Button size="sm" variant="outline">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={favoriting}
+              onClick={async () => {
+                setFavoriting(true);
+                try {
+                  if (food.isFavorite) {
+                    await removeFavoriteFood(food.id);
+                  } else {
+                    await addFavoriteFood(food.id);
+                  }
+                  qc.invalidateQueries({ queryKey: ["foods"] });
+                } catch (err) {
+                  console.error("Failed to toggle favorite:", err);
+                } finally {
+                  setFavoriting(false);
+                }
+              }}
+            >
               <Heart className={cn("size-4", food.isFavorite && "fill-rose-500 text-rose-500")} />
             </Button>
             <Button size="sm" variant="ghost" onClick={onClose}>
@@ -1001,7 +1347,15 @@ function partialSum(values: (number | null)[]): number | null {
   return Math.round(present.reduce((a, b) => a + b, 0) * 100) / 100;
 }
 
-function MicronutrientSection({ food }: { food: FoodItem }) {
+// Widened from `FoodItem` so the Search USDA preview (which has no FoodItem — just a raw,
+// unimported USDA result) can reuse this directly instead of a second display implementation.
+// Only ever reads macros.carbs/fiber and micros, so this is a strict subset of FoodItem's shape.
+interface MicronutrientSectionFood {
+  macros: { carbs: number; fiber: number };
+  micros?: Micronutrients;
+}
+
+function MicronutrientSection({ food }: { food: MicronutrientSectionFood }) {
   const micros = food.micros ?? EMPTY_MICROS;
   const netCarbs = Math.round((food.macros.carbs - food.macros.fiber) * 10) / 10;
   const omega3Sum = partialSum([micros.omega3Ala, micros.omega3Epa, micros.omega3Dha]);

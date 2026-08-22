@@ -1,6 +1,17 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { createFood, updateFood, type UnitWeightMatch } from "@/lib/foods-api";
+import {
+  createFood,
+  updateFood,
+  fetchFoodById,
+  addFavoriteFood,
+  removeFavoriteFood,
+  mapCategory,
+  mapSource,
+  CATEGORY_TO_BACKEND,
+  type UnitWeightMatch,
+  type APIFood,
+} from "@/lib/foods-api";
 import {
   Sparkles,
   Flame,
@@ -16,6 +27,7 @@ import {
   ChevronRight,
   CheckCircle2,
   X,
+  Loader2,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -56,26 +68,73 @@ import {
   type ServingSize,
   type NumericMicroKey,
 } from "@/lib/food-database-mock";
+import { labelToUnit, type CommonServingUnit } from "@/lib/unit-conversion";
 
 interface NewFoodDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  // When set, the dialog opens pre-filled with this food's current data and saves via
+  // updateFood instead of createFood — see the `isEdit` derived flag below.
+  editFoodId?: string | null;
 }
 
 const ALLERGENS = ["gluten", "dairy", "nuts", "eggs", "soy", "shellfish", "sesame"] as const;
 
+// Pulls every non-null numeric micronutrient off a raw fetched food into the same sparse
+// { key: value } shape the Micronutrients step's local state already uses — a key's absence
+// means "no data" (matches how the create flow leaves unfilled fields out entirely).
+function extractSparseMicros(raw: APIFood): Partial<Record<NumericMicroKey, number>> {
+  const result: Partial<Record<NumericMicroKey, number>> = {};
+  for (const group of MICRO_FIELD_GROUPS) {
+    for (const f of group.fields) {
+      const value = raw[f.key as keyof APIFood];
+      if (typeof value === "number") result[f.key] = value;
+    }
+  }
+  return result;
+}
+
 // Renders only the units a matched FNDDS entry actually had data for — most foods have 1-2
-// of the 4, not all 4 (see fndds-common-servings.json's sparse servingsGrams shape).
-const UNIT_WEIGHT_LABELS: [keyof UnitWeightMatch["fields"], string][] = [
+// of the 5, not all 5 (see foodMatching.js's per-unit derivation from the raw portions list).
+const UNIT_WEIGHT_LABELS: [keyof UnitWeightMatch["fields"], CommonServingUnit][] = [
   ["gramsPerCup", "cup"],
   ["gramsPerTbsp", "tbsp"],
   ["gramsPerTsp", "tsp"],
   ["gramsPerPiece", "piece"],
+  ["gramsPerMl", "ml"],
 ];
 function formatUnitWeightLines(fields: UnitWeightMatch["fields"]): string[] {
   return UNIT_WEIGHT_LABELS.filter(([key]) => fields[key] != null).map(
     ([key, label]) => `1 ${label} = ${fields[key]}g`,
   );
+}
+
+// A Common servings row inserted by a USDA auto-match. `autoMatch` freezes the label/grams it
+// was inserted with — never mutated afterwards — so "Clear" can tell an untouched auto-row
+// (still equal to its autoMatch snapshot) from one the dietitian has since edited (now
+// diverged from it) without persisting any extra "source" flag to the backend.
+interface DraftServing extends ServingSize {
+  autoMatch?: ServingSize;
+}
+
+// Builds one row per matched unit that doesn't already have a Common servings row mapping to
+// it (via the same labelToUnit parser recipe/meal-plan math uses) — so a dietitian's existing
+// manual row (e.g. "1 cup, packed") is never duplicated or clobbered.
+function buildAutoServingRows(
+  existing: DraftServing[],
+  fields: UnitWeightMatch["fields"],
+): DraftServing[] {
+  const alreadyMapped = new Set(
+    existing.map((s) => labelToUnit(s.label)).filter((u): u is CommonServingUnit => u != null),
+  );
+  const rows: DraftServing[] = [];
+  for (const [key, unit] of UNIT_WEIGHT_LABELS) {
+    const grams = fields[key];
+    if (grams == null || alreadyMapped.has(unit)) continue;
+    const row: ServingSize = { label: `1 ${unit}`, grams };
+    rows.push({ ...row, autoMatch: row });
+  }
+  return rows;
 }
 
 const STEPS = [
@@ -86,10 +145,136 @@ const STEPS = [
   { id: 5, label: "Review" },
 ];
 
-export function NewFoodDialog({ open, onOpenChange }: NewFoodDialogProps) {
+// ── Draft auto-save (create mode only — see module-level rationale below) ──────────────────
+//
+// CREATE-ONLY BY DESIGN: an edit-mode draft would risk drifting from the live document (someone
+// else edits/deletes the food, or the match/Common-servings state goes stale by the time a
+// draft is resumed) — a correctness problem a fresh, not-yet-created food's draft doesn't have.
+// So this only ever runs while `!isEdit`, and only up until the food actually gets created —
+// once `savedFoodId` is set (a real document now exists), there's nothing left to lose by
+// closing, so the draft is cleared rather than kept alive. In practice this means
+// `unitWeightMatch` is always null in a saved draft (it's only ever set alongside
+// `savedFoodId` in the create flow, i.e. after the draft window has already ended) — included
+// in the shape anyway per spec, and so a future change to when matching can happen doesn't
+// require another shape migration.
+const DRAFT_KEY = "nutria:new-food-draft";
+const DRAFT_VERSION = 1;
+
+interface NewFoodDraft {
+  version: number;
+  step: number;
+  name: string;
+  arabicName: string;
+  brand: string;
+  category: FoodCategory;
+  source: FoodSource;
+  kcal: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  fiber: number;
+  sugar: number;
+  sodium: number;
+  micros: Partial<Record<NumericMicroKey, number>>;
+  servings: DraftServing[];
+  allergens: string[];
+  verified: boolean;
+  favorite: boolean;
+  notes: string;
+  unitWeightMatch: UnitWeightMatch | null;
+}
+
+// Deliberately loose (checks shape, not every field's type) — good enough to catch a future
+// wizard-shape change or hand-edited localStorage value without being a second schema to
+// maintain in lockstep with NewFoodDraft itself.
+function isValidDraft(value: unknown): value is NewFoodDraft {
+  if (!value || typeof value !== "object") return false;
+  const d = value as Record<string, unknown>;
+  return (
+    d.version === DRAFT_VERSION &&
+    typeof d.name === "string" &&
+    Array.isArray(d.servings) &&
+    Array.isArray(d.allergens) &&
+    typeof d.micros === "object" &&
+    d.micros !== null
+  );
+}
+
+// Never throws — a corrupted/incompatible draft (bad JSON, old version, hand-edited garbage)
+// is treated exactly like "no draft," not an error, and the bad value is wiped so it doesn't
+// keep failing to load on every future open.
+function readDraft(): NewFoodDraft | null {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (!isValidDraft(parsed)) {
+      localStorage.removeItem(DRAFT_KEY);
+      return null;
+    }
+    return parsed;
+  } catch {
+    localStorage.removeItem(DRAFT_KEY);
+    return null;
+  }
+}
+
+function clearDraft() {
+  try {
+    localStorage.removeItem(DRAFT_KEY);
+  } catch {
+    // Storage unavailable (private browsing, quota, disabled) — nothing to clean up either way.
+  }
+}
+
+// A dialog that's just been opened (or opened and immediately closed with nothing typed) would
+// otherwise still produce a "draft" — the auto-save effect below fires 400ms after mount
+// regardless of input. This is the line between "genuinely blank" and "worth resuming": `step`
+// and `unitWeightMatch` are deliberately excluded (navigating steps without typing anything, or
+// the always-null-at-this-point match state, aren't data that could be lost).
+function isMeaningfulDraftState(d: NewFoodDraft): boolean {
+  if (d.name.trim() !== "") return true;
+  if (d.arabicName.trim() !== "") return true;
+  if (d.brand.trim() !== "") return true;
+  if (d.category !== "protein") return true;
+  if (d.source !== "custom") return true;
+  if (d.kcal !== 0 || d.protein !== 0 || d.carbs !== 0 || d.fat !== 0) return true;
+  if (d.fiber !== 0 || d.sugar !== 0 || d.sodium !== 0) return true;
+  if (Object.keys(d.micros).length > 0) return true;
+  // Default is exactly the one placeholder row ("1 serving", 100g, never auto-inserted) — more
+  // rows, a different label/grams, or an auto-inserted row all count as real input.
+  const isDefaultServings =
+    d.servings.length === 1 &&
+    d.servings[0].label === "1 serving" &&
+    d.servings[0].grams === 100 &&
+    !d.servings[0].autoMatch;
+  if (!isDefaultServings) return true;
+  if (d.allergens.length > 0) return true;
+  if (d.verified) return true;
+  if (d.favorite) return true;
+  if (d.notes.trim() !== "") return true;
+  return false;
+}
+
+export function NewFoodDialog({ open, onOpenChange, editFoodId }: NewFoodDialogProps) {
   const queryClient = useQueryClient();
+  const isEdit = !!editFoodId;
   const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
+  const [loadingEdit, setLoadingEdit] = useState(false);
+  // The raw backend category string as originally stored (e.g. "fruits") — mapCategory()
+  // collapses several backend values onto one frontend option (both "vegetables" and "fruits"
+  // become "produce"), so if the dietitian never touches the Category select, saving must
+  // resend this exact original value rather than re-deriving a possibly-different one.
+  const [originalCategory, setOriginalCategory] = useState<string | null>(null);
+  // Which micro keys had a real value when the food was loaded — used at save time to send an
+  // explicit null for any the dietitian has since cleared, since an absent key in a PATCH body
+  // means "leave unchanged," not "clear this."
+  const [initialMicroKeys, setInitialMicroKeys] = useState<Set<NumericMicroKey>>(new Set());
+  const [initialFavorite, setInitialFavorite] = useState(false);
+  // Whether an explicit "Check USDA match" has been run this session, purely to distinguish
+  // "not checked yet" from "checked, no match found" in the step-4 copy.
+  const [matchChecked, setMatchChecked] = useState(false);
 
   // identity
   const [name, setName] = useState("");
@@ -126,7 +311,7 @@ export function NewFoodDialog({ open, onOpenChange }: NewFoodDialogProps) {
   };
 
   // servings & tags
-  const [servings, setServings] = useState<ServingSize[]>([{ label: "1 serving", grams: 100 }]);
+  const [servings, setServings] = useState<DraftServing[]>([{ label: "1 serving", grams: 100 }]);
   const [allergens, setAllergens] = useState<string[]>([]);
   const [verified, setVerified] = useState(false);
   const [favorite, setFavorite] = useState(false);
@@ -138,6 +323,11 @@ export function NewFoodDialog({ open, onOpenChange }: NewFoodDialogProps) {
   const [savedFoodId, setSavedFoodId] = useState<string | null>(null);
   const [unitWeightMatch, setUnitWeightMatch] = useState<UnitWeightMatch | null>(null);
   const [matchActionLoading, setMatchActionLoading] = useState(false);
+  const [finishing, setFinishing] = useState(false);
+  // A draft found in localStorage on open, awaiting the dietitian's Resume/Start new choice —
+  // the form stays hidden behind a prompt while this is set, so the auto-save effect below
+  // (gated on `!pendingDraft`) can never overwrite it with the still-blank initial state first.
+  const [pendingDraft, setPendingDraft] = useState<NewFoodDraft | null>(null);
 
   const computedKcal = useMemo(
     () => Math.round(protein * 4 + carbs * 4 + fat * 9),
@@ -167,7 +357,177 @@ export function NewFoodDialog({ open, onOpenChange }: NewFoodDialogProps) {
     setNotes("");
     setSavedFoodId(null);
     setUnitWeightMatch(null);
+    setOriginalCategory(null);
+    setInitialMicroKeys(new Set());
+    setInitialFavorite(false);
+    setMatchChecked(false);
+    // Only clears the in-memory prompt, NOT the stored draft — closing via X/Escape is exactly
+    // the scenario the draft exists to protect against, so it must survive a close. Reopening
+    // re-runs the resume-check effect below and prompts again against the same stored draft.
+    setPendingDraft(null);
   };
+
+  // Edit mode: load the food's current raw data instead of starting blank. Deliberately does
+  // NOT set unitWeightMatch from anything — a match is never auto-run against an existing food
+  // (see handleCheckMatch), only offered as something the dietitian can explicitly trigger.
+  useEffect(() => {
+    if (!open || !editFoodId) return;
+    let cancelled = false;
+    setLoadingEdit(true);
+    fetchFoodById(editFoodId)
+      .then((raw) => {
+        if (cancelled) return;
+        setName(raw.name);
+        setArabicName(raw.nameAr ?? "");
+        setBrand(raw.brand ?? "");
+        setCategory(mapCategory(raw.category));
+        setOriginalCategory(raw.category ?? null);
+        setSource(mapSource(raw.source));
+        setKcal(raw.calories);
+        setProtein(raw.protein);
+        setCarbs(raw.carbs);
+        setFat(raw.fat);
+        setFiber(raw.fiber ?? 0);
+        setSugar(raw.sugar ?? 0);
+        setSodium(raw.sodium ?? 0);
+        const sparseMicros = extractSparseMicros(raw);
+        setMicros(sparseMicros);
+        setInitialMicroKeys(new Set(Object.keys(sparseMicros) as NumericMicroKey[]));
+        setServings(
+          raw.commonServings && raw.commonServings.length > 0
+            ? raw.commonServings.map((s) => ({ ...s }))
+            : [{ label: `${raw.servingSize} ${raw.servingUnit}`, grams: raw.servingSize }],
+        );
+        setAllergens(raw.allergens ?? []);
+        setVerified(raw.verified ?? false);
+        setFavorite(raw.isFavorite ?? false);
+        setInitialFavorite(raw.isFavorite ?? false);
+        setNotes(raw.notes ?? "");
+        setSavedFoodId(editFoodId);
+        setUnitWeightMatch(null);
+        setMatchChecked(false);
+        setStep(1);
+      })
+      .catch((err) => console.error("Failed to load food for editing:", err))
+      .finally(() => {
+        if (!cancelled) setLoadingEdit(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, editFoodId]);
+
+  // Create mode only: on each fresh open, check for a saved draft and hold it for the
+  // dietitian's explicit Resume/Start new choice rather than silently restoring it — a stored
+  // draft could be for a different food than the one they mean to add right now.
+  useEffect(() => {
+    if (!open || isEdit) return;
+    const draft = readDraft();
+    if (draft) setPendingDraft(draft);
+  }, [open, isEdit]);
+
+  const applyDraft = (draft: NewFoodDraft) => {
+    setStep(draft.step);
+    setName(draft.name);
+    setArabicName(draft.arabicName);
+    setBrand(draft.brand);
+    setCategory(draft.category);
+    setSource(draft.source);
+    setKcal(draft.kcal);
+    setProtein(draft.protein);
+    setCarbs(draft.carbs);
+    setFat(draft.fat);
+    setFiber(draft.fiber);
+    setSugar(draft.sugar);
+    setSodium(draft.sodium);
+    setMicros(draft.micros);
+    setServings(draft.servings);
+    setAllergens(draft.allergens);
+    setVerified(draft.verified);
+    setFavorite(draft.favorite);
+    setNotes(draft.notes);
+    setUnitWeightMatch(draft.unitWeightMatch);
+    setPendingDraft(null);
+  };
+
+  const discardDraft = () => {
+    clearDraft();
+    setPendingDraft(null);
+  };
+
+  // Debounced auto-save — covers an accidental tab close/crash, not just a deliberate X click.
+  // Gated on `!pendingDraft` so this can never fire while the resume prompt is still up (which
+  // would overwrite the stored draft with the current, still-blank-or-stale form state before
+  // the dietitian has even chosen Resume/Start new), and on `!savedFoodId` since a real document
+  // exists from that point on — there's nothing left to protect against losing.
+  useEffect(() => {
+    if (!open || isEdit || savedFoodId || pendingDraft) return;
+    const t = setTimeout(() => {
+      const draft: NewFoodDraft = {
+        version: DRAFT_VERSION,
+        step,
+        name,
+        arabicName,
+        brand,
+        category,
+        source,
+        kcal,
+        protein,
+        carbs,
+        fat,
+        fiber,
+        sugar,
+        sodium,
+        micros,
+        servings,
+        allergens,
+        verified,
+        favorite,
+        notes,
+        unitWeightMatch,
+      };
+      // A dialog opened and closed without typing anything meaningful shouldn't leave a
+      // "resume?" prompt behind — and if a real draft WAS saved earlier this session and the
+      // dietitian has since cleared everything back out, that stale draft shouldn't linger
+      // either (clearing here, not just skipping the write, handles that case too).
+      if (!isMeaningfulDraftState(draft)) {
+        clearDraft();
+        return;
+      }
+      try {
+        localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+      } catch {
+        // Best-effort — e.g. storage full/unavailable. Not worth surfacing to the dietitian
+        // over what's purely a convenience feature.
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [
+    open,
+    isEdit,
+    savedFoodId,
+    pendingDraft,
+    step,
+    name,
+    arabicName,
+    brand,
+    category,
+    source,
+    kcal,
+    protein,
+    carbs,
+    fat,
+    fiber,
+    sugar,
+    sodium,
+    micros,
+    servings,
+    allergens,
+    verified,
+    favorite,
+    notes,
+    unitWeightMatch,
+  ]);
 
   const handleClose = (o: boolean) => {
     if (!o) reset();
@@ -184,16 +544,46 @@ export function NewFoodDialog({ open, onOpenChange }: NewFoodDialogProps) {
 
   const useComputedKcal = () => setKcal(computedKcal);
 
+  // Payload shape only — strips the client-only autoMatch marker before it ever reaches the API.
+  const toCommonServingsPayload = (rows: DraftServing[]) =>
+    rows
+      .filter((s) => s.label.trim() && s.grams > 0)
+      .map(({ label, grams }) => ({ label, grams }));
+
+  // Inserts one Common servings row per newly-matched unit (skipping units that already have a
+  // manually-entered row) and persists the result immediately, since the create request that
+  // originally saved `servings` already went out before this match result came back.
+  const applyAutoServings = async (foodId: string, fields: UnitWeightMatch["fields"]) => {
+    const newRows = buildAutoServingRows(servings, fields);
+    if (newRows.length === 0) return;
+    const next = [...servings, ...newRows];
+    setServings(next);
+    try {
+      await updateFood(foodId, { commonServings: toCommonServingsPayload(next) });
+    } catch (err) {
+      console.error("Failed to persist auto-inserted common servings rows:", err);
+    }
+  };
+
   const handleClearMatch = async () => {
     if (!savedFoodId) return;
     setMatchActionLoading(true);
     try {
+      // Only drop auto-inserted rows still exactly equal to what they were inserted with — one
+      // the dietitian has since edited (grams or label diverged from its autoMatch snapshot) is
+      // treated as manual from here on and left alone.
+      const prunedServings = servings.filter(
+        (s) => !(s.autoMatch && s.label === s.autoMatch.label && s.grams === s.autoMatch.grams),
+      );
       await updateFood(savedFoodId, {
         gramsPerCup: null,
         gramsPerTbsp: null,
         gramsPerTsp: null,
         gramsPerPiece: null,
+        gramsPerMl: null,
+        commonServings: toCommonServingsPayload(prunedServings),
       });
+      setServings(prunedServings);
       setUnitWeightMatch(null);
     } catch (err) {
       console.error("Failed to clear auto-filled unit weights:", err);
@@ -209,6 +599,7 @@ export function NewFoodDialog({ open, onOpenChange }: NewFoodDialogProps) {
       await updateFood(savedFoodId, unitWeightMatch.fields);
       // Converges to the same "auto-filled, here's how to undo it" state as a direct match.
       setUnitWeightMatch({ ...unitWeightMatch, tier: "match" });
+      await applyAutoServings(savedFoodId, unitWeightMatch.fields);
     } catch (err) {
       console.error("Failed to apply suggested unit weights:", err);
     } finally {
@@ -218,6 +609,107 @@ export function NewFoodDialog({ open, onOpenChange }: NewFoodDialogProps) {
 
   const handleDismissSuggestion = () => setUnitWeightMatch(null);
 
+  // Once a food already exists (post-match), nothing else in this step persists edits as the
+  // dietitian types them — Common servings rows (including ones auto-inserted from a match,
+  // which the dietitian may have since retyped to a real-world value) only ever get written to
+  // the API by explicit actions (create / Apply / Clear). Without this, an edit made to an
+  // auto-inserted row after the fact just sits in local state and is lost on close, and reading
+  // the food back shows the stale auto-matched value instead of the dietitian's correction.
+  // "Done" is the one remaining action before the dialog closes, so it's the right place to
+  // flush whatever is currently on screen — never re-deriving from the original match snapshot.
+  const handleDone = async () => {
+    if (savedFoodId) {
+      setFinishing(true);
+      try {
+        await updateFood(savedFoodId, { commonServings: toCommonServingsPayload(servings) });
+      } catch (err) {
+        console.error("Failed to save Common servings edits:", err);
+      } finally {
+        setFinishing(false);
+      }
+    }
+    queryClient.invalidateQueries({ queryKey: ["foods"] });
+    handleClose(false);
+  };
+
+  // Edit mode never auto-runs matching (see module doc comment / task constraints) — this is
+  // the dietitian's explicit opt-in, reusing the exact same safe-by-default backend behavior
+  // create relies on: updateFood's re-match-on-name-change hook only auto-writes gramsPerX
+  // fields that are currently null, never overwriting an already-curated value.
+  const handleCheckMatch = async () => {
+    if (!savedFoodId) return;
+    setMatchActionLoading(true);
+    try {
+      const { unitWeightMatch: match } = await updateFood(savedFoodId, { name: name.trim() });
+      setMatchChecked(true);
+      setUnitWeightMatch(match);
+      if (match?.tier === "match") {
+        await applyAutoServings(savedFoodId, match.fields);
+      }
+    } catch (err) {
+      console.error("Failed to check USDA match:", err);
+    } finally {
+      setMatchActionLoading(false);
+    }
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editFoodId) return;
+    setSaving(true);
+    try {
+      // Preserve the exact original category if the dietitian never touched the selector —
+      // re-deriving through CATEGORY_TO_BACKEND would always land on the same default backend
+      // value (e.g. "vegetables"), silently rewriting a food originally categorized "fruits".
+      const categoryChanged =
+        originalCategory == null || mapCategory(originalCategory) !== category;
+      const categoryForPayload =
+        !categoryChanged && originalCategory
+          ? originalCategory
+          : CATEGORY_TO_BACKEND[category] || category;
+
+      // An absent key in a PATCH body means "leave unchanged" — any micro the dietitian cleared
+      // back to empty needs an explicit null, not just omission, or it would silently survive.
+      const microsPayload: Partial<Record<NumericMicroKey, number | null>> = { ...micros };
+      for (const key of initialMicroKeys) {
+        if (!(key in micros)) microsPayload[key] = null;
+      }
+
+      await updateFood(editFoodId, {
+        name: name.trim(),
+        nameAr: arabicName.trim() || undefined,
+        brand: brand.trim() || undefined,
+        category: categoryForPayload,
+        source,
+        servingSize: servings[0]?.grams || 100,
+        servingUnit: "g",
+        commonServings: toCommonServingsPayload(servings),
+        calories: kcal,
+        protein,
+        carbs,
+        fat,
+        fiber,
+        sugar: sugar || null,
+        sodium: sodium || null,
+        allergens,
+        notes: notes.trim() || null,
+        verified,
+        ...microsPayload,
+      });
+      // Favoriting is per-user state, not a plain field on the food — only call if it actually
+      // changed, through the same endpoints the drawer's heart button uses.
+      if (favorite !== initialFavorite) {
+        if (favorite) await addFavoriteFood(editFoodId);
+        else await removeFavoriteFood(editFoodId);
+      }
+      queryClient.invalidateQueries({ queryKey: ["foods"] });
+      handleClose(false);
+    } catch (err) {
+      console.error("Failed to save food changes:", err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const canNext =
     (step === 1 && name.trim().length > 0) ||
     (step === 2 && (kcal > 0 || protein + carbs + fat > 0)) ||
@@ -225,19 +717,61 @@ export function NewFoodDialog({ open, onOpenChange }: NewFoodDialogProps) {
     (step === 4 && servings.every((s) => s.label.trim() && s.grams > 0)) ||
     step === 5;
 
+  // Only the create flow's post-match review state shows the Done-only footer — savedFoodId
+  // is ALSO set throughout edit mode (from the very first load), so isEdit must gate this too,
+  // or an edit session would never reach the Back/Next/Save-changes footer at all.
+  const showPostCreateDone = !isEdit && !!savedFoodId;
+
   const meta = CATEGORY_META[category];
   const src = SOURCE_META[source];
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent
+        className="max-w-2xl max-h-[90vh] overflow-y-auto"
+        // This form holds a lot of state across 5 steps (identity, macros, micronutrients,
+        // Common servings, allergens…) — an accidental click on the backdrop shouldn't silently
+        // discard all of it. Escape and the explicit "X"/Cancel controls are untouched; both go
+        // through onOpenChange exactly as before, only the outside-click path is swallowed here.
+        // Same pattern already used by new-client-dialog.tsx and new-recipe-dialog.tsx.
+        onPointerDownOutside={(e) => e.preventDefault()}
+      >
         <DialogHeader>
-          <DialogTitle>Add new food</DialogTitle>
+          <DialogTitle>{isEdit ? "Edit food" : "Add new food"}</DialogTitle>
           <DialogDescription>
-            Add an ingredient or branded item with verified macros to your database.
+            {isEdit
+              ? "Update this food's details."
+              : "Add an ingredient or branded item with verified macros to your database."}
           </DialogDescription>
         </DialogHeader>
 
+        {pendingDraft ? (
+          <div className="flex flex-col items-center gap-4 py-16 text-center">
+            <div className="rounded-full bg-amber-100 p-3 text-amber-700">
+              <AlertTriangle className="size-5" />
+            </div>
+            <div className="space-y-1">
+              <p className="text-sm font-medium">
+                You have an unsaved draft
+                {pendingDraft.name ? ` — "${pendingDraft.name}"` : ""}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Resume where you left off, or start a new food from scratch.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" onClick={discardDraft}>
+                Start new
+              </Button>
+              <Button onClick={() => applyDraft(pendingDraft)}>Resume draft</Button>
+            </div>
+          </div>
+        ) : loadingEdit ? (
+          <div className="flex items-center justify-center py-24">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : (
+          <>
         {/* Stepper */}
         <div className="flex items-center gap-2 py-2">
           {STEPS.map((s, i) => (
@@ -447,6 +981,30 @@ export function NewFoodDialog({ open, onOpenChange }: NewFoodDialogProps) {
 
           {step === 4 && (
             <div className="space-y-5">
+              {/* Edit mode never auto-runs the USDA match on open — this is the dietitian's
+                  explicit opt-in, shown regardless of whether structured fields already exist
+                  (re-checking is always available, just never automatic). */}
+              {isEdit && !unitWeightMatch && (
+                <div className="flex items-center justify-between gap-3 rounded-lg border border-dashed p-3 text-sm">
+                  <div>
+                    <p className="font-medium">USDA serving-weight match</p>
+                    <p className="text-xs text-muted-foreground">
+                      {matchChecked
+                        ? "No USDA match found for this name."
+                        : "Not checked automatically in edit mode — existing values are left as-is unless you check."}
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={matchActionLoading}
+                    onClick={handleCheckMatch}
+                  >
+                    {matchActionLoading ? "Checking…" : "Check USDA match"}
+                  </Button>
+                </div>
+              )}
+
               {unitWeightMatch && (
                 <div
                   className={cn(
@@ -682,18 +1240,15 @@ export function NewFoodDialog({ open, onOpenChange }: NewFoodDialogProps) {
             </div>
           )}
         </div>
+          </>
+        )}
 
         <DialogFooter className="flex items-center justify-between sm:justify-between">
-          {savedFoodId ? (
+          {pendingDraft || loadingEdit ? null : showPostCreateDone ? (
             <>
               <div />
-              <Button
-                onClick={() => {
-                  queryClient.invalidateQueries({ queryKey: ["foods"] });
-                  handleClose(false);
-                }}
-              >
-                <CheckCircle2 className="size-4" /> Done
+              <Button disabled={finishing} onClick={handleDone}>
+                <CheckCircle2 className="size-4" /> {finishing ? "Saving…" : "Done"}
               </Button>
             </>
           ) : (
@@ -708,6 +1263,10 @@ export function NewFoodDialog({ open, onOpenChange }: NewFoodDialogProps) {
               {step < STEPS.length ? (
                 <Button onClick={() => setStep((s) => s + 1)} disabled={!canNext}>
                   Next <ChevronRight className="size-4" />
+                </Button>
+              ) : isEdit ? (
+                <Button disabled={saving} onClick={handleSaveEdit}>
+                  <CheckCircle2 className="size-4" /> {saving ? "Saving…" : "Save changes"}
                 </Button>
               ) : (
                 <Button
@@ -730,8 +1289,22 @@ export function NewFoodDialog({ open, onOpenChange }: NewFoodDialogProps) {
                         sodium: sodium || null,
                         servingSize: servings[0]?.grams || 100,
                         servingUnit: "g",
+                        // Send every row the dietitian entered, not just row 0 — previously
+                        // rows 1+ were silently dropped since only servingSize (derived from
+                        // row 0) was ever persisted.
+                        commonServings: toCommonServingsPayload(servings),
+                        allergens,
+                        notes: notes.trim() || null,
+                        verified,
                         micros,
                       });
+                      // favoritedBy is per-user state, not a plain create-time field — a
+                      // follow-up call once the food has a real id, same pattern as
+                      // applyAutoServings' post-create commonServings write below.
+                      if (favorite) await addFavoriteFood(food.id);
+                      // The food is real now — the draft's only job was to survive up to this
+                      // point, and it would just prompt to "resume" a food that already exists.
+                      clearDraft();
                       queryClient.invalidateQueries({ queryKey: ["foods"] });
                       if (match) {
                         // Stay open on the Servings & tags step so the dietitian can review the
@@ -740,6 +1313,12 @@ export function NewFoodDialog({ open, onOpenChange }: NewFoodDialogProps) {
                         setSavedFoodId(food.id);
                         setUnitWeightMatch(match);
                         setStep(4);
+                        // tier "match" means the backend already auto-wrote the structured
+                        // fields on create — mirror that into visible/editable Common servings
+                        // rows too, same as an explicit "Apply" would.
+                        if (match.tier === "match") {
+                          await applyAutoServings(food.id, match.fields);
+                        }
                       } else {
                         handleClose(false);
                       }

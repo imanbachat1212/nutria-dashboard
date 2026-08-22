@@ -1,11 +1,19 @@
 import { api } from "./api";
-import type { FoodItem, FoodCategory, FoodSource, Micronutrients } from "./food-database-mock";
+import type {
+  FoodItem,
+  FoodCategory,
+  FoodSource,
+  Micronutrients,
+  ServingSize,
+} from "./food-database-mock";
 
 // Raw micronutrient shape as stored on the backend Food document — mirrors food.model.js
 // field-for-field. Separate from the frontend's Micronutrients type (same fields, but that
 // one's keys are always present/non-optional) because the API can omit any of these on older
 // documents that predate a given field.
-interface APIMicronutrients {
+// Exported so usda-api.ts's UsdaFoodDetails (same field names/shape) can reuse toMicronutrients
+// below for the Search USDA preview, instead of a second sparse-to-full converter.
+export interface APIMicronutrients {
   fiberSoluble?: number | null;
   fiberInsoluble?: number | null;
   starch?: number | null;
@@ -59,7 +67,7 @@ interface APIMicronutrients {
   phytate?: number | null;
 }
 
-interface APIFood extends APIMicronutrients {
+export interface APIFood extends APIMicronutrients {
   _id: string;
   name: string;
   nameAr?: string;
@@ -68,6 +76,7 @@ interface APIFood extends APIMicronutrients {
   source?: string;
   servingSize: number;
   servingUnit: string;
+  commonServings?: ServingSize[];
   calories: number;
   protein: number;
   carbs: number;
@@ -79,7 +88,12 @@ interface APIFood extends APIMicronutrients {
   gramsPerTbsp?: number | null;
   gramsPerTsp?: number | null;
   gramsPerPiece?: number | null;
+  gramsPerMl?: number | null;
+  allergens?: string[];
+  notes?: string | null;
   verified?: boolean;
+  // Scoped to the requesting user server-side — never the raw favoritedBy id list.
+  isFavorite?: boolean;
   createdAt: string;
   // Only present on create/update responses (see foods.service.js's matchFoodName hook) —
   // never on list/get responses.
@@ -87,7 +101,7 @@ interface APIFood extends APIMicronutrients {
 }
 
 // Result of matching this food's name against USDA's FNDDS reference data. "match" means the
-// 4 gramsPerX fields were already auto-populated server-side; "low-confidence" means they were
+// 5 gramsPerX fields were already auto-populated server-side; "low-confidence" means they were
 // NOT written — `fields` is only a suggestion the dietitian can choose to apply.
 export interface UnitWeightMatch {
   tier: "match" | "low-confidence";
@@ -99,6 +113,7 @@ export interface UnitWeightMatch {
     gramsPerTbsp?: number;
     gramsPerTsp?: number;
     gramsPerPiece?: number;
+    gramsPerMl?: number;
   };
 }
 
@@ -123,12 +138,14 @@ const CATEGORY_MAP: Record<string, FoodCategory> = {
   beverages: "beverages",
 };
 
-function mapCategory(cat?: string): FoodCategory {
+// Exported for new-food-dialog.tsx's edit mode, which needs to map a raw fetched food's
+// backend-shaped category/source onto the frontend enums the Identity step's selects use.
+export function mapCategory(cat?: string): FoodCategory {
   if (!cat) return "protein";
   return CATEGORY_MAP[cat] || "protein";
 }
 
-function mapSource(src?: string): FoodSource {
+export function mapSource(src?: string): FoodSource {
   if (src === "usda" || src === "lebanese" || src === "custom") return src;
   return "custom";
 }
@@ -139,7 +156,11 @@ const CATEGORY_REVERSE: Record<string, string[]> = {
   snacks: ["nuts_seeds"],
 };
 
-const CATEGORY_TO_BACKEND: Record<string, string> = {
+// Exported so new-food-dialog.tsx's edit-save path can preserve a lossy-mapped category (e.g.
+// backend "fruits" -> frontend "produce") exactly as it was when the dietitian doesn't touch
+// the category selector, instead of re-deriving through this map and always landing on
+// "vegetables" (the first/default backend value for "produce").
+export const CATEGORY_TO_BACKEND: Record<string, string> = {
   produce: "vegetables",
   fats: "fats_oils",
   snacks: "nuts_seeds",
@@ -150,7 +171,7 @@ const CATEGORY_TO_BACKEND: Record<string, string> = {
   beverages: "beverages",
 };
 
-function toMicronutrients(f: APIMicronutrients): Micronutrients {
+export function toMicronutrients(f: APIMicronutrients): Micronutrients {
   return {
     fiberSoluble: f.fiberSoluble ?? null,
     fiberInsoluble: f.fiberInsoluble ?? null,
@@ -224,34 +245,47 @@ function toFoodItem(f: APIFood): FoodItem {
       sodium: f.sodium ?? 0,
     },
     micros: toMicronutrients(f),
-    servings: [{ label: `${f.servingSize} ${f.servingUnit}`, grams: f.servingSize }],
+    servings:
+      f.commonServings && f.commonServings.length > 0
+        ? f.commonServings
+        : [{ label: `${f.servingSize} ${f.servingUnit}`, grams: f.servingSize }],
     unitWeights: {
       cup: f.gramsPerCup ?? null,
       tbsp: f.gramsPerTbsp ?? null,
       tsp: f.gramsPerTsp ?? null,
       piece: f.gramsPerPiece ?? null,
+      ml: f.gramsPerMl ?? null,
     },
-    allergens: [],
+    allergens: f.allergens ?? [],
     verified: f.verified ?? false,
     // from mealplans module — not wired yet
     usedInPlans: 0,
     lastUsed: "—",
-    isFavorite: false,
+    isFavorite: f.isFavorite ?? false,
+    notes: f.notes ?? undefined,
   };
 }
 
-export async function fetchFoods(params?: {
+interface FoodFilterParams {
   search?: string;
   category?: string;
   source?: FoodSource;
-  page?: number;
-  limit?: number;
-}): Promise<{ foods: FoodItem[]; total: number }> {
+  verified?: boolean;
+  // "Favorites" always means the requesting user's own favorites (scoped server-side by auth
+  // token) — never a client-supplied user id.
+  favorites?: boolean;
+}
+
+// Shared by fetchFoods and fetchFoodStats so the two never drift on how a category/source/
+// verified/favorites filter gets mapped onto backend query params.
+function buildFoodQuery(params?: FoodFilterParams & { page?: number; limit?: number }) {
   const qs = new URLSearchParams();
   if (params?.page) qs.set("page", String(params.page));
   if (params?.limit) qs.set("limit", String(params.limit));
   if (params?.search) qs.set("search", params.search);
   if (params?.source) qs.set("source", params.source);
+  if (params?.verified) qs.set("verified", "true");
+  if (params?.favorites) qs.set("favorites", "true");
 
   if (params?.category) {
     const backendCats = CATEGORY_REVERSE[params.category];
@@ -261,13 +295,43 @@ export async function fetchFoods(params?: {
       qs.set("category", params.category);
     }
   }
+  return qs.toString();
+}
 
-  const q = qs.toString();
+export async function fetchFoods(params?: {
+  search?: string;
+  category?: string;
+  source?: FoodSource;
+  verified?: boolean;
+  favorites?: boolean;
+  page?: number;
+  limit?: number;
+}): Promise<{ foods: FoodItem[]; total: number }> {
+  const q = buildFoodQuery(params);
   const result = await api.get<APIListResult>(`/api/foods${q ? `?${q}` : ""}`);
   return {
     foods: result.foods.map(toFoodItem),
     total: result.total,
   };
+}
+
+// True counts matching the current search/category/source filter — from a dedicated backend
+// aggregate (Food.countDocuments), NOT derived from whatever page fetchFoods happens to have
+// loaded. The library already exceeds a single page's limit, so a client-side count over
+// `foods` would silently freeze once the collection passed that size.
+export async function fetchFoodStats(
+  params?: FoodFilterParams,
+): Promise<{ total: number; verified: number; lebanese: number }> {
+  const q = buildFoodQuery(params);
+  return api.get(`/api/foods/stats${q ? `?${q}` : ""}`);
+}
+
+// Raw (unmapped) shape for new-food-dialog.tsx's edit mode — deliberately NOT run through
+// toFoodItem/mapCategory, since that mapping is lossy (e.g. backend "fruits" and "vegetables"
+// both collapse to frontend "produce") and the edit form needs the exact original values to
+// avoid silently rewriting a field the dietitian never touched.
+export async function fetchFoodById(id: string): Promise<APIFood> {
+  return api.get<APIFood>(`/api/foods/${id}`);
 }
 
 export interface CreateFoodPayload {
@@ -285,6 +349,11 @@ export interface CreateFoodPayload {
   sodium: number | null;
   servingSize: number;
   servingUnit: string;
+  // All rows the dietitian entered in the "Common servings" list — not just the first one.
+  commonServings?: ServingSize[];
+  allergens?: string[];
+  notes?: string | null;
+  verified?: boolean;
   // Sparse — only fields the dietitian actually filled in in the Micronutrients step need to
   // be present; omitted keys just stay null on the created document (schema default).
   micros?: Partial<Micronutrients>;
@@ -302,6 +371,7 @@ export async function createFood(
     source: data.source,
     servingSize: data.servingSize,
     servingUnit: data.servingUnit,
+    commonServings: data.commonServings,
     calories: data.kcal,
     protein: data.protein,
     carbs: data.carbs,
@@ -309,22 +379,48 @@ export async function createFood(
     fiber: data.fiber,
     sugar: data.sugar,
     sodium: data.sodium,
+    allergens: data.allergens,
+    notes: data.notes,
+    verified: data.verified,
     ...data.micros,
   };
   const raw = await api.post<APIFood>("/api/foods", body);
   return { food: toFoodItem(raw), unitWeightMatch: raw.unitWeightMatch ?? null };
 }
 
+// Superset of the narrow set of fields the match-review actions (Apply/Clear/handleDone) have
+// always sent, now also covering the full edit-food form. All backend-shaped field names
+// (nameAr not arabicName, calories not kcal) since, unlike createFood, callers build this
+// payload themselves rather than going through a translation layer here.
+export interface UpdateFoodPayload extends Partial<Micronutrients> {
+  name?: string;
+  nameAr?: string;
+  brand?: string;
+  category?: string;
+  source?: FoodSource;
+  servingSize?: number;
+  servingUnit?: string;
+  commonServings?: ServingSize[];
+  calories?: number;
+  protein?: number;
+  carbs?: number;
+  fat?: number;
+  fiber?: number;
+  sugar?: number | null;
+  sodium?: number | null;
+  allergens?: string[];
+  notes?: string | null;
+  verified?: boolean;
+  gramsPerCup?: number | null;
+  gramsPerTbsp?: number | null;
+  gramsPerTsp?: number | null;
+  gramsPerPiece?: number | null;
+  gramsPerMl?: number | null;
+}
+
 export async function updateFood(
   id: string,
-  data: {
-    verified?: boolean;
-    name?: string;
-    gramsPerCup?: number | null;
-    gramsPerTbsp?: number | null;
-    gramsPerTsp?: number | null;
-    gramsPerPiece?: number | null;
-  },
+  data: UpdateFoodPayload,
 ): Promise<{ food: FoodItem; unitWeightMatch: UnitWeightMatch | null }> {
   const raw = await api.patch<APIFood>(`/api/foods/${id}`, data);
   return { food: toFoodItem(raw), unitWeightMatch: raw.unitWeightMatch ?? null };
@@ -332,4 +428,29 @@ export async function updateFood(
 
 export async function deleteFood(id: string): Promise<void> {
   await api.delete(`/api/foods/${id}`);
+}
+
+// "Pin to quick-access" — scoped to the signed-in dietitian server-side (see food.model.js's
+// favoritedBy). Both idempotent: favoriting an already-favorited food, or unfavoriting one that
+// isn't, just returns the current state rather than erroring.
+export async function addFavoriteFood(id: string): Promise<FoodItem> {
+  const raw = await api.post<APIFood>(`/api/foods/${id}/favorite`, {});
+  return toFoodItem(raw);
+}
+
+export async function removeFavoriteFood(id: string): Promise<FoodItem> {
+  const raw = await api.delete<APIFood>(`/api/foods/${id}/favorite`);
+  return toFoodItem(raw);
+}
+
+export interface BulkDeleteResult {
+  deleted: { id: string; name: string }[];
+  // Same in-use rule as single delete (foods.service.js's getFoodUsages) — never cascades or
+  // orphans a reference, just skips that food and reports why.
+  blocked: { id: string; name: string | null; usages: string[] }[];
+  notFound: string[];
+}
+
+export async function bulkDeleteFoods(ids: string[]): Promise<BulkDeleteResult> {
+  return api.post<BulkDeleteResult>("/api/foods/bulk-delete", { ids });
 }

@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createMeal, updateMeal, getMeal, type PhotoItem } from "@/lib/meals-api";
 import { fetchFoods } from "@/lib/foods-api";
-import type { UnitWeights } from "@/lib/food-database-mock";
+import type { UnitWeights, ServingSize } from "@/lib/food-database-mock";
+import { commonServingOverride } from "@/lib/unit-conversion";
 import { uploadMedia } from "@/lib/api";
 import { fetchDietaryPreferences } from "@/lib/settings-api";
 import {
@@ -74,44 +75,48 @@ const UNIT_TO_GRAMS: Record<Unit, number> = {
   cup: 240,
   tbsp: 15,
   tsp: 5,
-  oz: 28.35,
+  // Weight ounce, not fluid ounce — confirmed with the client this app's "oz" always means
+  // mass, so it never varies by food, same tier as g. 28.3495 is the exact constant (the
+  // previous 28.35 was just a rounded version of the same weight-oz value, not the wrong
+  // fluid-oz constant).
+  oz: 28.3495,
   piece: 50,
+};
+
+// cup/tbsp/tsp/piece/ml vary by food density (1 cup of oats != 1 cup of spinach, 1 ml of
+// honey != 1 ml of skim milk) — only g/oz are always exact regardless of which food.
+const UNIT_TO_FOOD_FIELD: Partial<Record<Unit, keyof UnitWeights>> = {
+  cup: "cup",
+  tbsp: "tbsp",
+  tsp: "tsp",
+  piece: "piece",
+  ml: "ml",
 };
 
 // Mirrors gramsPerUnitForFood in backend/src/lib/calc/recipeMacros.js — this dialog's macro
 // preview is only an estimate shown while editing (the backend recomputes the authoritative
 // totals from scratch on save), but it should still resolve unit weights the same way so the
 // preview doesn't drift from what actually gets saved.
-function gramsPerUnitForFood(unitWeights: UnitWeights | undefined, unit: Unit): number {
-  const override =
-    unit === "cup"
-      ? unitWeights?.cup
-      : unit === "tbsp"
-        ? unitWeights?.tbsp
-        : unit === "tsp"
-          ? unitWeights?.tsp
-          : unit === "piece"
-            ? unitWeights?.piece
-            : null;
+function gramsPerUnitForFood(
+  commonServings: ServingSize[] | undefined,
+  unitWeights: UnitWeights | undefined,
+  unit: Unit,
+): number {
+  const commonOverride = commonServingOverride(commonServings, unit);
+  if (commonOverride != null) return commonOverride;
+
+  const field = UNIT_TO_FOOD_FIELD[unit];
+  const override = field ? unitWeights?.[field] : null;
   if (override != null) return override;
   return UNIT_TO_GRAMS[unit] ?? 1;
 }
 
-// g/ml/oz are always exact regardless of which food, so they never need the indicator — only
-// cup/tbsp/tsp/piece vary by food density and can silently fall back to a flat guess.
-const APPROXIMATE_UNITS: Unit[] = ["cup", "tbsp", "tsp", "piece"];
-
+// g/oz are always exact regardless of which food, so they never need the indicator — only
+// cup/tbsp/tsp/piece/ml vary by food density and can silently fall back to a flat guess.
 function isApproximateUnit(unitWeights: UnitWeights | undefined, unit: Unit): boolean {
-  if (!APPROXIMATE_UNITS.includes(unit)) return false;
-  const override =
-    unit === "cup"
-      ? unitWeights?.cup
-      : unit === "tbsp"
-        ? unitWeights?.tbsp
-        : unit === "tsp"
-          ? unitWeights?.tsp
-          : unitWeights?.piece;
-  return override == null;
+  const field = UNIT_TO_FOOD_FIELD[unit];
+  if (!field) return false;
+  return (unitWeights?.[field] ?? null) == null;
 }
 
 interface IngredientMacros {
@@ -129,6 +134,7 @@ interface IngredientDraft {
   unit: Unit;
   per100g: IngredientMacros | null;
   unitWeights?: UnitWeights;
+  commonServings?: ServingSize[];
 }
 
 interface NewRecipeDialogProps {
@@ -254,7 +260,7 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
       if (!ing.per100g) continue;
       matched++;
       const qty = typeof ing.quantity === "number" ? ing.quantity : 0;
-      const grams = qty * gramsPerUnitForFood(ing.unitWeights, ing.unit);
+      const grams = qty * gramsPerUnitForFood(ing.commonServings, ing.unitWeights, ing.unit);
       const factor = grams / 100;
       kcal += ing.per100g.kcal * factor;
       protein += ing.per100g.protein * factor;
@@ -553,7 +559,7 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                         <FoodSearchInput
                           value={ing.name}
                           foodId={ing.foodId}
-                          onSelect={(id, label, macros, unitWeights) => {
+                          onSelect={(id, label, macros, unitWeights, commonServings) => {
                             const copy = [...ingredients];
                             copy[idx] = {
                               ...copy[idx],
@@ -561,6 +567,7 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                               name: label,
                               per100g: macros,
                               unitWeights,
+                              commonServings,
                             };
                             setIngredients(copy);
                           }}
@@ -572,6 +579,7 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                               foodId: "",
                               per100g: null,
                               unitWeights: undefined,
+                              commonServings: undefined,
                             };
                             setIngredients(copy);
                           }}
@@ -1089,6 +1097,7 @@ interface FoodSearchResult {
   category: string;
   macros: IngredientMacros;
   unitWeights?: UnitWeights;
+  commonServings?: ServingSize[];
 }
 
 function FoodSearchInput({
@@ -1104,6 +1113,7 @@ function FoodSearchInput({
     label: string,
     macros: IngredientMacros,
     unitWeights: UnitWeights | undefined,
+    commonServings: ServingSize[] | undefined,
   ) => void;
   onChange: (val: string) => void;
 }) {
@@ -1130,6 +1140,7 @@ function FoodSearchInput({
           category: f.category,
           macros: f.macros,
           unitWeights: f.unitWeights,
+          commonServings: f.servings,
         })),
       );
     } catch {
@@ -1149,7 +1160,7 @@ function FoodSearchInput({
 
   const pick = (r: FoodSearchResult) => {
     selectingRef.current = true;
-    onSelect(r.id, r.name, r.macros, r.unitWeights);
+    onSelect(r.id, r.name, r.macros, r.unitWeights, r.commonServings);
     setQuery(r.name);
     setOpen(false);
     setResults([]);

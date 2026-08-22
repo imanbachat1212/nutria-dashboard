@@ -27,7 +27,7 @@ export interface ServingSize {
   grams: number;
 }
 
-// Per-food gram weight overrides for cup/tbsp/tsp/piece — null means "no stored data for
+// Per-food gram weight overrides for cup/tbsp/tsp/piece/ml — null means "no stored data for
 // this food/unit, use the flat fallback conversion" (see UNIT_TO_GRAMS in
 // new-recipe-dialog.tsx, mirroring the backend's recipeMacros.js).
 export interface UnitWeights {
@@ -35,6 +35,7 @@ export interface UnitWeights {
   tbsp: number | null;
   tsp: number | null;
   piece: number | null;
+  ml: number | null;
 }
 
 // Full micronutrient profile per 100g. Every value is null unless the source (USDA import or

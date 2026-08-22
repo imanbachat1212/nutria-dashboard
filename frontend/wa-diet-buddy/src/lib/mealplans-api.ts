@@ -12,6 +12,7 @@ import {
   type PlanStatus,
   type Micros,
 } from "./meal-plans-mock";
+import { commonServingOverride } from "./unit-conversion";
 
 // ── API types ──
 
@@ -35,6 +36,8 @@ interface APIPlanItem {
         gramsPerTbsp?: number | null;
         gramsPerTsp?: number | null;
         gramsPerPiece?: number | null;
+        gramsPerMl?: number | null;
+        commonServings?: { label: string; grams: number }[];
       }
     | string
     | null;
@@ -49,26 +52,37 @@ interface APIPlanItem {
   fat: number;
 }
 
-// cup/tbsp/tsp/piece weigh differently per food (a cup of oats != a cup of spinach) — g/ml/oz
-// are always exact regardless of which food. Mirrors gramsPerUnitForFood in the backend's
-// lib/calc/recipeMacros.js and the equivalent map in new-recipe-dialog.tsx.
-const UNIT_TO_FOOD_FIELD: Record<string, "gramsPerCup" | "gramsPerTbsp" | "gramsPerTsp" | "gramsPerPiece"> = {
+// cup/tbsp/tsp/piece/ml weigh differently per food (a cup of oats != a cup of spinach, 1ml of
+// honey != 1ml of skim milk) — only g/oz are always exact regardless of which food (oz means
+// weight ounce in this app, confirmed with the client). Mirrors gramsPerUnitForFood in the
+// backend's lib/calc/recipeMacros.js and the equivalent map in new-recipe-dialog.tsx.
+const UNIT_TO_FOOD_FIELD: Record<
+  string,
+  "gramsPerCup" | "gramsPerTbsp" | "gramsPerTsp" | "gramsPerPiece" | "gramsPerMl"
+> = {
   cup: "gramsPerCup",
   tbsp: "gramsPerTbsp",
   tsp: "gramsPerTsp",
   piece: "gramsPerPiece",
+  ml: "gramsPerMl",
 };
 
 // True when this item's macros were computed using the flat UNIT_TO_GRAMS fallback constant
 // rather than this specific food's real stored weight for the unit — i.e. an estimate, not a
 // verified number. Recipe items are never flagged: they're scaled by servings, not a
-// per-unit gram conversion, so there's no fallback-vs-real distinction to make.
+// per-unit gram conversion, so there's no fallback-vs-real distinction to make. Checks the
+// same precedence as gramsPerUnitForFood (backend recipeMacros.js / frontend
+// new-recipe-dialog.tsx) via the shared commonServingOverride helper, so a food using a
+// dietitian-entered Common servings override for this unit is never flagged as approximate
+// even when it has no matching structured gramsPerX field.
 function isApproximateItem(i: APIPlanItem): boolean {
   if (i.type !== "food") return false;
   const fieldName = UNIT_TO_FOOD_FIELD[i.unit];
   if (!fieldName) return false;
   const food = i.food && typeof i.food === "object" ? i.food : null;
-  return food ? food[fieldName] == null : true;
+  if (!food) return true;
+  if (commonServingOverride(food.commonServings, i.unit) != null) return false;
+  return food[fieldName] == null;
 }
 
 interface APIPlan {
