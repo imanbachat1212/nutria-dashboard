@@ -6,26 +6,69 @@ export const UNIT_TO_GRAMS = {
   cup: 240,
   tbsp: 15,
   tsp: 5,
-  oz: 28.35,
+  // Weight ounce, not fluid ounce — confirmed with the client this app's "oz" always means
+  // mass, so unlike ml/cup/tbsp/tsp it never varies by food (28.3495g is exact; the previous
+  // 28.35 was just a rounded approximation of the same weight-oz constant, not the wrong
+  // fluid-oz one — no unit confusion to fix there, just added precision).
+  oz: 28.3495,
   piece: 50,
 };
 
-// cup/tbsp/tsp/piece map onto a per-food override field (food.model.js) — a "1 cup of
+// cup/tbsp/tsp/piece/ml map onto a per-food override field (food.model.js) — a "1 cup of
 // almonds" and "1 cup of spinach" weigh very differently, so a food that has its own stored
 // gram weight for a unit should use it instead of the flat UNIT_TO_GRAMS constant above.
-// g/ml/oz are intentionally absent here: they're already exact mass/near-mass conversions
-// that don't vary by food, so they always use the flat table.
+// ml is a volume unit like the others (1 ml of honey != 1 ml of skim milk), so it belongs
+// here too now that foodMatching.js derives it per food — only g/oz are absent, since those
+// are true mass units that never vary by food.
 const UNIT_TO_FOOD_FIELD = {
   cup: "gramsPerCup",
   tbsp: "gramsPerTbsp",
   tsp: "gramsPerTsp",
   piece: "gramsPerPiece",
+  ml: "gramsPerMl",
 };
 
-// Resolves how many grams one `unit` of `food` weighs: prefers the food's own stored
-// gram weight for that unit, falling back to the flat UNIT_TO_GRAMS constant when the food
-// has no override (the common case today, since backfill hasn't run yet).
+// Maps a free-text "Common servings" label (e.g. "1 cup", "half a tablespoon") to one of the
+// 5 units a per-food override can apply to. Deliberately excludes g/oz — those are universal
+// mass constants that can't vary by food, so a label like "1 oz" or "100g" is left as a
+// display-only reference note with no effect on conversion math, same as "1 handful" would be.
+// Checked in this fixed order so a label can only ever resolve to one unit.
+const COMMON_SERVING_UNIT_PATTERNS = [
+  ["cup", /\bcups?\b/i],
+  ["tbsp", /\btbsp\b|\btbs\b|\btablespoons?\b/i],
+  ["tsp", /\btsp\b|\bteaspoons?\b/i],
+  ["ml", /\bml\b|\bmilliliters?\b|\bmillilitres?\b/i],
+  ["piece", /\bpieces?\b/i],
+];
+
+function labelToUnit(label) {
+  for (const [unit, pattern] of COMMON_SERVING_UNIT_PATTERNS) {
+    if (pattern.test(label)) return unit;
+  }
+  return null;
+}
+
+// A dietitian's manually-entered Common servings row for a unit wins over the FNDDS
+// auto-matched gramsPerX field for that same unit — the auto-match is a starting point, not
+// the final word, and this keeps both stored separately (no write-time merge) while letting
+// the manual entry win at usage time. If more than one row maps to the same unit (shouldn't
+// normally happen), the last one in array order wins, deterministically — no averaging.
+function commonServingOverride(food, unit) {
+  if (!food?.commonServings?.length) return null;
+  let override = null;
+  for (const row of food.commonServings) {
+    if (labelToUnit(row.label) === unit) override = row.grams;
+  }
+  return override;
+}
+
+// Resolves how many grams one `unit` of `food` weighs: a matching Common servings row wins
+// first, then the food's own stored gramsPerX override, then the flat UNIT_TO_GRAMS constant
+// when the food has neither (the common case today, since backfill hasn't run yet).
 export function gramsPerUnitForFood(food, unit) {
+  const commonOverride = commonServingOverride(food, unit);
+  if (commonOverride != null) return commonOverride;
+
   const fieldName = UNIT_TO_FOOD_FIELD[unit];
   const override = fieldName ? food?.[fieldName] : null;
   if (override != null) return override;

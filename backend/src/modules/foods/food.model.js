@@ -15,20 +15,30 @@ const foodSchema = new mongoose.Schema(
     },
     servingSize: { type: Number, required: true },
     servingUnit: { type: String, required: true, default: "g" },
+    // Free-text "common servings" rows from the Add Food UI (e.g. "1 cup" -> 240g,
+    // "1 tbsp" -> 15g), for display in the food drawer's per-serving macro breakdown.
+    // Distinct from gramsPerCup/Tbsp/Tsp/Piece/Ml below — those are a structured,
+    // unit-keyed lookup consumed by conversion logic; this is just a dietitian-entered
+    // label+grams list with no fixed unit semantics.
+    commonServings: [
+      {
+        _id: false,
+        label: { type: String, trim: true, required: true },
+        grams: { type: Number, required: true, min: 0 },
+      },
+    ],
     // ── Per-food unit weights ──────────────────────────────────────────────────────────
-    // Real gram weight of 1 cup / tbsp / tsp / piece of THIS specific food, for
+    // Real gram weight of 1 cup / tbsp / tsp / piece / ml of THIS specific food, for
     // recipeMacros.js's unit conversion to look up instead of applying one flat constant
-    // (cup=240g, tbsp=15g, tsp=5g, piece=50g) to every food regardless of density — see
-    // UNIT_TO_GRAMS in lib/calc/recipeMacros.js. Distinct from the free-text "common
-    // servings" label+grams rows in the Add Food UI (display-only, not currently
-    // persisted); these are a structured, unit-keyed lookup consumed directly by
-    // conversion logic. All nullable — null means "use the flat UNIT_TO_GRAMS fallback
-    // for this food," same fallback semantics as unset on every existing food until
-    // backfilled.
+    // (cup=240g, tbsp=15g, tsp=5g, piece=50g, ml=1g) to every food regardless of density —
+    // see UNIT_TO_GRAMS in lib/calc/recipeMacros.js. All nullable — null means "use the
+    // flat UNIT_TO_GRAMS fallback for this food," same fallback semantics as unset on
+    // every existing food until backfilled.
     gramsPerCup: { type: Number, default: null },
     gramsPerTbsp: { type: Number, default: null },
     gramsPerTsp: { type: Number, default: null },
     gramsPerPiece: { type: Number, default: null },
+    gramsPerMl: { type: Number, default: null },
     calories: { type: Number, required: true },
     protein: { type: Number, required: true },
     carbs: { type: Number, required: true },
@@ -133,6 +143,18 @@ const foodSchema = new mongoose.Schema(
     // Absent on hand-estimated and USDA-imported foods.
     dataSource: { type: String, trim: true, default: null },
     verified: { type: Boolean, default: false },
+    // Allergen tags shown as badges in the client-facing food picker/plan views — freeform
+    // strings rather than an enum since the UI's ALLERGENS list can grow without a migration.
+    allergens: [{ type: String }],
+    // Dietitian's free-text clinical note (e.g. swap suggestions) — distinct from dataSource
+    // above, which is a citation for where the macro numbers came from, not a note about the
+    // food itself.
+    notes: { type: String, trim: true, default: null },
+    // Per-user "pin to quick-access" — scoped to whoever favorited it, not a global property of
+    // the food (two dietitians on the same account tenant can have different favorites). Small
+    // array rather than a separate join collection since a food is favorited by at most a
+    // handful of users in practice.
+    favoritedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     image: { type: imageSchema, default: null },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     // USDA FoodData Central id — set only on foods imported via usda-import. sparse lets every
@@ -144,5 +166,6 @@ const foodSchema = new mongoose.Schema(
 );
 
 foodSchema.index({ name: "text", nameAr: "text" });
+foodSchema.index({ favoritedBy: 1 });
 
 export default mongoose.model("Food", foodSchema);

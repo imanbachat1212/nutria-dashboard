@@ -1,5 +1,5 @@
-// Fuzzy-matches a Food's name against USDA FNDDS's common-servings reference data to find
-// real per-food gram weights for cup/tbsp/tsp/piece — used both by the interactive
+// Fuzzy-matches a Food's name against USDA FNDDS's portions reference data to find real
+// per-food gram weights for cup/tbsp/tsp/piece/ml — used both by the interactive
 // create/update-food hook (foods.service.js) and the one-time historical backfill script
 // (food-unit-weights-match-report.js), so the scoring logic lives in exactly one place.
 import fs from "fs";
@@ -7,6 +7,9 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Untouched raw source of truth — a verbatim transcription of every USDA FNDDS portion row
+// per food code (no pre-filtering). All unit derivation below happens in memory at load
+// time; this file is never written to.
 const FNDDS_PATH = path.join(__dirname, "../data/fndds-common-servings.json");
 
 const STOPWORDS = new Set(["with", "and", "in", "of", "a", "an", "the", "ns", "nfs", "not"]);
@@ -132,11 +135,126 @@ function looksComposite(rawText) {
   return t.includes(" with ") || t.includes(" and ");
 }
 
+// ── Per-food unit-weight derivation ─────────────────────────────────────────────────────
+// fndds-common-servings.json now carries EVERY raw FNDDS portion row per food code
+// (nothing pre-filtered), e.g. both "1 cup" and "1 cup, diced" and "Guideline amount per cup
+// of hot cereal" can all appear for the same food. This resolves that down to a single
+// gram figure per unit, or null when there's genuinely no usable data — never a guess.
+const DECOY_RE = /guideline|quantity not specified|per\s/i;
+
+function isDecoyPortion(desc) {
+  return DECOY_RE.test(desc);
+}
+
+// `contains` finds any candidate row for the unit at all; `exact` identifies an unqualified
+// "1 <unit>" row, which always wins outright since it's the least ambiguous signal available.
+const UNIT_CONFIG = {
+  cup: { contains: /\bcups?\b/i, exact: /^1\s+cups?$/i },
+  tbsp: { contains: /\btablespoons?\b|\btbsp\b/i, exact: /^1\s+(?:tablespoons?|tbsp)$/i },
+  tsp: { contains: /\bteaspoons?\b|\btsp\b/i, exact: /^1\s+(?:teaspoons?|tsp)$/i },
+  piece: { contains: /\bpieces?\b/i, exact: /^1\s+pieces?$/i },
+  flOz: { contains: /\bfl\s*\.?\s*oz\b/i, exact: /^1\s+fl\s*\.?\s*oz$/i },
+};
+
+// A bare "1 piece/slice" (nothing after it) is a thin cross-sectional slice, not a whole
+// item — confirmed on raw carrots (5g via this row vs. 60g for "1 regular carrot" on the
+// same food), cucumber (10g), and mushrooms (6g). Misleading as a recipe "piece" unit, which
+// a dietitian expects to mean one whole item. Deliberately narrow: only the bare form is
+// excluded — "1 piece/slice, any size" (cake, beef/lamb cuts) and "1 regular or small
+// piece/slice..." keep resolving exactly as before, since a slice genuinely is the natural
+// "piece" serving there.
+const BARE_PIECE_SLICE_DESC = "1 piece/slice";
+
+// Resolves the gram weight for one unit of a food from its full FNDDS portion list:
+//   1. An exact, unqualified "1 <unit>" row always wins — most literal, least ambiguous.
+//   2. Otherwise, among non-decoy "1 <unit>, <qualifier>" rows: if they all agree on the
+//      weight, use it. If they disagree (e.g. "1 cup, diced" vs "1 cup, pieces"), prefer
+//      whichever has an "NFS" qualifier — the most generic/representative variant — and
+//      failing that, the most common (mode) weight among them, since that's the best
+//      available signal for "the typical case" without picking an arbitrary one.
+//   3. No candidates at all (or only decoys/guideline/bare-slice rows) -> null, meaning "no
+//      data for this unit," never a fallback guess.
+function deriveUnitGrams(portions, config) {
+  let candidates = portions.filter(
+    (p) => config.contains.test(p.description) && !isDecoyPortion(p.description) && p.grams > 0,
+  );
+  if (config === UNIT_CONFIG.piece) {
+    candidates = candidates.filter(
+      (p) => p.description.trim().toLowerCase() !== BARE_PIECE_SLICE_DESC,
+    );
+  }
+  if (candidates.length === 0) return null;
+
+  const exact = candidates.filter((p) => config.exact.test(p.description.trim()));
+  if (exact.length > 0) return exact[0].grams;
+
+  const weights = new Set(candidates.map((p) => p.grams));
+  if (weights.size === 1) return candidates[0].grams;
+
+  const nfs = candidates.find((p) => /\bnfs\b/i.test(p.description));
+  if (nfs) return nfs.grams;
+
+  const freq = new Map();
+  for (const p of candidates) freq.set(p.grams, (freq.get(p.grams) ?? 0) + 1);
+  let modeWeight = candidates[0].grams;
+  let modeCount = 0;
+  for (const [weight, count] of freq) {
+    if (count > modeCount) {
+      modeCount = count;
+      modeWeight = weight;
+    }
+  }
+  return modeWeight;
+}
+
+const ML_PER_FL_OZ = 29.5735; // 1 US fl oz
+const ML_PER_CUP = 236.588; // 1 US cup
+const ML_PER_TBSP = 14.7868; // 1 US tablespoon
+const ML_PER_TSP = 4.9289; // 1 US teaspoon
+
+function round(n, places) {
+  const f = 10 ** places;
+  return Math.round(n * f) / f;
+}
+
+// ml is a volume unit, so grams-per-ml genuinely varies by food density just like
+// cup/tbsp/tsp (1 ml of honey != 1 ml of skim milk) — prefer a direct "1 fl oz" portion row
+// (FNDDS almost always expresses fluid portions this way, never literally "ml"), falling
+// back to whichever of cup/tbsp/tsp was itself resolved for this food, largest unit first
+// (more reliable than a small one). null if none of those resolved either.
+function deriveGramsPerMl(flOzGrams, cupGrams, tbspGrams, tspGrams) {
+  if (flOzGrams != null) return flOzGrams / ML_PER_FL_OZ;
+  if (cupGrams != null) return cupGrams / ML_PER_CUP;
+  if (tbspGrams != null) return tbspGrams / ML_PER_TBSP;
+  if (tspGrams != null) return tspGrams / ML_PER_TSP;
+  return null;
+}
+
+export function deriveUnitFields(portions) {
+  const cup = deriveUnitGrams(portions, UNIT_CONFIG.cup);
+  const tbsp = deriveUnitGrams(portions, UNIT_CONFIG.tbsp);
+  const tsp = deriveUnitGrams(portions, UNIT_CONFIG.tsp);
+  const piece = deriveUnitGrams(portions, UNIT_CONFIG.piece);
+  const flOz = deriveUnitGrams(portions, UNIT_CONFIG.flOz);
+  const mlRaw = deriveGramsPerMl(flOz, cup, tbsp, tsp);
+  return {
+    cup,
+    tbsp,
+    tsp,
+    piece,
+    ml: mlRaw == null ? null : round(mlRaw, 3),
+  };
+}
+
 let fnddsIndexed = null;
 function loadFndds() {
   if (!fnddsIndexed) {
     const raw = JSON.parse(fs.readFileSync(FNDDS_PATH, "utf8"));
-    fnddsIndexed = raw.map((f) => ({ ...f, tokens: tokenSet(f.description) }));
+    fnddsIndexed = raw.map((f) => ({
+      ...f,
+      tokens: tokenSet(f.description),
+      derived: deriveUnitFields(f.portions ?? []),
+    }));
   }
   return fnddsIndexed;
 }
@@ -145,7 +263,7 @@ function loadFndds() {
 //   { tier: "no-match", score }
 //   { tier: "match" | "low-confidence", score, matchedDescription, matchedCategory, foodCode,
 //     coreMismatch, compositeDish, fields: { gramsPerCup?, gramsPerTbsp?, gramsPerTsp?,
-//     gramsPerPiece? } }
+//     gramsPerPiece?, gramsPerMl? } }
 // `fields` only contains keys the matched FNDDS entry actually had data for.
 export function matchFoodName(name) {
   const candidates = loadFndds();
@@ -171,12 +289,13 @@ export function matchFoodName(name) {
     return { tier: "no-match", score: roundedScore, coreMismatch, compositeDish };
   }
 
-  const sg = best.servingsGrams ?? {};
+  const d = best.derived;
   const fields = {};
-  if (sg.cup != null) fields.gramsPerCup = sg.cup;
-  if (sg.tbsp != null) fields.gramsPerTbsp = sg.tbsp;
-  if (sg.tsp != null) fields.gramsPerTsp = sg.tsp;
-  if (sg.piece != null) fields.gramsPerPiece = sg.piece;
+  if (d.cup != null) fields.gramsPerCup = d.cup;
+  if (d.tbsp != null) fields.gramsPerTbsp = d.tbsp;
+  if (d.tsp != null) fields.gramsPerTsp = d.tsp;
+  if (d.piece != null) fields.gramsPerPiece = d.piece;
+  if (d.ml != null) fields.gramsPerMl = d.ml;
 
   return {
     tier,

@@ -65,6 +65,9 @@ export const createFoodSchema = z.object({
     source: z.enum(["usda", "lebanese", "custom"]).optional(),
     servingSize: z.number().positive(),
     servingUnit: z.string().default("g"),
+    commonServings: z
+      .array(z.object({ label: z.string().min(1), grams: z.number().min(0) }))
+      .optional(),
     calories: z.number().min(0),
     protein: z.number().min(0),
     carbs: z.number().min(0),
@@ -78,6 +81,9 @@ export const createFoodSchema = z.object({
     vitaminC: z.number().min(0).nullable().optional(),
     iron: z.number().min(0).nullable().optional(),
     dataSource: z.string().nullable().optional(),
+    allergens: z.array(z.string()).optional(),
+    notes: z.string().nullable().optional(),
+    verified: z.boolean().optional(),
     ...micronutrientFields,
   }),
 });
@@ -92,6 +98,9 @@ export const updateFoodSchema = z.object({
     source: z.enum(["usda", "lebanese", "custom"]).optional(),
     servingSize: z.number().positive().optional(),
     servingUnit: z.string().optional(),
+    commonServings: z
+      .array(z.object({ label: z.string().min(1), grams: z.number().min(0) }))
+      .optional(),
     calories: z.number().min(0).optional(),
     protein: z.number().min(0).optional(),
     carbs: z.number().min(0).optional(),
@@ -105,17 +114,27 @@ export const updateFoodSchema = z.object({
     vitaminC: z.number().min(0).nullable().optional(),
     iron: z.number().min(0).nullable().optional(),
     dataSource: z.string().nullable().optional(),
+    allergens: z.array(z.string()).optional(),
+    notes: z.string().nullable().optional(),
     verified: z.boolean().optional(),
-    // Only ever written by the dietitian explicitly accepting/dismissing an FNDDS
-    // unit-weight suggestion (see foods.service.js's matchFoodName hook) — not part of the
-    // normal create/edit form.
+    // Written by the dietitian explicitly accepting/dismissing an FNDDS unit-weight suggestion
+    // (see foods.service.js's matchFoodName hook) — never auto-sent as part of a normal
+    // create/edit form submission itself.
     gramsPerCup: z.number().min(0).nullable().optional(),
     gramsPerTbsp: z.number().min(0).nullable().optional(),
     gramsPerTsp: z.number().min(0).nullable().optional(),
     gramsPerPiece: z.number().min(0).nullable().optional(),
+    gramsPerMl: z.number().min(0).nullable().optional(),
     ...micronutrientFields,
   }),
 });
+
+// Query params always arrive as strings — z.coerce.boolean() would treat "false" as truthy
+// (any non-empty string), so booleans need an explicit string->boolean mapping instead.
+const booleanQueryParam = z
+  .enum(["true", "false"])
+  .optional()
+  .transform((v) => (v === undefined ? undefined : v === "true"));
 
 export const listFoodsSchema = z.object({
   query: z.object({
@@ -124,6 +143,32 @@ export const listFoodsSchema = z.object({
     search: z.string().optional(),
     category: z.string().optional(),
     source: z.enum(["usda", "lebanese", "custom"]).optional(),
+    verified: booleanQueryParam,
+    // "Favorites" always means the requesting user's own favorites — there is no
+    // client-supplied user filter, so this is just an on/off switch.
+    favorites: booleanQueryParam,
+  }),
+});
+
+export const foodsStatsSchema = z.object({
+  query: z.object({
+    search: z.string().optional(),
+    category: z.string().optional(),
+    source: z.enum(["usda", "lebanese", "custom"]).optional(),
+    verified: booleanQueryParam,
+    favorites: booleanQueryParam,
+  }),
+});
+
+export const favoriteParamsSchema = z.object({
+  params: z.object({ id: z.string().min(1) }),
+});
+
+export const bulkDeleteFoodsSchema = z.object({
+  body: z.object({
+    // Bounded well above what a couple of 100-row pages of selections would ever produce —
+    // guards against an absurd payload rather than a realistic dietitian workflow.
+    ids: z.array(z.string().min(1)).min(1).max(500),
   }),
 });
 
@@ -146,5 +191,11 @@ export const usdaImportedSchema = z.object({
 export const usdaImportSchema = z.object({
   body: z.object({
     fdcId: z.number().int().positive(),
+  }),
+});
+
+export const usdaDetailsSchema = z.object({
+  params: z.object({
+    fdcId: z.coerce.number().int().positive(),
   }),
 });

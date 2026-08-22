@@ -217,7 +217,7 @@ async function populatePlan(id) {
     .populate("client", "profile.firstName profile.lastName targets driTargets")
     .populate(
       "items.food",
-      "name servingSize servingUnit gramsPerCup gramsPerTbsp gramsPerTsp gramsPerPiece",
+      "name servingSize servingUnit gramsPerCup gramsPerTbsp gramsPerTsp gramsPerPiece gramsPerMl commonServings",
     )
     .populate("items.meal", "name servings")
     .lean();

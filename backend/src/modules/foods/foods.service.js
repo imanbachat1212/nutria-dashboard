@@ -22,6 +22,18 @@ function toUnitWeightMatch(match) {
   };
 }
 
+// `favoritedBy` is per-user internal state — never sent to the client as a raw id list (that
+// would leak other users' ids for no reason). Replaced with a boolean scoped to whoever is
+// asking. userId is null for the automation/x-api-key actor, which just always reads as false.
+export function toPublicFood(food, userId) {
+  if (!food) return food;
+  const { favoritedBy, ...rest } = food;
+  return {
+    ...rest,
+    isFavorite: userId ? (favoritedBy || []).some((id) => String(id) === String(userId)) : false,
+  };
+}
+
 export async function createFood(data, actor) {
   const match = matchFoodName(data.name);
   // Auto-populate only on a high-confidence match — low-confidence is surfaced as a
@@ -31,32 +43,62 @@ export async function createFood(data, actor) {
   return { food, unitWeightMatch: toUnitWeightMatch(match) };
 }
 
-export async function listFoods({ page, limit, search, category, source }) {
+// Shared by listFoods and getFoodsStats so the two never drift on what "matches the current
+// search/category/source/verified/favorites filter" means. `favorites` is only ever scoped to
+// the requesting user's own id (never a client-supplied user) — "Favorites" means MY favorites.
+function buildFoodFilter({ search, category, source, verified, favorites, userId }) {
   const filter = {};
   if (category) filter.category = category;
   if (source) filter.source = source;
+  if (verified !== undefined) filter.verified = verified;
+  if (favorites) filter.favoritedBy = userId;
   if (search) {
     filter.$or = [
       { name: { $regex: search, $options: "i" } },
       { nameAr: { $regex: search, $options: "i" } },
     ];
   }
+  return filter;
+}
+
+export async function listFoods({ page, limit, search, category, source, verified, favorites, userId }) {
+  const filter = buildFoodFilter({ search, category, source, verified, favorites, userId });
 
   const skip = (page - 1) * limit;
   const [foods, total] = await Promise.all([
-    Food.find(filter).skip(skip).limit(limit).lean(),
+    // Without an explicit sort, Mongo returns natural order — once the collection exceeds
+    // `limit`, a freshly created document can fall entirely outside the page-1 window and
+    // never show up in the library view even though it was saved correctly. Newest-first
+    // guarantees a just-created food is always visible immediately after creation.
+    Food.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
     Food.countDocuments(filter),
   ]);
-  return { foods, total, page, limit };
+  return { foods: foods.map((f) => toPublicFood(f, userId)), total, page, limit };
 }
 
-export async function getFoodById(id) {
+// True counts for the KPI strip — deliberately NOT derived from a page of `listFoods` results,
+// since that page is capped at `limit` (100) and the library already exceeds that, which
+// silently froze the old client-side stats.total/verified/lebanese the moment the library
+// crossed 100 documents. Respects the same search/category/source/verified/favorites filter as
+// listFoods, so the KPIs reflect "matching the current filter," consistent with how `total`
+// already behaved (e.g. verified=true&source=lebanese returns the correct intersection).
+export async function getFoodsStats({ search, category, source, verified, favorites, userId }) {
+  const filter = buildFoodFilter({ search, category, source, verified, favorites, userId });
+  const [total, verifiedCount, lebanese] = await Promise.all([
+    Food.countDocuments(filter),
+    Food.countDocuments({ ...filter, verified: true }),
+    Food.countDocuments({ ...filter, source: "lebanese" }),
+  ]);
+  return { total, verified: verifiedCount, lebanese };
+}
+
+export async function getFoodById(id, userId) {
   const food = await Food.findById(id).lean();
   if (!food) throw new ApiError(404, "Food not found");
-  return food;
+  return toPublicFood(food, userId);
 }
 
-export async function updateFood(id, data) {
+export async function updateFood(id, data, userId) {
   let unitWeightMatch = null;
   let autoFields = {};
 
@@ -78,14 +120,40 @@ export async function updateFood(id, data) {
 
   const food = await Food.findByIdAndUpdate(id, { ...data, ...autoFields }, { new: true }).lean();
   if (!food) throw new ApiError(404, "Food not found");
-  return { food, unitWeightMatch };
+  return { food: toPublicFood(food, userId), unitWeightMatch };
+}
+
+// Idempotent — favoriting an already-favorited food (or unfavoriting one that isn't) is a no-op,
+// not an error. Requires a real signed-in user; the automation/x-api-key actor has no identity
+// to favorite on behalf of.
+export async function addFavorite(id, userId) {
+  if (!userId) throw new ApiError(400, "Favoriting requires a signed-in user");
+  const food = await Food.findByIdAndUpdate(
+    id,
+    { $addToSet: { favoritedBy: userId } },
+    { new: true },
+  ).lean();
+  if (!food) throw new ApiError(404, "Food not found");
+  return toPublicFood(food, userId);
+}
+
+export async function removeFavorite(id, userId) {
+  if (!userId) throw new ApiError(400, "Favoriting requires a signed-in user");
+  const food = await Food.findByIdAndUpdate(
+    id,
+    { $pull: { favoritedBy: userId } },
+    { new: true },
+  ).lean();
+  if (!food) throw new ApiError(404, "Food not found");
+  return toPublicFood(food, userId);
 }
 
 // Food is referenced by ObjectId (embedded, not top-level) from four other collections.
 // Deleting out from under a real reference would leave dangling ids that populate() calls
 // elsewhere silently resolve to null — block deletion instead and tell the dietitian exactly
 // what's using it, rather than allowing a delete that quietly corrupts recipes/plans/logs.
-export async function deleteFood(id) {
+// Shared by deleteFood and bulkDeleteFoods so bulk can never apply a looser rule than single.
+async function getFoodUsages(id) {
   const [recipeCount, planItemCount, blockCount, journalCount] = await Promise.all([
     Meal.countDocuments({ "ingredients.food": id }),
     MealPlan.countDocuments({ "items.food": id }),
@@ -100,7 +168,11 @@ export async function deleteFood(id) {
   if (blockCount > 0) usages.push(`${blockCount} meal plan block${blockCount === 1 ? "" : "s"}`);
   if (journalCount > 0)
     usages.push(`${journalCount} journal entr${journalCount === 1 ? "y" : "ies"}`);
+  return usages;
+}
 
+export async function deleteFood(id) {
+  const usages = await getFoodUsages(id);
   if (usages.length > 0) {
     throw new ApiError(409, `Can't delete — used in ${usages.join(", ")}`);
   }
@@ -108,6 +180,37 @@ export async function deleteFood(id) {
   const food = await Food.findByIdAndDelete(id);
   if (!food) throw new ApiError(404, "Food not found");
   if (food.image?.key) deleteImage(food.image.key).catch(() => {});
+}
+
+// Best-effort, per-food — one blocked/missing food doesn't fail the whole batch. Applies the
+// exact same in-use rule as deleteFood (via the shared getFoodUsages), just extended so
+// selecting many foods at once can't become a way to skip that protection at scale. Sequential
+// rather than Promise.all: this is a bounded, dietitian-initiated batch (selections come from
+// one or two 100-row pages), not a hot path, and sequential keeps the per-id usage-check +
+// delete pair atomic-looking in the DB access pattern rather than interleaving many at once.
+export async function bulkDeleteFoods(ids) {
+  const deleted = [];
+  const blocked = [];
+  const notFound = [];
+
+  for (const id of ids) {
+    const usages = await getFoodUsages(id);
+    if (usages.length > 0) {
+      const food = await Food.findById(id, "name").lean();
+      blocked.push({ id, name: food?.name ?? null, usages });
+      continue;
+    }
+
+    const food = await Food.findByIdAndDelete(id);
+    if (!food) {
+      notFound.push(id);
+      continue;
+    }
+    if (food.image?.key) deleteImage(food.image.key).catch(() => {});
+    deleted.push({ id, name: food.name });
+  }
+
+  return { deleted, blocked, notFound };
 }
 
 // Bulk existence check for USDA search results — one query instead of N per-row lookups.
@@ -123,6 +226,38 @@ export async function searchUsda(query, limit) {
   return searchUsdaFoods(query, { pageSize: limit });
 }
 
+// The one place a USDA fdcId's full nutrient breakdown gets fetched/parsed — used by BOTH the
+// "preview before importing" panel and importUsdaFood below, so the numbers a dietitian
+// previews can never diverge from what actually gets stored if they go on to import that exact
+// result. No DB write; safe to call repeatedly for the same fdcId.
+export async function previewUsdaFood(fdcId) {
+  return getUsdaFoodDetails(fdcId);
+}
+
+// Mirrors UNIT_WEIGHT_LABELS in new-food-dialog.tsx — going FROM a resolved gramsPerX field TO
+// its "1 <unit>" Common servings label is a trivial fixed mapping, unlike unit-conversion.ts's
+// labelToUnit (the reverse direction: parsing a dietitian's free-text label back to a unit),
+// which doesn't apply here since a fresh USDA import has no pre-existing rows to dedupe against.
+const UNIT_WEIGHT_LABELS = [
+  ["gramsPerCup", "cup"],
+  ["gramsPerTbsp", "tbsp"],
+  ["gramsPerTsp", "tsp"],
+  ["gramsPerPiece", "piece"],
+  ["gramsPerMl", "ml"],
+];
+
+// Same shape the create dialog's applyAutoServings would insert for a fresh, unedited food —
+// one row per matched unit, or [] if nothing matched.
+function buildCommonServingsFromFields(fields) {
+  const rows = [];
+  for (const [key, unit] of UNIT_WEIGHT_LABELS) {
+    const grams = fields[key];
+    if (grams == null) continue;
+    rows.push({ label: `1 ${unit}`, grams });
+  }
+  return rows;
+}
+
 // "Add to library" — the only point a USDA result becomes a real, referenceable Food
 // document. Idempotent by fdcId so importing the same USDA food twice returns the existing
 // document instead of creating a duplicate (the model's sparse unique index on fdcId backs
@@ -132,7 +267,13 @@ export async function importUsdaFood(fdcId, actor) {
   const existing = await Food.findOne({ fdcId }).lean();
   if (existing) return { food: existing, created: false };
 
-  const details = await getUsdaFoodDetails(fdcId);
+  const details = await previewUsdaFood(fdcId);
+  // Same FNDDS unit-weight match "Add new food" runs on create — a USDA import shouldn't be a
+  // second-class path that skips it. Only a high-confidence match auto-populates, exactly like
+  // createFood's own tier === "match" gate; a low-confidence/no-match result leaves every
+  // gramsPerX field null and commonServings empty, never a guessed value.
+  const match = matchFoodName(details.name);
+  const autoFields = match.tier === "match" ? match.fields : {};
   const food = await Food.create({
     name: details.name,
     brand: details.brand,
@@ -142,6 +283,7 @@ export async function importUsdaFood(fdcId, actor) {
     source: "usda",
     servingSize: details.servingSize,
     servingUnit: details.servingUnit,
+    commonServings: buildCommonServingsFromFields(autoFields),
     calories: details.calories,
     protein: details.protein,
     carbs: details.carbs,
@@ -151,6 +293,7 @@ export async function importUsdaFood(fdcId, actor) {
     sodium: details.sodium,
     fdcId: details.fdcId,
     createdBy: actor._id,
+    ...autoFields,
 
     // Micronutrients — all optional/nullable, null on the majority of USDA records (see
     // usda-client.js's toFullNutrition; this is expected, not a bug).
