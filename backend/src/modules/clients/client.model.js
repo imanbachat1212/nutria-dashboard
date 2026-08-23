@@ -68,6 +68,10 @@ const clientSchema = new mongoose.Schema(
     phone: { type: String, required: true, unique: true, index: true },
     status: { type: String, enum: ["lead", "active", "inactive"], default: "lead" },
     serviceType: { type: [{ type: String, enum: ["diet", "gym", "classes"] }], default: [] },
+    // Soft-delete flag, orthogonal to `status` — "inactive" status means paused-but-current
+    // (still shown in the roster), while `archived` hides a client from the default list
+    // entirely without touching status or cascading to their appointments/plans/billing/notes.
+    archived: { type: Boolean, default: false, index: true },
 
     photo: { type: imageSchema, default: null },
 

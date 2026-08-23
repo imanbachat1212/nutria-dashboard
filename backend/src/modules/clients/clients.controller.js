@@ -13,6 +13,11 @@ export const list = asyncHandler(async (req, res) => {
   res.json({ data: result });
 });
 
+export const stats = asyncHandler(async (req, res) => {
+  const result = await clientsService.getClientsStats();
+  res.json({ data: result });
+});
+
 export const getOne = asyncHandler(async (req, res) => {
   const client = await clientsService.getClientById(req.params.id);
   res.json({ data: serializeClient(client, req.user.permissions) });
@@ -26,6 +31,16 @@ export const update = asyncHandler(async (req, res) => {
 export const remove = asyncHandler(async (req, res) => {
   await clientsService.deleteClient(req.params.id);
   res.status(204).end();
+});
+
+export const archive = asyncHandler(async (req, res) => {
+  const client = await clientsService.setClientArchived(req.params.id, true);
+  res.json({ data: serializeClient(client, req.user.permissions) });
+});
+
+export const restore = asyncHandler(async (req, res) => {
+  const client = await clientsService.setClientArchived(req.params.id, false);
+  res.json({ data: serializeClient(client, req.user.permissions) });
 });
 
 export const addNote = asyncHandler(async (req, res) => {

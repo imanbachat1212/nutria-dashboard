@@ -62,9 +62,14 @@ export async function createClient(data, actor) {
   return Client.create(data);
 }
 
-export async function listClients({ page, limit, status, search }) {
-  const filter = {};
+// Shared by listClients and getClientsStats so the two never drift on what "matches the
+// current search/status/archived filter" means. `archived` defaults to excluding archived
+// clients (the normal roster view) — pass `archived: true` to see only the archived ones,
+// same shape as foods' verified/favorites on/off switches, just with an inverted default.
+function buildClientFilter({ status, serviceType, search, archived }) {
+  const filter = { archived: archived ? true : { $ne: true } };
   if (status) filter.status = status;
+  if (serviceType) filter.serviceType = serviceType;
   if (search) {
     filter.$or = [
       { phone: { $regex: search, $options: "i" } },
@@ -72,13 +77,37 @@ export async function listClients({ page, limit, status, search }) {
       { "profile.lastName": { $regex: search, $options: "i" } },
     ];
   }
+  return filter;
+}
+
+export async function listClients({ page, limit, status, serviceType, search, archived, sort }) {
+  const filter = buildClientFilter({ status, serviceType, search, archived });
+  const sortSpec =
+    sort === "name" ? { "profile.firstName": 1, "profile.lastName": 1 } : { createdAt: -1 };
 
   const skip = (page - 1) * limit;
   const [clients, total] = await Promise.all([
-    Client.find(filter).skip(skip).limit(limit).lean(),
+    Client.find(filter).sort(sortSpec).skip(skip).limit(limit).lean(),
     Client.countDocuments(filter),
   ]);
   return { clients, total, page, limit };
+}
+
+// True counts for the mini-stat strip — always scoped to the active (non-archived) roster,
+// independent of whatever search/status filter is currently applied in the table above (this
+// matches the strip's pre-pagination behavior, where it summed the full fetched list rather
+// than reacting to the toolbar's filter/search state). NOT derived from a page of listClients
+// results, which is capped at `limit` and would silently freeze once the roster exceeds it.
+export async function getClientsStats() {
+  const filter = buildClientFilter({});
+  const [total, active, diet, gym, classes] = await Promise.all([
+    Client.countDocuments(filter),
+    Client.countDocuments({ ...filter, status: "active" }),
+    Client.countDocuments({ ...filter, serviceType: "diet" }),
+    Client.countDocuments({ ...filter, serviceType: "gym" }),
+    Client.countDocuments({ ...filter, serviceType: "classes" }),
+  ]);
+  return { total, active, diet, gym, classes };
 }
 
 export async function getClientById(id) {
@@ -109,6 +138,15 @@ export async function updateClient(id, data, actor) {
   }
 
   const client = await Client.findByIdAndUpdate(id, data, { new: true }).lean();
+  return client;
+}
+
+// Soft-delete/restore — never touches appointments, plans, billing, journal entries, or notes;
+// just flips the flag that listClients' default filter excludes. Idempotent (archiving an
+// already-archived client, or restoring an already-active one, is not an error).
+export async function setClientArchived(id, archived) {
+  const client = await Client.findByIdAndUpdate(id, { archived }, { new: true }).lean();
+  if (!client) throw new ApiError(404, "Client not found");
   return client;
 }
 

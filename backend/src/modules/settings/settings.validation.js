@@ -13,3 +13,17 @@ export const updateDietaryPreferencesSchema = z.object({
       .min(1, "At least one dietary preference is required"),
   }),
 });
+
+export const updateAllergiesSchema = z.object({
+  body: z.object({
+    allergies: z.array(z.string().trim().min(1)).min(1, "At least one allergy is required"),
+  }),
+});
+
+export const updateMedicalHistorySchema = z.object({
+  body: z.object({
+    medicalHistory: z
+      .array(z.string().trim().min(1))
+      .min(1, "At least one medical history option is required"),
+  }),
+});

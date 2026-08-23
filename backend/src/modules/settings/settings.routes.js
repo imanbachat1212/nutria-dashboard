@@ -7,6 +7,8 @@ import * as ctrl from "./settings.controller.js";
 import {
   updateClassTypesSchema,
   updateDietaryPreferencesSchema,
+  updateAllergiesSchema,
+  updateMedicalHistorySchema,
 } from "./settings.validation.js";
 
 const router = Router();
@@ -35,6 +37,30 @@ router.patch(
   validate(updateDietaryPreferencesSchema),
   auditAction("update", "setting"),
   ctrl.updateDietaryPreferences
+);
+
+router.get("/allergies", requirePermission("settings.read"), ctrl.getAllergies);
+
+router.patch(
+  "/allergies",
+  requirePermission("settings.update"),
+  validate(updateAllergiesSchema),
+  auditAction("update", "setting"),
+  ctrl.updateAllergies
+);
+
+router.get(
+  "/medical-history",
+  requirePermission("settings.read"),
+  ctrl.getMedicalHistory
+);
+
+router.patch(
+  "/medical-history",
+  requirePermission("settings.update"),
+  validate(updateMedicalHistorySchema),
+  auditAction("update", "setting"),
+  ctrl.updateMedicalHistory
 );
 
 export default router;

@@ -22,3 +22,23 @@ export const updateDietaryPreferences = asyncHandler(async (req, res) => {
   );
   res.json({ data: { dietaryPreferences } });
 });
+
+export const getAllergies = asyncHandler(async (req, res) => {
+  const allergies = await svc.getAllergies();
+  res.json({ data: { allergies } });
+});
+
+export const updateAllergies = asyncHandler(async (req, res) => {
+  const allergies = await svc.updateAllergies(req.validated.body.allergies);
+  res.json({ data: { allergies } });
+});
+
+export const getMedicalHistory = asyncHandler(async (req, res) => {
+  const medicalHistory = await svc.getMedicalHistory();
+  res.json({ data: { medicalHistory } });
+});
+
+export const updateMedicalHistory = asyncHandler(async (req, res) => {
+  const medicalHistory = await svc.updateMedicalHistory(req.validated.body.medicalHistory);
+  res.json({ data: { medicalHistory } });
+});

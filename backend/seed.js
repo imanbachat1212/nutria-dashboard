@@ -209,6 +209,60 @@ async function seed() {
   );
   console.log("Seeded dietaryPreferences setting");
 
+  // Allergies (Settings → Services) — populates the Allergies pill multi-select in the New
+  // Client dialog. A dietitian can still add a client-specific one-off allergy via that
+  // dialog's "Other" entry without touching this shared list. Non-destructive: only sets the
+  // default if the key doesn't already exist.
+  await Setting.findOneAndUpdate(
+    { key: "allergies" },
+    {
+      $setOnInsert: {
+        key: "allergies",
+        value: [
+          "Peanuts",
+          "Tree nuts",
+          "Shellfish",
+          "Fish",
+          "Dairy",
+          "Eggs",
+          "Gluten/Wheat",
+          "Soy",
+          "Sesame",
+        ],
+        description: "Common allergy options — populates the Allergies pill multi-select in the New Client dialog.",
+      },
+    },
+    { upsert: true }
+  );
+  console.log("Seeded allergies setting");
+
+  // Medical history (Settings → Services) — populates the Medical history pill multi-select in
+  // the New Client dialog. Non-destructive: only sets the default if the key doesn't already
+  // exist.
+  await Setting.findOneAndUpdate(
+    { key: "medicalHistory" },
+    {
+      $setOnInsert: {
+        key: "medicalHistory",
+        value: [
+          "PCOS",
+          "Hypothyroidism",
+          "Hyperthyroidism",
+          "Hypertension",
+          "Type 2 Diabetes",
+          "Type 1 Diabetes",
+          "High cholesterol",
+          "IBS",
+          "Celiac disease",
+          "Anemia",
+        ],
+        description: "Common medical history options — populates the Medical history pill multi-select in the New Client dialog.",
+      },
+    },
+    { upsert: true }
+  );
+  console.log("Seeded medicalHistory setting");
+
   // Foods
   await seedFoods();
   await migrateSugarSodiumToNull();

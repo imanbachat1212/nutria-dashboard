@@ -102,13 +102,28 @@ export const updateClientSchema = z.object({
   }),
 });
 
+// Query params always arrive as strings — z.coerce.boolean() would treat "false" as truthy
+// (any non-empty string), so booleans need an explicit string->boolean mapping instead.
+const booleanQueryParam = z
+  .enum(["true", "false"])
+  .optional()
+  .transform((v) => (v === undefined ? undefined : v === "true"));
+
 export const listClientsSchema = z.object({
   query: z.object({
     page: z.coerce.number().int().positive().default(1),
     limit: z.coerce.number().int().positive().max(100).default(20),
     status: z.enum(["lead", "active", "inactive"]).optional(),
+    serviceType: z.enum(["diet", "gym", "classes"]).optional(),
     search: z.string().optional(),
+    // Omitted/false = default roster view (archived excluded); true = the "Archived" view.
+    archived: booleanQueryParam,
+    sort: z.enum(["newest", "name"]).default("newest"),
   }),
+});
+
+export const archiveParamsSchema = z.object({
+  params: z.object({ id: z.string().min(1) }),
 });
 
 export const createNoteSchema = z.object({

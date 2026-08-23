@@ -10,6 +10,7 @@ import {
   updateClientSchema,
   listClientsSchema,
   createNoteSchema,
+  archiveParamsSchema,
 } from "./clients.validation.js";
 
 const router = Router();
@@ -29,6 +30,13 @@ router.get(
   requirePermission("clients.read"),
   validate(listClientsSchema),
   ctrl.list
+);
+
+// Must come before /:id — otherwise Express would match "stats" as an :id param.
+router.get(
+  "/stats",
+  requirePermission("clients.read"),
+  ctrl.stats
 );
 
 router.get(
@@ -51,6 +59,26 @@ router.delete(
   requirePermission("clients.delete"),
   auditAction("delete", "client"),
   ctrl.remove
+);
+
+// "Delete" in the UI is really this — archives (soft-deletes) a client, hiding them from the
+// default roster while leaving every referenced record (appointments, plans, billing, journal,
+// notes) untouched. Gated on clients.delete, same as the (now UI-unused but still available)
+// hard-delete above. Restoring is non-destructive, so it only needs clients.update.
+router.post(
+  "/:id/archive",
+  requirePermission("clients.delete"),
+  validate(archiveParamsSchema),
+  auditAction("update", "client"),
+  ctrl.archive
+);
+
+router.post(
+  "/:id/restore",
+  requirePermission("clients.update"),
+  validate(archiveParamsSchema),
+  auditAction("update", "client"),
+  ctrl.restore
 );
 
 router.post(

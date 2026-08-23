@@ -61,3 +61,74 @@ export async function updateDietaryPreferences(dietaryPreferences) {
   ).lean();
   return setting.value;
 }
+
+// Same generic Setting-doc pattern as above — populates the Allergies pill multi-select in the
+// New Client dialog. A dietitian can still add a one-off allergy specific to a single client
+// without touching this shared list (see new-client-dialog.tsx's "Other" entry) — this list is
+// only the predefined/common options offered up front.
+const ALLERGIES_KEY = "allergies";
+const DEFAULT_ALLERGIES = [
+  "Peanuts",
+  "Tree nuts",
+  "Shellfish",
+  "Fish",
+  "Dairy",
+  "Eggs",
+  "Gluten/Wheat",
+  "Soy",
+  "Sesame",
+];
+
+export async function getAllergies() {
+  const setting = await Setting.findOne({ key: ALLERGIES_KEY }).lean();
+  return setting?.value?.length ? setting.value : DEFAULT_ALLERGIES;
+}
+
+export async function updateAllergies(allergies) {
+  const setting = await Setting.findOneAndUpdate(
+    { key: ALLERGIES_KEY },
+    {
+      key: ALLERGIES_KEY,
+      value: allergies,
+      description: "Common allergy options — populates the Allergies pill multi-select in the New Client dialog.",
+    },
+    { upsert: true, new: true }
+  ).lean();
+  return setting.value;
+}
+
+// Same pattern again — populates the Medical history pill multi-select in the New Client
+// dialog. Note: unlike allergies (in the ungated `profile` block), a client's actual
+// medicalHistory values live in the permission-gated `clinical` block (clients.clinical.read/
+// write) — this shared OPTIONS list itself is not clinical data and isn't gated the same way.
+const MEDICAL_HISTORY_KEY = "medicalHistory";
+const DEFAULT_MEDICAL_HISTORY = [
+  "PCOS",
+  "Hypothyroidism",
+  "Hyperthyroidism",
+  "Hypertension",
+  "Type 2 Diabetes",
+  "Type 1 Diabetes",
+  "High cholesterol",
+  "IBS",
+  "Celiac disease",
+  "Anemia",
+];
+
+export async function getMedicalHistory() {
+  const setting = await Setting.findOne({ key: MEDICAL_HISTORY_KEY }).lean();
+  return setting?.value?.length ? setting.value : DEFAULT_MEDICAL_HISTORY;
+}
+
+export async function updateMedicalHistory(medicalHistory) {
+  const setting = await Setting.findOneAndUpdate(
+    { key: MEDICAL_HISTORY_KEY },
+    {
+      key: MEDICAL_HISTORY_KEY,
+      value: medicalHistory,
+      description: "Common medical history options — populates the Medical history pill multi-select in the New Client dialog.",
+    },
+    { upsert: true, new: true }
+  ).lean();
+  return setting.value;
+}
