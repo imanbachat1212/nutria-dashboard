@@ -20,6 +20,7 @@ import {
   Pencil,
   CheckCircle2,
   X,
+  ChevronDown,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -39,6 +40,10 @@ import {
   updateClassTypes,
   fetchDietaryPreferences,
   updateDietaryPreferences,
+  fetchAllergies,
+  updateAllergies,
+  fetchMedicalHistory,
+  updateMedicalHistory,
 } from "@/lib/settings-api";
 
 export const Route = createFileRoute("/settings")({
@@ -626,9 +631,33 @@ function PackageEditor({
  * hardcoded list to keep in sync in either case.
  */
 
+// Collapse state is purely a view preference, scoped to this card's own storageKey — never
+// touches the card's actual list data. Wrapped in try/catch since localStorage can throw (private
+// browsing, disabled storage, quota); any failure just falls back to the expanded default rather
+// than surfacing an error over what's a cosmetic convenience.
+const COLLAPSED_STORAGE_PREFIX = "nutria:settings-card-collapsed:";
+
+function readCardCollapsed(storageKey: string): boolean {
+  try {
+    return localStorage.getItem(COLLAPSED_STORAGE_PREFIX + storageKey) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeCardCollapsed(storageKey: string, collapsed: boolean) {
+  try {
+    if (collapsed) localStorage.setItem(COLLAPSED_STORAGE_PREFIX + storageKey, "1");
+    else localStorage.removeItem(COLLAPSED_STORAGE_PREFIX + storageKey);
+  } catch {
+    // Best-effort — not worth surfacing to the dietitian over a view-state toggle.
+  }
+}
+
 function EditableStringListCard({
   title,
   description,
+  storageKey,
   queryKey,
   fetchFn,
   updateFn,
@@ -639,6 +668,10 @@ function EditableStringListCard({
 }: {
   title: string;
   description: string;
+  // Stable per-card key for persisting collapsed/expanded state to localStorage — distinct
+  // from `queryKey` (a query-cache identity) even though in practice they share the same
+  // string today, since one is React Query's concern and the other is purely a UI preference.
+  storageKey: string;
   queryKey: string[];
   fetchFn: () => Promise<string[]>;
   updateFn: (next: string[]) => Promise<string[]>;
@@ -652,6 +685,17 @@ function EditableStringListCard({
 
   const [items, setItems] = useState<string[]>([]);
   const [dirty, setDirty] = useState(false);
+  // Lazy-initialized once from localStorage on mount — storageKey is stable for the lifetime of
+  // one card instance, so there's nothing to re-sync on later renders.
+  const [collapsed, setCollapsed] = useState(() => readCardCollapsed(storageKey));
+
+  const toggleCollapsed = () => {
+    setCollapsed((cur) => {
+      const next = !cur;
+      writeCardCollapsed(storageKey, next);
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (data) {
@@ -684,55 +728,80 @@ function EditableStringListCard({
 
   const canSave = dirty && items.length > 0 && items.every((t) => t.trim().length > 0);
 
+  // Not built on the shared `Section` component — `Section` is used elsewhere on this page
+  // (Notifications, API access, Security) for plain non-collapsible cards, and adding a
+  // clickable/collapsible header there would change those too. This mirrors Section's visual
+  // shape (border-b header, p-5 body, border-t bg-muted/30 footer) but keeps that component
+  // untouched.
   return (
-    <Section
-      title={title}
-      description={description}
-      footer={
-        <Button
-          size="sm"
-          disabled={!canSave || mutation.isPending}
-          onClick={() => mutation.mutate(items.map((t) => t.trim()))}
-        >
-          <Save className="mr-2 h-4 w-4" />
-          {mutation.isPending ? "Saving…" : "Save"}
-        </Button>
-      }
-    >
-      {isLoading ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
-      ) : isError ? (
-        <p className="text-sm text-destructive">{emptyErrorLabel}</p>
-      ) : (
-        <div className="grid gap-2">
-          {items.map((t, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <Input
-                value={t}
-                onChange={(e) => updateItem(i, e.target.value)}
-                placeholder={itemPlaceholder}
-              />
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-9 w-9 shrink-0"
-                disabled={items.length === 1}
-                onClick={() => removeItem(i)}
-              >
-                <X className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-          ))}
-          <Button variant="outline" size="sm" className="w-fit" onClick={addItem}>
-            <Plus className="mr-1.5 h-3.5 w-3.5" />
-            {addLabel}
-          </Button>
+    <Card className="overflow-hidden">
+      <button
+        type="button"
+        onClick={toggleCollapsed}
+        aria-expanded={!collapsed}
+        className="flex w-full items-center justify-between gap-4 border-b px-5 py-4 text-left transition-colors hover:bg-muted/30"
+      >
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold">{title}</h2>
+          <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
         </div>
+        <ChevronDown
+          className={cn(
+            "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
+            collapsed && "-rotate-90",
+          )}
+        />
+      </button>
+      {!collapsed && (
+        <>
+          <div className="p-5">
+            {isLoading ? (
+              <p className="text-sm text-muted-foreground">Loading…</p>
+            ) : isError ? (
+              <p className="text-sm text-destructive">{emptyErrorLabel}</p>
+            ) : (
+              <div className="grid gap-2">
+                {items.map((t, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <Input
+                      value={t}
+                      onChange={(e) => updateItem(i, e.target.value)}
+                      placeholder={itemPlaceholder}
+                    />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9 shrink-0"
+                      disabled={items.length === 1}
+                      onClick={() => removeItem(i)}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+                <Button variant="outline" size="sm" className="w-fit" onClick={addItem}>
+                  <Plus className="mr-1.5 h-3.5 w-3.5" />
+                  {addLabel}
+                </Button>
+              </div>
+            )}
+            {mutation.isError && (
+              <p className="mt-2 text-xs text-destructive">{(mutation.error as Error).message}</p>
+            )}
+          </div>
+          <div className="flex items-center justify-end gap-2 border-t bg-muted/30 px-5 py-3">
+            <Button
+              size="sm"
+              disabled={!canSave || mutation.isPending}
+              onClick={() => mutation.mutate(items.map((t) => t.trim()))}
+            >
+              <Save className="mr-2 h-4 w-4" />
+              {mutation.isPending ? "Saving…" : "Save"}
+            </Button>
+          </div>
+        </>
       )}
-      {mutation.isError && (
-        <p className="mt-2 text-xs text-destructive">{(mutation.error as Error).message}</p>
-      )}
-    </Section>
+    </Card>
   );
 }
 
@@ -742,6 +811,7 @@ function ServicesTab() {
       <EditableStringListCard
         title="Group class types"
         description="The options shown in the Group class dropdown when scheduling a new appointment."
+        storageKey="class-types"
         queryKey={["settings", "class-types"]}
         fetchFn={fetchClassTypes}
         updateFn={updateClassTypes}
@@ -753,6 +823,7 @@ function ServicesTab() {
       <EditableStringListCard
         title="Dietary preferences"
         description="Shared across the app: the Dietary preferences multi-select in the New Client dialog, the Meal Library Diet & tags filter, and the New Recipe dialog's diet-tag picker."
+        storageKey="dietary-preferences"
         queryKey={["settings", "dietary-preferences"]}
         fetchFn={fetchDietaryPreferences}
         updateFn={updateDietaryPreferences}
@@ -760,6 +831,30 @@ function ServicesTab() {
         addLabel="Add preference"
         emptyErrorLabel="Couldn't load dietary preferences."
         savedToast="Dietary preferences saved"
+      />
+      <EditableStringListCard
+        title="Allergies"
+        description="The predefined options offered in the Allergies pill multi-select in the New Client dialog. A dietitian can still add a one-off allergy for a specific client without touching this list."
+        storageKey="allergies"
+        queryKey={["settings", "allergies"]}
+        fetchFn={fetchAllergies}
+        updateFn={updateAllergies}
+        itemPlaceholder="e.g. Peanuts"
+        addLabel="Add allergy"
+        emptyErrorLabel="Couldn't load allergies."
+        savedToast="Allergies saved"
+      />
+      <EditableStringListCard
+        title="Medical history"
+        description="The predefined options offered in the Medical history pill multi-select in the New Client dialog. A dietitian can still add a one-off condition for a specific client without touching this list."
+        storageKey="medical-history"
+        queryKey={["settings", "medical-history"]}
+        fetchFn={fetchMedicalHistory}
+        updateFn={updateMedicalHistory}
+        itemPlaceholder="e.g. PCOS"
+        addLabel="Add condition"
+        emptyErrorLabel="Couldn't load medical history options."
+        savedToast="Medical history options saved"
       />
     </div>
   );

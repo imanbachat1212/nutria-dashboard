@@ -123,10 +123,18 @@ export interface ClientRecord {
   avatarInitials: string;
   serviceType: ServiceType[];
   status: ClientStatus;
+  // Soft-delete — hidden from the default roster when true, but every other record they're
+  // referenced from (plans, appointments, billing, journal) stays intact. Optional so the
+  // hand-written CLIENTS mock array below doesn't need updating; absent means false.
+  archived?: boolean;
   joinedAt: string;
   lastActivity: string;
   // anthropometrics
   age: number;
+  // Raw stored birthdate, used only so an edit that doesn't touch age can send this back
+  // unchanged instead of having it recomputed (and drifted) from age — see clients-api.ts's
+  // toAPIBody. Absent when the client has no dateOfBirth on file at all.
+  dateOfBirth?: string;
   sex: "F" | "M";
   lifeStage?: LifeStage;
   heightCm: number;

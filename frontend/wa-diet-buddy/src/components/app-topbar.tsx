@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 
 export function AppTopbar() {
   return (
-    <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-border bg-background/85 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/70">
+    <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-border bg-background/85 px-4 backdrop-blur supports-backdrop-filter:bg-background/70">
       <SidebarTrigger className="-ml-1" />
       <Separator orientation="vertical" className="h-5" />
 

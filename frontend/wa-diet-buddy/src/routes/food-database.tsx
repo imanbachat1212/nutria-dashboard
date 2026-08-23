@@ -455,6 +455,7 @@ function FoodDatabasePage() {
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               </div>
             ) : (
+              <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -564,6 +565,7 @@ function FoodDatabasePage() {
                   )}
                 </TableBody>
               </Table>
+              </div>
             )}
             {!isLoading && totalPages > 1 && (
               <div className="flex items-center justify-between border-t px-4 py-2.5">
@@ -927,7 +929,16 @@ function UsdaSearchPanel() {
               Macros per 100 g
             </div>
           </div>
-          <Table>
+          {/* table-fixed + explicit widths on every column except Food: under the default
+              auto-layout, an unbounded Food column grows to fit the longest untruncated
+              USDA description in the current page of results (some run 50+ characters, plus a
+              dataType badge) — that's what was forcing the table past the available content
+              width. With table-fixed, column widths come from these header cells' declared
+              widths regardless of content length; Food (the one column with no explicit width)
+              absorbs whatever's left, so `truncate` on its name span actually has a box to
+              truncate against instead of being able to grow the column indefinitely. */}
+          <div className="overflow-x-auto">
+          <Table className="table-fixed">
             <TableHeader>
               <TableRow>
                 <TableHead className="w-10 pl-4">
@@ -940,12 +951,12 @@ function UsdaSearchPanel() {
                 </TableHead>
                 <TableHead className="w-8" />
                 <TableHead>Food</TableHead>
-                <TableHead className="text-right">kcal</TableHead>
-                <TableHead className="text-right">P</TableHead>
-                <TableHead className="text-right">C</TableHead>
-                <TableHead className="text-right">F</TableHead>
-                <TableHead className="text-right">Fib</TableHead>
-                <TableHead className="text-right pr-4">Action</TableHead>
+                <TableHead className="w-16 text-right">kcal</TableHead>
+                <TableHead className="w-12 text-right">P</TableHead>
+                <TableHead className="w-12 text-right">C</TableHead>
+                <TableHead className="w-12 text-right">F</TableHead>
+                <TableHead className="w-14 text-right">Fib</TableHead>
+                <TableHead className="w-14 text-right pr-4">Action</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -982,7 +993,17 @@ function UsdaSearchPanel() {
                     <TableCell>
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5">
-                          <span className="font-medium text-foreground truncate">{r.name}</span>
+                          {/* min-w-0 on the name span itself, not just its ancestors — it's a
+                              flex item here (of the "flex items-center" row below), and flex
+                              items default to min-width:auto, which overrides `truncate`'s
+                              overflow:hidden and lets the span grow to its full text width
+                              regardless of the column's now-fixed width. */}
+                          <span
+                            className="min-w-0 truncate font-medium text-foreground"
+                            title={r.name}
+                          >
+                            {r.name}
+                          </span>
                           {r.dataType && (
                             <Badge variant="outline" className="text-[10px] shrink-0">
                               {r.dataType}
@@ -1008,27 +1029,45 @@ function UsdaSearchPanel() {
                       {r.macros.fiber}
                     </TableCell>
                     <TableCell className="text-right pr-4">
+                      {/* Icon-only + title/aria-label instead of a text-labeled button — the
+                          "Add to library"/"Already in library" text was the single widest thing
+                          in this row, and this column doesn't need to say it out loud when every
+                          other row-level action in this app (kebab menus, the chevron above)
+                          already communicates via icon + tooltip alone. */}
                       {alreadyAdded ? (
-                        <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-                          <CheckCircle2 className="size-3.5 text-emerald-600" />
-                          Already in library
+                        <span
+                          className="inline-flex size-7 items-center justify-center"
+                          title="Already in library"
+                          aria-label="Already in library"
+                        >
+                          <CheckCircle2 className="size-4 text-emerald-600" />
                         </span>
                       ) : (
                         <Button
-                          size="sm"
+                          size="icon"
                           variant="outline"
+                          className="size-7"
                           disabled={importing || bulkRunning}
                           onClick={() => importMutation.mutate(r.fdcId)}
+                          title={importing ? "Adding…" : "Add to library"}
+                          aria-label={importing ? "Adding…" : "Add to library"}
                         >
-                          <Download className="size-3.5" />
-                          {importing ? "Adding…" : "Add to library"}
+                          {importing ? (
+                            <Loader2 className="size-3.5 animate-spin" />
+                          ) : (
+                            <Download className="size-3.5" />
+                          )}
                         </Button>
                       )}
                     </TableCell>
                   </TableRow>
                   {expanded && (
                     <TableRow key={`${r.fdcId}-details`}>
-                      <TableCell colSpan={8} className="bg-muted/20 p-4">
+                      {/* 9 columns in the header row above (checkbox, chevron, Food, kcal, P, C,
+                          F, Fib, Action) — colSpan was 8 here, a pre-existing off-by-one that
+                          left the Action column's width unspanned in this row. Fixed in passing
+                          since it's directly adjacent to this edit. */}
+                      <TableCell colSpan={9} className="bg-muted/20 p-4">
                         <UsdaDetailsPreview fdcId={r.fdcId} />
                       </TableCell>
                     </TableRow>
@@ -1038,6 +1077,7 @@ function UsdaSearchPanel() {
               })}
             </TableBody>
           </Table>
+          </div>
         </Card>
       )}
     </div>

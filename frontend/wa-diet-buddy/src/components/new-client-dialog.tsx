@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   Plus,
@@ -7,7 +7,6 @@ import {
   ChevronRight,
   CheckCircle2,
   User,
-  Phone,
   Mail,
   Activity,
   Calendar,
@@ -24,12 +23,14 @@ import {
   Wheat,
   Droplet,
   Calculator,
+  Loader2,
+  X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PhoneInput, isValidPhoneNumber } from "@/components/ui/phone-input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -52,7 +53,6 @@ import {
   SERVICE_TYPE_LABEL,
   type ServiceType,
   type ClientStatus,
-  type ClientRecord,
   type ClientGoal,
   type ClientMacros,
   type LifeStage,
@@ -60,12 +60,20 @@ import {
   DRI_MINERAL_FIELDS,
 } from "@/lib/clients-mock";
 import { getDriTargets } from "@/lib/dri";
-import { fetchDietaryPreferences } from "@/lib/settings-api";
+import { fetchDietaryPreferences, fetchAllergies, fetchMedicalHistory } from "@/lib/settings-api";
+import {
+  fetchClient,
+  createClient,
+  updateClient,
+  type CreatePayload,
+} from "@/lib/clients-api";
 
 interface NewClientDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreate: (client: ClientRecord) => void | Promise<void>;
+  // When set, the dialog loads and edits this existing client (via updateClient) instead of
+  // creating a new one — same dual create/edit pattern as new-food-dialog.tsx's editFoodId.
+  editClientId?: string | null;
 }
 
 const STEPS = [
@@ -90,7 +98,10 @@ const GOAL_TYPES: { value: ClientGoal["type"]; label: string; deficit: number }[
   { value: "clinical", label: "Clinical / other", deficit: 0 },
 ];
 
-export function NewClientDialog({ open, onOpenChange, onCreate }: NewClientDialogProps) {
+export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientDialogProps) {
+  const queryClient = useQueryClient();
+  const isEdit = !!editClientId;
+  const [loadingEdit, setLoadingEdit] = useState(false);
   const [step, setStep] = useState(1);
 
   // Profile
@@ -102,6 +113,11 @@ export function NewClientDialog({ open, onOpenChange, onCreate }: NewClientDialo
 
   // Body & goals
   const [age, setAge] = useState("");
+  // Edit mode only — the age/dateOfBirth exactly as loaded, so a save that leaves age untouched
+  // can tell clients-api.ts's toAPIBody to send the original dateOfBirth back unchanged instead
+  // of recomputing (and drifting) it from age. Stay undefined for create mode.
+  const [originalAge, setOriginalAge] = useState<number | undefined>(undefined);
+  const [originalDateOfBirth, setOriginalDateOfBirth] = useState<string | undefined>(undefined);
   const [sex, setSex] = useState<"F" | "M">("F");
   const [lifeStage, setLifeStage] = useState<LifeStage>("none");
   const [heightCm, setHeightCm] = useState("");
@@ -116,12 +132,24 @@ export function NewClientDialog({ open, onOpenChange, onCreate }: NewClientDialo
   const [occupation, setOccupation] = useState("");
   const [sleepHours, setSleepHours] = useState("");
   const [dietaryPrefs, setDietaryPrefs] = useState<string[]>([]);
-  const [allergiesRaw, setAllergiesRaw] = useState("");
-  const [medicalHistoryRaw, setMedicalHistoryRaw] = useState("");
+  // Allergies/medicalHistory: the full set of selected values for this client — both
+  // predefined-list picks and one-off "Other" custom entries live in the same array, since
+  // that's the exact shape the backend stores. Which chips render as "predefined pill" vs
+  // "custom chip" is derived at render time (PillMultiSelectWithOther below), not tracked here.
+  const [allergies, setAllergies] = useState<string[]>([]);
+  const [medicalHistory, setMedicalHistory] = useState<string[]>([]);
 
   const { data: dietaryPreferenceOptions = [] } = useQuery({
     queryKey: ["settings", "dietary-preferences"],
     queryFn: fetchDietaryPreferences,
+  });
+  const { data: allergyOptions = [] } = useQuery({
+    queryKey: ["settings", "allergies"],
+    queryFn: fetchAllergies,
+  });
+  const { data: medicalHistoryOptions = [] } = useQuery({
+    queryKey: ["settings", "medical-history"],
+    queryFn: fetchMedicalHistory,
   });
 
   const toggleDietaryPref = (pref: string) => {
@@ -181,6 +209,60 @@ export function NewClientDialog({ open, onOpenChange, onCreate }: NewClientDialo
     return getDriTargets(ageN, sex === "M" ? "male" : "female", lifeStage);
   }, [ageN, sex, lifeStage]);
 
+  // Edit mode: load the client's current data instead of starting blank. `phone` is set from
+  // the raw stored string as-is — PhoneInput is designed to accept an unparseable legacy value
+  // without crashing (it just won't show a recognized flag/format until corrected), which is
+  // exactly the case for the handful of known-bad legacy numbers already in the database.
+  // `overrideTargets` is set true so the auto-sync-to-computed-formula effect above doesn't
+  // immediately clobber the client's actual loaded targets the moment age/height/weight are
+  // prefilled in the same tick.
+  useEffect(() => {
+    if (!open || !editClientId) return;
+    let cancelled = false;
+    setLoadingEdit(true);
+    fetchClient(editClientId)
+      .then((c) => {
+        if (cancelled) return;
+        setName(c.name);
+        setPhone(c.phone);
+        setEmail(c.email ?? "");
+        setServiceTypes(c.serviceType);
+        setStatus(c.status);
+        setAge(c.age ? String(c.age) : "");
+        setOriginalAge(c.age);
+        setOriginalDateOfBirth(c.dateOfBirth);
+        setSex(c.sex);
+        setLifeStage(c.lifeStage ?? "none");
+        setHeightCm(c.heightCm ? String(c.heightCm) : "");
+        setWeightKg(c.weightKg ? String(c.weightKg) : "");
+        setStartWeightKg(c.startWeightKg ? String(c.startWeightKg) : "");
+        setTargetWeightKg(c.targetWeightKg ? String(c.targetWeightKg) : "");
+        setActivityFactor(c.activityFactor);
+        setGoalType(c.goal.type);
+        setTargetDate(c.goal.targetDate ?? "");
+        // toClientRecord substitutes "—" for display when occupation is unset — don't let that
+        // placeholder round-trip back into the field as if it were real data.
+        setOccupation(c.occupation === "—" ? "" : c.occupation);
+        setSleepHours(c.sleepHours ? String(c.sleepHours) : "");
+        setDietaryPrefs(c.dietaryPrefs);
+        // c.allergies/c.medicalHistory are already normalized (split + deduped) by
+        // clients-api.ts's toClientRecord, including legacy string/malformed-array data — no
+        // further parsing needed here.
+        setAllergies(c.allergies);
+        setMedicalHistory(c.medicalHistory);
+        setTargets(c.targets);
+        setOverrideTargets(true);
+        setStep(1);
+      })
+      .catch((err) => console.error("Failed to load client for editing:", err))
+      .finally(() => {
+        if (!cancelled) setLoadingEdit(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, editClientId]);
+
   const reset = () => {
     setStep(1);
     setName("");
@@ -189,6 +271,8 @@ export function NewClientDialog({ open, onOpenChange, onCreate }: NewClientDialo
     setServiceTypes([]);
     setStatus("active");
     setAge("");
+    setOriginalAge(undefined);
+    setOriginalDateOfBirth(undefined);
     setSex("F");
     setLifeStage("none");
     setHeightCm("");
@@ -201,17 +285,20 @@ export function NewClientDialog({ open, onOpenChange, onCreate }: NewClientDialo
     setOccupation("");
     setSleepHours("");
     setDietaryPrefs([]);
-    setAllergiesRaw("");
-    setMedicalHistoryRaw("");
+    setAllergies([]);
+    setMedicalHistory([]);
     setTargets({ calories: 0, protein: 0, carbs: 0, fat: 0 });
     setOverrideTargets(false);
   };
 
-  // Deliberately does NOT reset the form — closing via X, Cancel, or Escape should preserve
-  // whatever was typed, so reopening the dialog (e.g. clicking "New client" again without
-  // having saved) shows the form exactly as it was left, not blank. reset() is only called
-  // after a successful save, in handleSave below — that's the one case a blank form is wanted.
+  // Create mode deliberately does NOT reset on close via X/Cancel/Escape — whatever was typed
+  // should still be there if the dietitian reopens "New client" without having saved. Edit mode
+  // is different: leaving stale prefilled-from-client-A data sitting in state would otherwise
+  // leak into whatever opens next — a subsequent "New client" (editClientId becomes null, so
+  // the fetch effect above never fires to overwrite it) would silently start pre-filled with
+  // the previous client's data instead of blank. So edit-mode closes always reset.
   const handleClose = (o: boolean) => {
+    if (!o && isEdit) reset();
     onOpenChange(o);
   };
 
@@ -224,27 +311,18 @@ export function NewClientDialog({ open, onOpenChange, onCreate }: NewClientDialo
       .slice(0, 2);
   }, [name]);
 
-  const parseList = (raw: string) =>
-    raw
-      .split(/[,\n]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-
   const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
-    const now = new Date().toISOString().split("T")[0];
-    const newClient: ClientRecord = {
-      id: `c-${Date.now()}`,
+    const payload: CreatePayload = {
       name: name.trim(),
       phone: phone.trim(),
       email: email.trim() || undefined,
-      avatarInitials: avatarInitials || "??",
       serviceType: serviceTypes,
       status,
-      joinedAt: now,
-      lastActivity: "Just now",
       age: ageN,
+      originalAge,
+      originalDateOfBirth,
       sex,
       lifeStage,
       heightCm: heightN,
@@ -252,33 +330,35 @@ export function NewClientDialog({ open, onOpenChange, onCreate }: NewClientDialo
       startWeightKg: startWeightN,
       targetWeightKg: targetWeightN,
       activityFactor,
-      bmr,
-      targets,
-      todayConsumed: { calories: 0, protein: 0, carbs: 0, fat: 0 },
-      adherencePct: 0,
-      occupation: occupation.trim() || "—",
+      goalType,
+      occupation: occupation.trim(),
       sleepHours: sleepN,
       dietaryPrefs,
-      allergies: parseList(allergiesRaw),
-      medicalHistory: parseList(medicalHistoryRaw),
-      labs: [],
-      nutritionDiagnosis: "",
-      adimeNotes: [],
-      goal: { type: goalType, targetWeight: targetWeightN, targetDate: targetDate || undefined },
-      journal: [],
-      plans: [],
-      payments: [],
-      files: [],
-      outstandingBalanceUsd: 0,
+      allergies,
+      medicalHistory,
+      // Matches the heuristic this form has always used (previously computed one level up, in
+      // clients.index.tsx's onCreate wiring): body metrics filled in => bmr/calories are
+      // computed => targets get sent as "manual" rather than left for the backend to compute.
+      // In practice this has always been true for any client created through this dialog
+      // (step 2 requires age/height/weight before you can advance), so applying it identically
+      // on edit doesn't change anything a dietitian would see in this UI — there's no visible
+      // auto-vs-manual indicator anywhere in this form or the client detail page.
+      overrideTargets: targets.calories !== 0 && bmr !== 0,
+      targets,
     };
     setSaving(true);
     try {
-      await onCreate(newClient);
+      if (isEdit && editClientId) {
+        await updateClient(editClientId, payload);
+      } else {
+        await createClient(payload);
+      }
+      queryClient.invalidateQueries({ queryKey: ["clients"] });
       // Only the success path resets the form — see handleClose's comment.
       reset();
       handleClose(false);
     } catch (err) {
-      console.error("Failed to create client:", err);
+      console.error(isEdit ? "Failed to save client changes:" : "Failed to create client:", err);
       toast.error(
         err instanceof Error ? err.message : "Couldn't save client — please check the form and try again",
       );
@@ -288,7 +368,7 @@ export function NewClientDialog({ open, onOpenChange, onCreate }: NewClientDialo
   };
 
   const canAdvance =
-    (step === 1 && name.trim().length > 1 && phone.trim().length >= 8) ||
+    (step === 1 && name.trim().length > 1 && isValidPhoneNumber(phone)) ||
     (step === 2 &&
       ageN > 0 &&
       heightN > 0 &&
@@ -305,12 +385,20 @@ export function NewClientDialog({ open, onOpenChange, onCreate }: NewClientDialo
         onPointerDownOutside={(e) => e.preventDefault()}
       >
         <DialogHeader>
-          <DialogTitle>New client</DialogTitle>
+          <DialogTitle>{isEdit ? "Edit client" : "New client"}</DialogTitle>
           <DialogDescription>
-            Add a new client record with anthropometrics, goals, and macro targets.
+            {isEdit
+              ? "Update this client's profile, anthropometrics, goals, and macro targets."
+              : "Add a new client record with anthropometrics, goals, and macro targets."}
           </DialogDescription>
         </DialogHeader>
 
+        {loadingEdit ? (
+          <div className="flex items-center justify-center py-24">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : (
+          <>
         {/* Stepper */}
         <div className="flex items-center gap-2 py-2">
           {STEPS.map((s, i) => (
@@ -359,17 +447,17 @@ export function NewClientDialog({ open, onOpenChange, onCreate }: NewClientDialo
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="phone">Phone *</Label>
-                  <div className="relative">
-                    <Phone className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                    <Input
-                      id="phone"
-                      type="tel"
-                      value={phone}
-                      onChange={(e) => setPhone(e.target.value.replace(/[^0-9+\s()-]/g, ""))}
-                      placeholder="+961 71 000 000"
-                      className="pl-8"
-                    />
-                  </div>
+                  <PhoneInput
+                    id="phone"
+                    value={phone}
+                    onChange={setPhone}
+                    invalid={phone.trim() !== "" && !isValidPhoneNumber(phone)}
+                  />
+                  {phone.trim() !== "" && !isValidPhoneNumber(phone) && (
+                    <p className="text-xs text-destructive">
+                      Enter a valid number for the selected country.
+                    </p>
+                  )}
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="email">Email</Label>
@@ -664,31 +752,25 @@ export function NewClientDialog({ open, onOpenChange, onCreate }: NewClientDialo
                 )}
               </div>
 
-              <div className="space-y-1.5">
-                <Label htmlFor="allergies" className="flex items-center gap-1.5">
-                  <AlertTriangle className="size-4" /> Allergies
-                </Label>
-                <Textarea
-                  id="allergies"
-                  value={allergiesRaw}
-                  onChange={(e) => setAllergiesRaw(e.target.value)}
-                  placeholder="e.g. Peanuts, Shellfish, Dairy (comma or line separated)"
-                  rows={2}
-                />
-              </div>
+              <PillMultiSelectWithOther
+                label="Allergies"
+                icon={AlertTriangle}
+                options={allergyOptions}
+                optionsLoading={allergyOptions.length === 0}
+                selected={allergies}
+                onChange={setAllergies}
+                otherPlaceholder="Other allergy…"
+              />
 
-              <div className="space-y-1.5">
-                <Label htmlFor="medical" className="flex items-center gap-1.5">
-                  <Stethoscope className="size-4" /> Medical history
-                </Label>
-                <Textarea
-                  id="medical"
-                  value={medicalHistoryRaw}
-                  onChange={(e) => setMedicalHistoryRaw(e.target.value)}
-                  placeholder="e.g. PCOS, Hypothyroidism, Hypertension (comma or line separated)"
-                  rows={2}
-                />
-              </div>
+              <PillMultiSelectWithOther
+                label="Medical history"
+                icon={Stethoscope}
+                options={medicalHistoryOptions}
+                optionsLoading={medicalHistoryOptions.length === 0}
+                selected={medicalHistory}
+                onChange={setMedicalHistory}
+                otherPlaceholder="Other condition…"
+              />
             </div>
           )}
 
@@ -862,12 +944,143 @@ export function NewClientDialog({ open, onOpenChange, onCreate }: NewClientDialo
             </Button>
           ) : (
             <Button onClick={handleSave} disabled={saving}>
-              <CheckCircle2 className="size-4" /> {saving ? "Saving…" : "Save client"}
+              <CheckCircle2 className="size-4" />{" "}
+              {saving ? "Saving…" : isEdit ? "Save changes" : "Save client"}
             </Button>
           )}
         </DialogFooter>
+          </>
+        )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+// Same pill multi-select pattern as the (inline, not extracted) Dietary preferences block above,
+// plus a lightweight "Other" entry: a dietitian can type a one-off value specific to this one
+// client — an uncommon allergy, an unlisted condition — without needing to add it to the shared
+// Settings list first. `selected` is the full save-ready array (predefined picks and custom
+// entries together, exactly what the backend stores); which chips are "predefined" vs "custom"
+// is derived here at render time by checking membership in `options`, not tracked separately.
+function PillMultiSelectWithOther({
+  label,
+  icon: Icon,
+  options,
+  optionsLoading,
+  selected,
+  onChange,
+  otherPlaceholder,
+}: {
+  label: string;
+  icon: React.ElementType;
+  options: string[];
+  optionsLoading: boolean;
+  selected: string[];
+  onChange: (next: string[]) => void;
+  otherPlaceholder: string;
+}) {
+  const [otherValue, setOtherValue] = useState("");
+
+  const isSelected = (value: string) =>
+    selected.some((s) => s.toLowerCase() === value.toLowerCase());
+
+  const toggleOption = (option: string) => {
+    onChange(
+      isSelected(option)
+        ? selected.filter((s) => s.toLowerCase() !== option.toLowerCase())
+        : [...selected, option],
+    );
+  };
+
+  const removeCustom = (value: string) => {
+    onChange(selected.filter((s) => s !== value));
+  };
+
+  const addOther = () => {
+    const trimmed = otherValue.trim();
+    if (!trimmed || isSelected(trimmed)) {
+      setOtherValue("");
+      return;
+    }
+    onChange([...selected, trimmed]);
+    setOtherValue("");
+  };
+
+  // Anything selected that isn't (case-insensitively) one of the predefined options is a
+  // custom, client-specific entry — rendered as its own removable chip, visually distinct from
+  // the toggleable predefined pills.
+  const customChips = selected.filter(
+    (s) => !options.some((o) => o.toLowerCase() === s.toLowerCase()),
+  );
+
+  return (
+    <div className="space-y-1.5">
+      <Label className="flex items-center gap-1.5">
+        <Icon className="size-4" /> {label}
+        {selected.length === 0 && (
+          <span className="text-xs font-normal text-muted-foreground">(none selected)</span>
+        )}
+      </Label>
+      {optionsLoading ? (
+        <p className="text-xs text-muted-foreground">Loading options…</p>
+      ) : (
+        <div className="flex flex-wrap gap-1.5">
+          {options.map((option) => {
+            const active = isSelected(option);
+            return (
+              <button
+                key={option}
+                type="button"
+                onClick={() => toggleOption(option)}
+                className={cn(
+                  "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                  active
+                    ? "border-primary bg-primary-soft text-primary"
+                    : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                )}
+              >
+                {option}
+              </button>
+            );
+          })}
+          {customChips.map((value) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => removeCustom(value)}
+              title="Custom entry for this client — click to remove"
+              className="inline-flex items-center gap-1 rounded-full border border-dashed border-primary/50 bg-primary-soft/60 px-3 py-1 text-xs font-medium text-primary"
+            >
+              {value}
+              <X className="size-3" />
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="flex items-center gap-1.5">
+        <Input
+          value={otherValue}
+          onChange={(e) => setOtherValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              addOther();
+            }
+          }}
+          placeholder={otherPlaceholder}
+          className="h-7 max-w-50 text-xs"
+        />
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-7 px-2 text-xs"
+          onClick={addOther}
+        >
+          <Plus className="size-3" /> Add
+        </Button>
+      </div>
+    </div>
   );
 }
 

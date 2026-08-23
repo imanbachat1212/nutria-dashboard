@@ -177,4 +177,21 @@
     font-family: var(--font-display);
     letter-spacing: -0.015em;
   }
+
+  /* react-phone-number-input's own style.css handles the functional bits (the invisible
+     <select> overlaying the flag, sizing). This just makes it read as one control matching
+     the app's Input component — a divider between the flag and the digits, and a focus ring
+     on the flag button that matches the rest of the form instead of the library's default
+     teal. */
+  .nutria-phone-input .PhoneInputCountry {
+    padding-right: 0.5rem;
+    margin-right: 0.5rem;
+    border-right: 1px solid var(--color-border);
+  }
+
+  .nutria-phone-input .PhoneInputCountrySelect:focus + .PhoneInputCountryIcon {
+    outline: 2px solid var(--color-ring);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
 }

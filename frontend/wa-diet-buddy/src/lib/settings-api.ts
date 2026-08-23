@@ -26,3 +26,27 @@ export async function updateDietaryPreferences(dietaryPreferences: string[]): Pr
   );
   return result.dietaryPreferences;
 }
+
+export async function fetchAllergies(): Promise<string[]> {
+  const result = await api.get<{ allergies: string[] }>("/api/settings/allergies");
+  return result.allergies;
+}
+
+export async function updateAllergies(allergies: string[]): Promise<string[]> {
+  const result = await api.patch<{ allergies: string[] }>("/api/settings/allergies", {
+    allergies,
+  });
+  return result.allergies;
+}
+
+export async function fetchMedicalHistory(): Promise<string[]> {
+  const result = await api.get<{ medicalHistory: string[] }>("/api/settings/medical-history");
+  return result.medicalHistory;
+}
+
+export async function updateMedicalHistory(medicalHistory: string[]): Promise<string[]> {
+  const result = await api.patch<{ medicalHistory: string[] }>("/api/settings/medical-history", {
+    medicalHistory,
+  });
+  return result.medicalHistory;
+}
