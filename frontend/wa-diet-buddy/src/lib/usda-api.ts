@@ -38,11 +38,19 @@ export interface UsdaFoodDetails extends Partial<Micronutrients> {
   sodium: number | null;
 }
 
-export async function searchUsda(query: string): Promise<UsdaSearchResult[]> {
-  const result = await api.get<{ results: UsdaSearchResult[] }>(
-    `/api/foods/usda-search?q=${encodeURIComponent(query)}`,
+// total is USDA's real totalHits for the query (confirmed live — not capped to whatever fits on
+// one page), so the frontend can paginate through the full catalog via `page`, not just the
+// first 200 matches.
+export async function searchUsda(
+  query: string,
+  params?: { page?: number; limit?: number },
+): Promise<{ results: UsdaSearchResult[]; total: number }> {
+  const qs = new URLSearchParams({ q: query });
+  if (params?.page) qs.set("page", String(params.page));
+  if (params?.limit) qs.set("limit", String(params.limit));
+  return api.get<{ results: UsdaSearchResult[]; total: number }>(
+    `/api/foods/usda-search?${qs.toString()}`,
   );
-  return result.results;
 }
 
 // Read-only preview — no DB write, safe to call as often as a dietitian expands/collapses a

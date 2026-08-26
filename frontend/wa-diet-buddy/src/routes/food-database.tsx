@@ -130,6 +130,10 @@ const SOURCES: (FoodSource | "all")[] = ["all", "usda", "lebanese", "custom"];
 
 const FOODS_PAGE_SIZE = 100;
 
+// USDA's own hard ceiling per request (confirmed live: pageSize=201 gets a 400 back) — not an
+// arbitrary choice on our side. Showing more than this means paging via `page`, not raising it.
+const USDA_SEARCH_PAGE_SIZE = 200;
+
 // Windowed page numbers with ellipsis once there are enough pages that showing every number
 // would crowd the bar — always keeps first, last, and a small run around the current page.
 function getPageNumbers(current: number, total: number): (number | "ellipsis")[] {
@@ -721,24 +725,26 @@ function UsdaSearchPanel() {
   // Only one result's micronutrient preview open at a time — keeps this to at most one lazy
   // details fetch in flight rather than a fetch per expanded row.
   const [expandedFdcId, setExpandedFdcId] = useState<number | null>(null);
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(query.trim()), 400);
     return () => clearTimeout(t);
   }, [query]);
 
-  // A fresh search invalidates any selection/results made against the previous result set.
+  // A fresh search invalidates any selection/results/page made against the previous result set.
   useEffect(() => {
     setSelected(new Set());
     setBulkState(null);
     setExpandedFdcId(null);
+    setPage(1);
   }, [debounced]);
 
   const searching = debounced.length > 1;
 
   const { data, isLoading, isFetching, isError, error } = useQuery({
-    queryKey: ["foods", "usda-search", debounced],
-    queryFn: () => searchUsda(debounced),
+    queryKey: ["foods", "usda-search", debounced, page],
+    queryFn: () => searchUsda(debounced, { page, limit: USDA_SEARCH_PAGE_SIZE }),
     enabled: searching,
   });
 
@@ -753,7 +759,11 @@ function UsdaSearchPanel() {
     },
   });
 
-  const results = data ?? [];
+  const results = data?.results ?? [];
+  const total = data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / USDA_SEARCH_PAGE_SIZE));
+  const rangeStart = total === 0 ? 0 : (page - 1) * USDA_SEARCH_PAGE_SIZE + 1;
+  const rangeEnd = Math.min(page * USDA_SEARCH_PAGE_SIZE, total);
   const bulkRunning = !!bulkState && bulkState.results.length < bulkState.total;
 
   // Bulk existence check for "Added" state — one request per result set, not one per row.
@@ -923,7 +933,10 @@ function UsdaSearchPanel() {
         <Card className="overflow-hidden">
           <div className="flex items-center justify-between border-b px-4 py-2.5">
             <div className="text-sm text-muted-foreground">
-              <span className="font-medium text-foreground">{results.length}</span> USDA results
+              Showing <span className="font-medium text-foreground">{rangeStart}</span>–
+              <span className="font-medium text-foreground">{rangeEnd}</span> of{" "}
+              <span className="font-medium text-foreground">{total.toLocaleString()}</span> USDA
+              results
             </div>
             <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
               Macros per 100 g
@@ -1078,6 +1091,51 @@ function UsdaSearchPanel() {
             </TableBody>
           </Table>
           </div>
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between border-t px-4 py-2.5">
+              <div className="text-xs text-muted-foreground">
+                Page {page} of {totalPages}
+              </div>
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={page === 1}
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                >
+                  Previous
+                </Button>
+                {getPageNumbers(page, totalPages).map((p, i) =>
+                  p === "ellipsis" ? (
+                    <span
+                      key={`ellipsis-${i}`}
+                      className="px-1.5 text-xs text-muted-foreground"
+                    >
+                      …
+                    </span>
+                  ) : (
+                    <Button
+                      key={p}
+                      variant={p === page ? "default" : "outline"}
+                      size="sm"
+                      className="w-8 px-0"
+                      onClick={() => setPage(p)}
+                    >
+                      {p}
+                    </Button>
+                  ),
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={page === totalPages}
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          )}
         </Card>
       )}
     </div>
