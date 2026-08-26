@@ -178,6 +178,10 @@ export const usdaSearchSchema = z.object({
     // USDA's own /foods/search caps pageSize at 200 — mirrored here rather than left
     // unbounded, so a caller can't ask this proxy for more than USDA itself would return.
     limit: z.coerce.number().int().min(1).max(200).default(200),
+    // Which 200-row slice of USDA's total matches to fetch — pairs with pageSize via USDA's
+    // own pageNumber param (see usda-client.js). No upper bound enforced here: USDA itself
+    // just returns an empty result set past its real last page, same as any other page number.
+    page: z.coerce.number().int().min(1).default(1),
   }),
 });
 

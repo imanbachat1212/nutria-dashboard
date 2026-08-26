@@ -221,9 +221,11 @@ export async function getImportedUsdaFdcIds(fdcIds) {
 }
 
 // Ephemeral — proxies USDA's live catalog, no DB write. Results carry fdcId as their
-// identifier since they have no Food document (and may never get one).
-export async function searchUsda(query, limit) {
-  return searchUsdaFoods(query, { pageSize: limit });
+// identifier since they have no Food document (and may never get one). Returns the true
+// totalHits count alongside the current page's results so the frontend can paginate through
+// USDA's full catalog rather than only ever seeing the first pageSize matches.
+export async function searchUsda(query, { limit, page } = {}) {
+  return searchUsdaFoods(query, { pageSize: limit, pageNumber: page });
 }
 
 // The one place a USDA fdcId's full nutrient breakdown gets fetched/parsed — used by BOTH the

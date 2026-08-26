@@ -115,27 +115,50 @@ function requireApiKey() {
   return env.USDA_API_KEY;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Confirmed live (independent of this app, by hitting USDA directly and repeating the exact
+// same request): USDA's own API gateway intermittently 404s a request that succeeds moments
+// later with no change on our end — observed on BOTH /foods/search and /food/{fdcId}, at
+// roughly a 45-55% single-attempt failure rate, and NOT tied to any particular fdcId/dataType
+// (the same id flips between 200 and 404 across consecutive calls). This is gateway-side
+// flakiness upstream of us, not something a valid fdcId/query should ever legitimately 404 on
+// after a search just returned it. Bounded retries paper over it cheaply; a genuinely-invalid
+// fdcId will just keep 404ing across all attempts at negligible extra cost.
+const MAX_ATTEMPTS = 3;
+const RETRY_DELAY_MS = 350;
+
 async function usdaFetch(path, params) {
   const apiKey = requireApiKey();
   const qs = new URLSearchParams({ ...params, api_key: apiKey });
+  const url = `${BASE_URL}${path}?${qs}`;
 
-  let res;
-  try {
-    res = await fetch(`${BASE_URL}${path}?${qs}`);
-  } catch {
-    throw new ApiError(502, "Could not reach USDA FoodData Central — try again shortly");
-  }
+  let lastError;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    let res;
+    try {
+      res = await fetch(url);
+    } catch {
+      lastError = new ApiError(502, "Could not reach USDA FoodData Central — try again shortly");
+      if (attempt < MAX_ATTEMPTS) await sleep(RETRY_DELAY_MS * attempt);
+      continue;
+    }
 
-  if (!res.ok) {
+    if (res.ok) return res.json();
+
     if (res.status === 401 || res.status === 403) {
       throw new ApiError(502, "USDA FoodData Central rejected the configured API key");
     }
     if (res.status === 429) {
       throw new ApiError(429, "USDA FoodData Central rate limit hit — try again shortly");
     }
-    throw new ApiError(502, `USDA FoodData Central request failed (${res.status})`);
+
+    lastError = new ApiError(502, `USDA FoodData Central request failed (${res.status})`);
+    if (attempt < MAX_ATTEMPTS) await sleep(RETRY_DELAY_MS * attempt);
   }
-  return res.json();
+  throw lastError;
 }
 
 // /foods/search nutrients: [{ nutrientId, value }]. /food/{fdcId} nutrients:
@@ -277,17 +300,27 @@ function toFullNutrition(foodNutrients) {
 
 // query -> lightweight matches with a macro preview, so the frontend can show real values
 // before a dietitian commits to importing one. Ephemeral — no DB write happens here.
-// pageSize defaults to USDA's own max (200) rather than an arbitrary smaller cap — callers can
-// still override it, but there's no reason to leave real matches off by default.
-export async function searchUsdaFoods(query, { pageSize = 200 } = {}) {
-  const data = await usdaFetch("/foods/search", { query, pageSize: String(pageSize) });
-  return (data.foods ?? []).map((f) => ({
-    fdcId: f.fdcId,
-    name: f.description,
-    dataType: f.dataType,
-    brand: f.brandOwner || f.brandName || undefined,
-    macros: toMacros(f.foodNutrients),
-  }));
+// pageSize defaults to USDA's own max (200) — confirmed live: pageSize=201 gets rejected by USDA
+// with a 400, so 200 isn't an arbitrary choice on our side, it's their real ceiling per request.
+// Showing more than 200 total matches means paging via pageNumber (also confirmed live: distinct
+// pageNumbers return genuinely different fdcIds, and USDA's own totalHits is the true match
+// count — there's no secondary hidden cap beyond what totalHits/totalPages already report).
+export async function searchUsdaFoods(query, { pageSize = 200, pageNumber = 1 } = {}) {
+  const data = await usdaFetch("/foods/search", {
+    query,
+    pageSize: String(pageSize),
+    pageNumber: String(pageNumber),
+  });
+  return {
+    results: (data.foods ?? []).map((f) => ({
+      fdcId: f.fdcId,
+      name: f.description,
+      dataType: f.dataType,
+      brand: f.brandOwner || f.brandName || undefined,
+      macros: toMacros(f.foodNutrients),
+    })),
+    total: data.totalHits ?? 0,
+  };
 }
 
 // fdcId -> full detail, mapped straight onto this app's Food fields (minus source/createdBy,
