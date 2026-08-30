@@ -91,7 +91,14 @@ export interface Micronutrients {
   folate: number | null;
   vitaminK: number | null;
 
-  // Minerals
+  // Minerals. sodium is deliberately NOT one of MICRO_FIELD_GROUPS's "minerals" fields below —
+  // it's a value here purely so MicronutrientSection (food-database.tsx) can render it in the
+  // Minerals accordion for READ-ONLY display, sourced directly, not through the generic
+  // group.fields loop. That loop is also what drives new-food-dialog.tsx's manual-entry
+  // Micronutrients step and its save payload — and sodium already has its own dedicated
+  // top-level field/input there (same tier as sugar), so adding it to MICRO_FIELD_GROUPS would
+  // both duplicate its input in that form AND, worse, let the generic microsPayload spread
+  // silently clobber the real `sodium: sodium || null` field at submit time.
   calcium: number | null;
   copper: number | null;
   iron: number | null;
@@ -100,6 +107,7 @@ export interface Micronutrients {
   phosphorus: number | null;
   potassium: number | null;
   selenium: number | null;
+  sodium: number | null;
   zinc: number | null;
 
   // Other — manual-entry only, never populated from USDA
@@ -159,6 +167,7 @@ export const EMPTY_MICROS: Micronutrients = {
   phosphorus: null,
   potassium: null,
   selenium: null,
+  sodium: null,
   zinc: null,
   oxalate: null,
   phytate: null,

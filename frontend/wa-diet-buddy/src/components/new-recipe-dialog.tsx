@@ -1121,8 +1121,24 @@ function FoodSearchInput({
   const [results, setResults] = useState<FoodSearchResult[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  // Keyboard-navigation highlight — this dropdown is a hand-rolled div list (not cmdk), so
+  // there's no built-in ArrowDown/ArrowUp handling to inherit; -1 means nothing highlighted.
+  const [activeIndex, setActiveIndex] = useState(-1);
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const selectingRef = useRef(false);
+  const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  // A fresh result set (new search, or the list closing) invalidates whatever was highlighted
+  // before — start from "nothing highlighted" rather than carrying over a stale index that may
+  // now point at an unrelated row.
+  useEffect(() => {
+    setActiveIndex(-1);
+  }, [results]);
+
+  useEffect(() => {
+    if (activeIndex < 0) return;
+    itemRefs.current[activeIndex]?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex]);
 
   const doSearch = useCallback(async (q: string) => {
     if (q.length < 2) {
@@ -1171,6 +1187,31 @@ function FoodSearchInput({
 
   const showResults = open && (results.length > 0 || (query.length >= 2 && !loading));
 
+  // ArrowDown/ArrowUp/Enter — this list has no cmdk/Command root to inherit navigation from
+  // (see the module-level comment on FoodSearchInput), so it's implemented directly against the
+  // same `results` array the list itself renders from.
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!showResults || results.length === 0) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIndex((i) => Math.min(i + 1, results.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIndex((i) => Math.max(i - 1, 0));
+    } else if (e.key === "Enter") {
+      if (activeIndex >= 0 && results[activeIndex]) {
+        e.preventDefault();
+        pick(results[activeIndex]);
+      }
+    } else if (e.key === "Escape") {
+      // Stop propagation so Escape dismisses just this dropdown, not the whole Radix Dialog
+      // behind it (which also treats Escape as "close" by default) — a dietitian escaping the
+      // suggestion list shouldn't lose the recipe form she's in the middle of filling out.
+      e.stopPropagation();
+      setOpen(false);
+    }
+  };
+
   return (
     <Popover open={showResults}>
       <PopoverAnchor asChild>
@@ -1180,6 +1221,7 @@ function FoodSearchInput({
             placeholder="Search food…"
             value={foodId ? value : query || value}
             onChange={(e) => handleType(e.target.value)}
+            onKeyDown={handleKeyDown}
             onFocus={() => {
               if (results.length) setOpen(true);
             }}
@@ -1206,6 +1248,15 @@ function FoodSearchInput({
         onCloseAutoFocus={(e) => e.preventDefault()}
         className="p-0 max-h-56 overflow-y-auto"
         style={{ width: "max(var(--radix-popover-trigger-width), 420px)" }}
+        // Confirmed root cause of "dragging the scrollbar closes the dropdown": each result row
+        // already calls preventDefault() on mousedown (below) so clicking one doesn't blur the
+        // input, but that guard was only ever on the rows themselves — a mousedown anywhere else
+        // in this content (the scrollbar track/thumb, or empty space between rows) had no such
+        // guard, so the browser's default focus-shift ran, blurring the <Input>, which the
+        // input's onBlur handler (200ms later) reads as "clicked away" and closes the popover.
+        // preventDefault() here at the container level closes that gap without touching the
+        // per-row handler's own stopPropagation/pick() behavior.
+        onMouseDown={(e) => e.preventDefault()}
         // Radix Dialog locks page scroll via react-remove-scroll while open, allow-listing
         // only the Dialog's own content ref as a scrollable "shard" — this Popover renders
         // into a separate Portal, so real wheel/touch scroll gestures over it get silently
@@ -1219,12 +1270,19 @@ function FoodSearchInput({
         }}
       >
         {results.length > 0 ? (
-          results.map((r) => (
+          results.map((r, i) => (
             <div
               key={r.id}
+              ref={(el) => {
+                itemRefs.current[i] = el;
+              }}
               role="button"
               title={r.name}
-              className="w-full text-left px-3 py-2.5 text-sm hover:bg-muted cursor-pointer flex items-center justify-between border-b last:border-0"
+              className={cn(
+                "w-full text-left px-3 py-2.5 text-sm hover:bg-muted cursor-pointer flex items-center justify-between border-b last:border-0",
+                i === activeIndex && "bg-muted",
+              )}
+              onMouseEnter={() => setActiveIndex(i)}
               onMouseDown={(e) => {
                 e.preventDefault();
                 e.stopPropagation();

@@ -62,6 +62,9 @@ export interface APIMicronutrients {
   phosphorus?: number | null;
   potassium?: number | null;
   selenium?: number | null;
+  // Also present as APIFood's own required top-level field (see below) — optional here only
+  // because UsdaFoodDetails (a distinct, narrower shape) is passed through this same interface.
+  sodium?: number | null;
   zinc?: number | null;
   oxalate?: number | null;
   phytate?: number | null;
@@ -221,6 +224,7 @@ export function toMicronutrients(f: APIMicronutrients): Micronutrients {
     phosphorus: f.phosphorus ?? null,
     potassium: f.potassium ?? null,
     selenium: f.selenium ?? null,
+    sodium: f.sodium ?? null,
     zinc: f.zinc ?? null,
     oxalate: f.oxalate ?? null,
     phytate: f.phytate ?? null,

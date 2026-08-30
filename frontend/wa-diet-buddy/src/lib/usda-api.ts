@@ -38,16 +38,25 @@ export interface UsdaFoodDetails extends Partial<Micronutrients> {
   sodium: number | null;
 }
 
+// The exact 4 dataType values FDC's /foods/search actually returns — confirmed live against the
+// real API, not invented labels. Mirrors USDA_DATA_TYPES in the backend's usda-client.js.
+export const USDA_DATA_TYPES = ["Foundation", "SR Legacy", "Survey (FNDDS)", "Branded"] as const;
+export type UsdaDataType = (typeof USDA_DATA_TYPES)[number];
+
 // total is USDA's real totalHits for the query (confirmed live — not capped to whatever fits on
 // one page), so the frontend can paginate through the full catalog via `page`, not just the
-// first 200 matches.
+// first 200 matches. dataTypes empty/omitted means "no filter, search every data type" — today's
+// existing default behavior, unchanged for anyone who doesn't touch the new filter.
 export async function searchUsda(
   query: string,
-  params?: { page?: number; limit?: number },
+  params?: { page?: number; limit?: number; dataTypes?: UsdaDataType[] },
 ): Promise<{ results: UsdaSearchResult[]; total: number }> {
   const qs = new URLSearchParams({ q: query });
   if (params?.page) qs.set("page", String(params.page));
   if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.dataTypes && params.dataTypes.length > 0) {
+    qs.set("dataTypes", params.dataTypes.join(","));
+  }
   return api.get<{ results: UsdaSearchResult[]; total: number }>(
     `/api/foods/usda-search?${qs.toString()}`,
   );

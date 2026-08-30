@@ -95,7 +95,9 @@ import {
   importUsdaFood,
   fetchImportedUsdaFdcIds,
   fetchUsdaFoodDetails,
+  USDA_DATA_TYPES,
   type UsdaSearchResult,
+  type UsdaDataType,
 } from "@/lib/usda-api";
 import { NewFoodDialog } from "@/components/new-food-dialog";
 
@@ -726,6 +728,8 @@ function UsdaSearchPanel() {
   // details fetch in flight rather than a fetch per expanded row.
   const [expandedFdcId, setExpandedFdcId] = useState<number | null>(null);
   const [page, setPage] = useState(1);
+  // Empty set = no filter = search every data type, today's existing default behavior.
+  const [dataTypeFilter, setDataTypeFilter] = useState<Set<UsdaDataType>>(new Set());
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(query.trim()), 400);
@@ -740,11 +744,30 @@ function UsdaSearchPanel() {
     setPage(1);
   }, [debounced]);
 
+  // Changing the data-type filter re-queries FDC itself (see searchUsda below) rather than
+  // filtering client-side, so this also needs a fresh page 1 — the old page number may no longer
+  // exist against the smaller filtered total.
+  function toggleDataType(type: UsdaDataType) {
+    setDataTypeFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(type)) next.delete(type);
+      else next.add(type);
+      return next;
+    });
+    setPage(1);
+  }
+
+  const dataTypesKey = [...dataTypeFilter].sort().join(",");
   const searching = debounced.length > 1;
 
   const { data, isLoading, isFetching, isError, error } = useQuery({
-    queryKey: ["foods", "usda-search", debounced, page],
-    queryFn: () => searchUsda(debounced, { page, limit: USDA_SEARCH_PAGE_SIZE }),
+    queryKey: ["foods", "usda-search", debounced, page, dataTypesKey],
+    queryFn: () =>
+      searchUsda(debounced, {
+        page,
+        limit: USDA_SEARCH_PAGE_SIZE,
+        dataTypes: dataTypeFilter.size > 0 ? [...dataTypeFilter] : undefined,
+      }),
     enabled: searching,
   });
 
@@ -852,6 +875,44 @@ function UsdaSearchPanel() {
           Live results from USDA's public database — not in your library yet. Add one to use it in
           meal plans, recipes, and journal entries.
         </p>
+        {/* Data-type filter — toggle chips, none selected = no filter (search every type, the
+            existing default). Forwarded straight to FDC's own dataType param (see searchUsda),
+            so the query itself narrows and "Showing X of Y" reflects the real filtered total —
+            not a client-side filter over an unfiltered fetch. */}
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+            Source
+          </span>
+          {USDA_DATA_TYPES.map((type) => {
+            const active = dataTypeFilter.has(type);
+            return (
+              <Button
+                key={type}
+                type="button"
+                size="sm"
+                variant={active ? "default" : "outline"}
+                className="h-6 rounded-full px-2.5 text-xs"
+                onClick={() => toggleDataType(type)}
+              >
+                {type}
+              </Button>
+            );
+          })}
+          {dataTypeFilter.size > 0 && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2 text-xs text-muted-foreground"
+              onClick={() => {
+                setDataTypeFilter(new Set());
+                setPage(1);
+              }}
+            >
+              Clear
+            </Button>
+          )}
+        </div>
       </Card>
 
       {(selected.size > 0 || bulkRunning) && (
@@ -1532,6 +1593,24 @@ function MicronutrientSection({ food }: { food: MicronutrientSectionFood }) {
                     </div>
                   );
                 })}
+                {/* Sodium: deliberately not one of this group's MICRO_FIELD_GROUPS fields (see
+                    the comment on Micronutrients.sodium in food-database-mock.ts) — rendered
+                    here by hand, styled identically to its siblings, so it shows up in Minerals
+                    without also being pulled into new-food-dialog.tsx's generic manual-entry
+                    micronutrient form/save-payload, where sodium already has its own dedicated
+                    field. */}
+                {group.id === "minerals" && (
+                  <div className="flex items-center justify-between rounded-md border bg-muted/20 px-2 py-1.5 text-xs">
+                    <span className="text-muted-foreground">Sodium</span>
+                    <span className="font-medium tabular-nums">
+                      {micros.sodium == null ? (
+                        <span className="text-muted-foreground">No Data</span>
+                      ) : (
+                        `${micros.sodium} mg`
+                      )}
+                    </span>
+                  </div>
+                )}
               </div>
             </AccordionContent>
           </AccordionItem>
