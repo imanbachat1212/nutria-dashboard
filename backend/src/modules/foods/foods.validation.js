@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { USDA_DATA_TYPES } from "./lib/usda-client.js";
 
 // Shared by createFoodSchema and updateFoodSchema — ~44 optional/nullable micronutrient
 // fields, all matching the existing sugar/sodium nullable-number pattern.
@@ -182,6 +183,16 @@ export const usdaSearchSchema = z.object({
     // own pageNumber param (see usda-client.js). No upper bound enforced here: USDA itself
     // just returns an empty result set past its real last page, same as any other page number.
     page: z.coerce.number().int().min(1).default(1),
+    // Comma-separated subset of USDA_DATA_TYPES (e.g. "SR Legacy,Foundation") — mirrors the
+    // usda-imported route's comma-separated fdcIds convention. Omitted/empty means "no filter,
+    // search every data type," today's existing default behavior.
+    dataTypes: z
+      .string()
+      .optional()
+      .transform((v) => (v ? v.split(",").map((t) => t.trim()).filter(Boolean) : undefined))
+      .refine((arr) => !arr || arr.every((t) => USDA_DATA_TYPES.includes(t)), {
+        message: `dataTypes must be a subset of: ${USDA_DATA_TYPES.join(", ")}`,
+      }),
   }),
 });
 

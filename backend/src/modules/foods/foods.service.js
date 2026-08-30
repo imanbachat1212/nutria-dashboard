@@ -6,6 +6,7 @@ import JournalEntry from "../journal/journal-entry.model.js";
 import { ApiError } from "../../lib/ApiError.js";
 import { deleteImage } from "../../lib/storage.js";
 import { searchUsdaFoods, getUsdaFoodDetails } from "./lib/usda-client.js";
+import { guessFoodCategory } from "./lib/food-category.js";
 import { matchFoodName } from "../../lib/foodMatching.js";
 
 // Shapes a foodMatching.js result into what the API/frontend actually needs — never returned
@@ -43,9 +44,26 @@ export async function createFood(data, actor) {
   return { food, unitWeightMatch: toUnitWeightMatch(match) };
 }
 
+// Escapes regex metacharacters in a user-typed token so e.g. a stray "(" in a search doesn't
+// throw an invalid-regex error or accidentally act as a grouping construct.
+function escapeRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 // Shared by listFoods and getFoodsStats so the two never drift on what "matches the current
 // search/category/source/verified/favorites filter" means. `favorites` is only ever scoped to
 // the requesting user's own id (never a client-supplied user) — "Favorites" means MY favorites.
+//
+// `search` is split into keyword tokens on whitespace AND comma (a dietitian typing "egg,wh" —
+// picked up from this app's own comma-separated Allergies/Medical-history fields elsewhere —
+// should search exactly like "egg wh") and every token must independently match name OR nameAr,
+// combined with $and across tokens. This makes a food match on word CONTENT regardless of order/
+// adjacency/punctuation in the stored name, rather than requiring the typed string to appear as
+// one literal substring — "egg white" used to only match "Egg white sandwich" (the one name
+// where the words happen to be adjacent in that order) and silently miss "Egg, white, raw" and
+// five other real foods that plainly contain both words. A single-token search (today's only
+// working case) is the trivial one-element case of this same $and, so existing single-word
+// searches are unaffected.
 function buildFoodFilter({ search, category, source, verified, favorites, userId }) {
   const filter = {};
   if (category) filter.category = category;
@@ -53,10 +71,16 @@ function buildFoodFilter({ search, category, source, verified, favorites, userId
   if (verified !== undefined) filter.verified = verified;
   if (favorites) filter.favoritedBy = userId;
   if (search) {
-    filter.$or = [
-      { name: { $regex: search, $options: "i" } },
-      { nameAr: { $regex: search, $options: "i" } },
-    ];
+    const tokens = search
+      .split(/[\s,]+/)
+      .map((t) => t.trim())
+      .filter(Boolean);
+    if (tokens.length > 0) {
+      filter.$and = tokens.map((token) => {
+        const re = { $regex: escapeRegex(token), $options: "i" };
+        return { $or: [{ name: re }, { nameAr: re }] };
+      });
+    }
   }
   return filter;
 }
@@ -224,8 +248,8 @@ export async function getImportedUsdaFdcIds(fdcIds) {
 // identifier since they have no Food document (and may never get one). Returns the true
 // totalHits count alongside the current page's results so the frontend can paginate through
 // USDA's full catalog rather than only ever seeing the first pageSize matches.
-export async function searchUsda(query, { limit, page } = {}) {
-  return searchUsdaFoods(query, { pageSize: limit, pageNumber: page });
+export async function searchUsda(query, { limit, page, dataTypes } = {}) {
+  return searchUsdaFoods(query, { pageSize: limit, pageNumber: page, dataTypes });
 }
 
 // The one place a USDA fdcId's full nutrient breakdown gets fetched/parsed — used by BOTH the
@@ -276,12 +300,25 @@ export async function importUsdaFood(fdcId, actor) {
   // gramsPerX field null and commonServings empty, never a guessed value.
   const match = matchFoodName(details.name);
   const autoFields = match.tier === "match" ? match.fields : {};
+  // USDA doesn't share this app's category taxonomy directly — guessFoodCategory bridges the
+  // gap (FDC's own standardized SR/Foundation category first, then name/WWEIA-category keyword
+  // matching, then a macro-dominance fallback). Previously left unset entirely, which every
+  // import silently inherited the frontend's blanket "unset -> protein" display fallback from
+  // (mapCategory in foods-api.ts) — a dietitian could still correct this per-food afterward, same
+  // as any hand-added food.
+  const category = guessFoodCategory({
+    usdaFoodCategory: details.usdaFoodCategory,
+    usdaWweiaCategory: details.usdaWweiaCategory,
+    name: details.name,
+    brand: details.brand,
+    protein: details.protein,
+    carbs: details.carbs,
+    fat: details.fat,
+  });
   const food = await Food.create({
     name: details.name,
     brand: details.brand,
-    // USDA doesn't map onto our 10-value category taxonomy — left unset (frontend already
-    // defaults an unset category to "protein" for display; a dietitian can correct it after
-    // import same as any hand-added food).
+    category,
     source: "usda",
     servingSize: details.servingSize,
     servingUnit: details.servingUnit,

@@ -3,6 +3,11 @@ import { ApiError } from "../../../lib/ApiError.js";
 
 const BASE_URL = "https://api.nal.usda.gov/fdc/v1";
 
+// The exact 4 dataType values FDC's /foods/search actually returns/accepts — confirmed live,
+// not invented. Exported so foods.validation.js can validate against the same list rather than
+// duplicating (and risking drifting from) these literal strings.
+export const USDA_DATA_TYPES = ["Foundation", "SR Legacy", "Survey (FNDDS)", "Branded"];
+
 // USDA FoodData Central nutrient IDs — stable across data types (Foundation, SR Legacy,
 // Branded, Survey), even though /foods/search and /food/{fdcId} nest the nutrient list
 // differently (see normalizeNutrients below). Sugar has two candidate ids because older
@@ -305,11 +310,17 @@ function toFullNutrition(foodNutrients) {
 // Showing more than 200 total matches means paging via pageNumber (also confirmed live: distinct
 // pageNumbers return genuinely different fdcIds, and USDA's own totalHits is the true match
 // count — there's no secondary hidden cap beyond what totalHits/totalPages already report).
-export async function searchUsdaFoods(query, { pageSize = 200, pageNumber = 1 } = {}) {
+// dataTypes: optional array of USDA_DATA_TYPES values — omitted entirely (not sent at all) when
+// empty/undefined, which is what preserves today's default "search every data type" behavior.
+// Confirmed live: FDC's dataType param accepts a comma-joined value for multiple types (which is
+// exactly how URLSearchParams's object-form constructor serializes an array value below) with
+// identical results to sending the param repeated once per type.
+export async function searchUsdaFoods(query, { pageSize = 200, pageNumber = 1, dataTypes } = {}) {
   const data = await usdaFetch("/foods/search", {
     query,
     pageSize: String(pageSize),
     pageNumber: String(pageNumber),
+    ...(dataTypes && dataTypes.length > 0 ? { dataType: dataTypes } : {}),
   });
   return {
     results: (data.foods ?? []).map((f) => ({
@@ -335,6 +346,14 @@ export async function getUsdaFoodDetails(fdcId) {
     brand: f.brandOwner || f.brandName || undefined,
     servingSize: 100,
     servingUnit: "g",
+    // Category signal, confirmed live to differ by dataType: SR Legacy/Foundation records carry
+    // a standardized `foodCategory.description` (one of 25 fixed USDA food-group names);
+    // Survey (FNDDS) records instead carry `wweiaFoodCategory.wweiaFoodCategoryDescription` (a
+    // much larger, free-form set); Branded records carry NEITHER on this endpoint. See
+    // guessFoodCategory in food-category.js, which uses whichever of these is present, falling
+    // back to name-keyword/macro heuristics when both are absent.
+    usdaFoodCategory: f.foodCategory?.description,
+    usdaWweiaCategory: f.wweiaFoodCategory?.wweiaFoodCategoryDescription,
     ...nutrition,
   };
 }

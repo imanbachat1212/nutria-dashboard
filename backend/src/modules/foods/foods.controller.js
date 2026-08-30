@@ -57,8 +57,8 @@ export const removeFavorite = asyncHandler(async (req, res) => {
 });
 
 export const usdaSearch = asyncHandler(async (req, res) => {
-  const { q, limit, page } = req.validated.query;
-  const { results, total } = await foodsService.searchUsda(q, { limit, page });
+  const { q, limit, page, dataTypes } = req.validated.query;
+  const { results, total } = await foodsService.searchUsda(q, { limit, page, dataTypes });
   res.json({ data: { results, total } });
 });
 
