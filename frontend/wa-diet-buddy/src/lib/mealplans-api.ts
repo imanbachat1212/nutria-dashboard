@@ -38,6 +38,9 @@ interface APIPlanItem {
         gramsPerPiece?: number | null;
         gramsPerMl?: number | null;
         commonServings?: { label: string; grams: number }[];
+        // Real per-food measures (prompt-45), added to this populate in prompt-48 so the
+        // in-place item editor can offer the exact same MeasureSelect options the add flow does.
+        portions?: { description: string; grams: number }[];
       }
     | string
     | null;
@@ -45,11 +48,22 @@ interface APIPlanItem {
   name: string;
   quantity: number;
   unit: string;
+  // Display-only (prompt-47) — the real measure the dietitian actually picked (e.g. "3 date,
+  // pitted"), when one was picked via MeasureSelect; null/absent for a generic-unit item or one
+  // added before this field existed. Never used in any macro/calorie math — quantity/unit above
+  // (always the resolved gram total) are what the backend already computed calories/protein/
+  // carbs/fat from at add-time.
+  measureLabel?: string | null;
+  // Structured counterparts to measureLabel (prompt-49) — see APIPlanItem's measureLabel
+  // comment. Used by EditPlanItemDialog to pre-select the exact real measure originally picked.
+  measureDescription?: string | null;
+  measureCount?: number | null;
   servings: number;
   calories: number;
   protein: number;
   carbs: number;
   fat: number;
+  fiber: number;
 }
 
 // cup/tbsp/tsp/piece/ml weigh differently per food (a cup of oats != a cup of spinach, 1ml of
@@ -96,6 +110,7 @@ interface APIPlan {
       protein?: number;
       carbs?: number;
       fat?: number;
+      fiber?: number;
     };
     driTargets?: (APIMicros & { method?: string; computedAt?: string }) | null;
   };
@@ -107,6 +122,7 @@ interface APIPlan {
   targetProtein: number;
   targetCarbs: number;
   targetFat: number;
+  targetFiber: number;
   // Per-slot time overrides for the whole plan (e.g. { breakfast: "08:00" }) — sparse, a slot
   // with no entry falls back to SLOT_META's default in buildDays() below. Absent entirely on
   // plans created before this field existed.
@@ -170,6 +186,48 @@ function relativeTime(iso: string): string {
   return `${Math.round(days / 7)}w ago`;
 }
 
+function buildItemView(i: APIPlanItem) {
+  const food = i.food && typeof i.food === "object" ? i.food : null;
+  return {
+    id: i._id,
+    name: i.name,
+    amount:
+      i.type === "food"
+        ? i.measureLabel || `${i.quantity} ${i.unit || "g"}`
+        : `${i.servings} serving${i.servings !== 1 ? "s" : ""}`,
+    macros: {
+      kcal: i.calories || 0,
+      protein: i.protein || 0,
+      carbs: i.carbs || 0,
+      fat: i.fat || 0,
+      fiber: i.fiber || 0,
+    },
+    micros: extractMicros(i as unknown as APIMicros),
+    isApproximate: isApproximateItem(i),
+    // Everything below is for the in-place item editor (prompt-48) — see FoodItem's comment in
+    // meal-plans-mock.ts.
+    itemType: i.type,
+    foodId: food ? food._id : typeof i.food === "string" ? i.food : null,
+    mealId: i.meal && typeof i.meal === "object" ? i.meal._id : typeof i.meal === "string" ? i.meal : null,
+    rawQuantity: i.type === "recipe" ? i.servings : i.quantity,
+    rawUnit: i.unit,
+    measureLabel: i.measureLabel ?? null,
+    measureDescription: i.measureDescription ?? null,
+    measureCount: i.measureCount ?? null,
+    realMeasures: food?.portions?.map((p) => ({ label: p.description, grams: p.grams })),
+    unitWeights: food
+      ? {
+          cup: food.gramsPerCup ?? null,
+          tbsp: food.gramsPerTbsp ?? null,
+          tsp: food.gramsPerTsp ?? null,
+          piece: food.gramsPerPiece ?? null,
+          ml: food.gramsPerMl ?? null,
+        }
+      : undefined,
+    commonServings: food?.commonServings,
+  };
+}
+
 function buildDays(items: APIPlanItem[], slotTimes?: Record<string, string>): DayPlan[] {
   return DAY_KEYS.map((dayKey, dayIdx) => {
     const dayItems = items.filter((i) => i.day === dayIdx);
@@ -181,22 +239,7 @@ function buildDays(items: APIPlanItem[], slotTimes?: Record<string, string>): Da
         slot,
         title: SLOT_META[slot].label,
         time: slotTimes?.[slot] ?? SLOT_META[slot].defaultTime,
-        items: slotItems.map((i) => ({
-          id: i._id,
-          name: i.name,
-          amount:
-            i.type === "food"
-              ? `${i.quantity} ${i.unit || "g"}`
-              : `${i.servings} serving${i.servings !== 1 ? "s" : ""}`,
-          macros: {
-            kcal: i.calories || 0,
-            protein: i.protein || 0,
-            carbs: i.carbs || 0,
-            fat: i.fat || 0,
-          },
-          micros: extractMicros(i as unknown as APIMicros),
-          isApproximate: isApproximateItem(i),
-        })),
+        items: slotItems.map(buildItemView),
       };
     });
 
@@ -221,6 +264,7 @@ function toPlan(p: APIPlan): MealPlan {
       protein: p.targetProtein || 0,
       carbs: p.targetCarbs || 0,
       fat: p.targetFat || 0,
+      fiber: p.targetFiber || 0,
     },
     driTargets: p.client?.driTargets ? extractMicros(p.client.driTargets) : null,
     adherencePct: 0,
@@ -267,6 +311,10 @@ export interface CreateMealPlanPayload {
   targetProtein?: number;
   targetCarbs?: number;
   targetFat?: number;
+  // "From template" in the New Meal Plan wizard — when set, the backend copies that template's
+  // day/item content into the new plan instead of starting empty. Omitted entirely for "Blank
+  // canvas".
+  templateId?: string;
 }
 
 export async function createMealPlan(
@@ -296,6 +344,11 @@ export interface AddItemPayload {
   meal?: string;
   quantity?: number;
   unit?: string;
+  // Display-only (prompt-47/49) — see APIPlanItem's measureLabel/measureDescription/
+  // measureCount comments above.
+  measureLabel?: string | null;
+  measureDescription?: string | null;
+  measureCount?: number | null;
   servings?: number;
 }
 
@@ -305,6 +358,31 @@ export async function addPlanItem(
 ): Promise<MealPlan> {
   const raw = await api.post<APIPlan>(`/api/mealplans/${planId}/items`, data);
   return toPlan(raw);
+}
+
+// New (prompt-48) — in-place partial update, mirrors mealplantemplates-api.ts's
+// updateTemplateItem exactly. Unlike addPlanItem, every field is optional: unset fields keep
+// the item's current values server-side (mealplans.service.js's updateItem), so a quantity-only
+// or measure-only change doesn't need to resend day/slot/type/food too. Updates the item in
+// place at its existing day/slot position — never removes and re-appends it.
+export async function updatePlanItem(
+  planId: string,
+  itemId: string,
+  data: Partial<AddItemPayload>,
+): Promise<MealPlan> {
+  const raw = await api.patch<APIPlan>(`/api/mealplans/${planId}/items/${itemId}`, data);
+  return toPlan(raw);
+}
+
+// Snapshots this plan's current days/items into a new, independent MealPlanTemplate — the
+// primary way a dietitian builds a template in practice (build a real plan, then save it as a
+// reusable starting point), rather than authoring one from scratch. Returns the raw template
+// shape (see mealplantemplates-api.ts), not a MealPlan.
+export async function saveMealPlanAsTemplate(
+  planId: string,
+  data: { name: string; tag?: string; days?: number },
+): Promise<{ _id: string; name: string }> {
+  return api.post(`/api/mealplans/${planId}/save-as-template`, data);
 }
 
 export async function duplicateMealPlan(
@@ -328,6 +406,16 @@ export async function copyMealSlot(
   data: { fromDay: number; slot: string; toDays: number[] },
 ): Promise<MealPlan> {
   const raw = await api.post<APIPlan>(`/api/mealplans/${planId}/copy-meal-slot`, data);
+  return toPlan(raw);
+}
+
+// Same-day slot-to-slot copy (prompt-56, drag-and-drop) — appends fromSlot's items onto toSlot,
+// same day. Mirrors copyMealSlot's shape, just day-fixed/slot-varying instead of the reverse.
+export async function copySlotToSlot(
+  planId: string,
+  data: { day: number; fromSlot: string; toSlot: string },
+): Promise<MealPlan> {
+  const raw = await api.post<APIPlan>(`/api/mealplans/${planId}/copy-slot-to-slot`, data);
   return toPlan(raw);
 }
 

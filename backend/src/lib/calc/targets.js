@@ -33,6 +33,14 @@ export function calcTEE({ weight, height, age, sex, activityLevel }) {
   return Math.round(bmr * factor);
 }
 
+// IOM adequate-intake ratio (14g fiber per 1000 kcal) — the only target formula that's a pure
+// function of calories, with no weight/height/age/sex dependency. Exported standalone (prompt-55)
+// so a manual-method client's targets can get the same fiber number a calories-only auto-calc
+// would produce, without needing any of the other calcTargets inputs.
+export function calcFiberTarget(calories) {
+  return Math.round(calories / 1000 * 14);
+}
+
 export function calcTargets({ weight, height, age, sex, activityLevel, goal }) {
   const bmr = Math.round(calcBMR({ weight, height, age, sex }));
   const tee = calcTEE({ weight, height, age, sex, activityLevel });
@@ -44,7 +52,7 @@ export function calcTargets({ weight, height, age, sex, activityLevel, goal }) {
   const protein = Math.round(weight * 2.0);
   const fat = Math.round((calories * 0.25) / 9);
   const carbs = Math.round((calories - protein * 4 - fat * 9) / 4);
-  const fiber = Math.round(calories / 1000 * 14);
+  const fiber = calcFiberTarget(calories);
 
   return { method: "auto", bmr, tee, calories, protein, fat, carbs, fiber };
 }

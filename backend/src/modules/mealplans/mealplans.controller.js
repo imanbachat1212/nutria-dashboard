@@ -1,5 +1,6 @@
 import { asyncHandler } from "../../lib/asyncHandler.js";
 import * as svc from "./mealplans.service.js";
+import * as templatesSvc from "../mealplantemplates/mealplantemplates.service.js";
 
 export const create = asyncHandler(async (req, res) => {
   const plan = await svc.createPlan(req.validated.body, req.user);
@@ -38,6 +39,12 @@ export const copyMealSlot = asyncHandler(async (req, res) => {
   res.json({ data: plan });
 });
 
+export const copySlotToSlot = asyncHandler(async (req, res) => {
+  const { day, fromSlot, toSlot } = req.validated.body;
+  const plan = await svc.copySlotToSlot(req.params.id, day, fromSlot, toSlot);
+  res.json({ data: plan });
+});
+
 export const updateSlotTime = asyncHandler(async (req, res) => {
   const { slot, time } = req.validated.body;
   const plan = await svc.updateSlotTime(req.params.id, slot, time);
@@ -62,7 +69,17 @@ export const addItem = asyncHandler(async (req, res) => {
   res.status(201).json({ data: plan });
 });
 
+export const updateItem = asyncHandler(async (req, res) => {
+  const plan = await svc.updateItem(req.params.id, req.params.itemId, req.validated.body);
+  res.json({ data: plan });
+});
+
 export const removeItem = asyncHandler(async (req, res) => {
   await svc.removeItem(req.params.id, req.params.itemId);
   res.status(204).end();
+});
+
+export const saveAsTemplate = asyncHandler(async (req, res) => {
+  const template = await templatesSvc.createFromPlan(req.params.id, req.validated.body, req.user);
+  res.status(201).json({ data: template });
 });

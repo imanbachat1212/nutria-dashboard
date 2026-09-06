@@ -15,6 +15,7 @@ import {
   Settings,
   CalendarClock,
   Stethoscope,
+  Layers,
 } from "lucide-react";
 
 import {
@@ -43,6 +44,7 @@ const practice: NavItem[] = [
 
 const nutrition: NavItem[] = [
   { title: "Meal Plans", url: "/meal-plans", icon: CalendarDays },
+  { title: "Meal Templates", url: "/meal-plan-templates", icon: Layers },
   { title: "Meal Library", url: "/meal-library", icon: BookOpen },
   { title: "Food Database", url: "/food-database", icon: Database },
   // { title: "Intake Forms", url: "/intake-forms", icon: FileText }, // hidden — not built yet

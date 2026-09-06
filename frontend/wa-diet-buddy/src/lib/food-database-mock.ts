@@ -287,9 +287,25 @@ export interface FoodItem {
   brand?: string;
   category: FoodCategory;
   source: FoodSource;
+  // FDC's raw dataType for USDA-imported foods — see USDA_DATA_TYPE_LABEL. null/undefined for
+  // lebanese/custom foods (which must never show a USDA type) and for USDA foods with no fdcId
+  // to backfill from, which keep the plain "USDA" badge.
+  usdaDataType?: string | null;
+  // FDA %DV claims (prompt-65) — which nutrients this food is a High/Good Source of, per its
+  // typical real serving. Empty for foods with no portions data (no serving basis, no claim).
+  nutrientClaims?: NutrientClaim[];
+  // mg EPA+DHA per typical serving (prompt-67). Stored server-side for filtering; the drawer
+  // still derives its own display value so it can also name the serving it refers to.
+  omega3EpaDhaPerServingMg?: number | null;
   macros: FoodMacrosPer100g;
   micros?: Micronutrients;
+  // "Best available" list for read-only display — real per-food portions when present, else
+  // the dietitian's own commonServings, else a single flat serving-size fallback row.
   servings: ServingSize[];
+  // Real per-food measure descriptions specifically (e.g. "1 pitted date"), undefined/empty
+  // when none exist — MeasureSelect uses this (not `servings`) to decide whether a food gets
+  // real per-food measure options or the app's generic unit list (see measure-select.tsx).
+  portions?: ServingSize[];
   unitWeights?: UnitWeights;
   allergens: string[];
   verified: boolean;
@@ -312,11 +328,99 @@ export const CATEGORY_META: Record<FoodCategory, { label: string; emoji: string 
   sweets: { label: "Sweets", emoji: "🍰" },
 };
 
+export type NutrientClaimLevel = "high" | "good";
+export interface NutrientClaim {
+  nutrient: string;
+  level: NutrientClaimLevel;
+  pct?: number;
+}
+
+// Display names for the nutrients that carry an FDA Daily Value and are stored on a food.
+// Mirrors DAILY_VALUES in the backend's lib/nutrientClaims.js — that file is the source of
+// truth for the DV numbers themselves; this is display-only.
+export const NUTRIENT_CLAIM_LABEL: Record<string, string> = {
+  vitaminA: "Vitamin A",
+  vitaminC: "Vitamin C",
+  vitaminD: "Vitamin D",
+  vitaminE: "Vitamin E",
+  vitaminK: "Vitamin K",
+  vitaminB1: "Thiamin (B1)",
+  vitaminB2: "Riboflavin (B2)",
+  vitaminB3: "Niacin (B3)",
+  vitaminB5: "Pantothenic acid (B5)",
+  vitaminB6: "Vitamin B6",
+  vitaminB12: "Vitamin B12",
+  folate: "Folate",
+  calcium: "Calcium",
+  iron: "Iron",
+  magnesium: "Magnesium",
+  phosphorus: "Phosphorus",
+  potassium: "Potassium",
+  zinc: "Zinc",
+  copper: "Copper",
+  manganese: "Manganese",
+  selenium: "Selenium",
+  fiber: "Fiber",
+};
+
+export const CLAIM_LEVEL_META: Record<NutrientClaimLevel, { label: string; short: string; color: string }> = {
+  high: { label: "High Source", short: "High", color: "bg-emerald-100 text-emerald-700" },
+  good: { label: "Good Source", short: "Good", color: "bg-sky-100 text-sky-700" },
+};
+
+// EPA+DHA per the food's typical real serving, in mg (prompt-66).
+//
+// Deliberately NOT part of the FDA claim system above: FDA has established no Daily Value for
+// omega-3 and its final rule specifically PROHIBITS "high in"/"rich in"/"excellent source of"
+// claims for EPA/DHA. So this returns a plain absolute quantity with no tier, no percentage and
+// no claim vocabulary attached, and the UI renders it as plain text rather than a badge.
+//
+// Serving basis is identical to the nutrient claims: the first stored portion (USDA's own
+// ordering). A food with no portions has no basis and returns null, so it displays nothing.
+// EPA and DHA are stored in the same unit (g per 100 g, USDA ids 1278 and 1272) and are
+// therefore directly summable. A measured-zero food also returns null — "0 mg" is noise on a
+// slice of bread, and the point here is to surface foods that actually contain EPA/DHA.
+export function epaDhaMgPerServing(food: {
+  micros?: Micronutrients;
+  portions?: ServingSize[];
+}): { mg: number; serving: ServingSize } | null {
+  const serving = food.portions?.find((p) => p.grams > 0);
+  if (!serving) return null;
+  const epa = food.micros?.omega3Epa ?? 0;
+  const dha = food.micros?.omega3Dha ?? 0;
+  const gPer100g = epa + dha;
+  if (!(gPer100g > 0)) return null;
+  const mg = Math.round(gPer100g * (serving.grams / 100) * 1000);
+  if (mg < 1) return null;
+  return { mg, serving };
+}
+
 export const SOURCE_META: Record<FoodSource, { label: string; color: string }> = {
   usda: { label: "USDA", color: "bg-blue-100 text-blue-700" },
   lebanese: { label: "Lebanese DB", color: "bg-rose-100 text-rose-700" },
   custom: { label: "Custom", color: "bg-stone-100 text-stone-700" },
 };
+
+// FDC's raw dataType values -> the short labels shown on a food's source badge. These four are
+// the complete set FDC returns (USDA_DATA_TYPES in the backend's usda-client.js). They differ in
+// data quality/completeness — Foundation records frequently carry no portions at all — so the
+// specific type is worth surfacing instead of a blanket "USDA".
+export const USDA_DATA_TYPE_LABEL: Record<string, string> = {
+  Foundation: "Foundation",
+  "SR Legacy": "SR Legacy",
+  "Survey (FNDDS)": "FNDDS",
+  Branded: "Branded",
+};
+
+// The badge label for a food's source: the specific FDC type when we know it, otherwise the
+// plain source label. Deliberately falls back rather than guessing — a USDA food with no stored
+// dataType shows "USDA", and a lebanese/custom food never shows a USDA type at all.
+export function sourceLabel(source: FoodSource, usdaDataType?: string | null): string {
+  if (source === "usda" && usdaDataType) {
+    return USDA_DATA_TYPE_LABEL[usdaDataType] ?? usdaDataType;
+  }
+  return SOURCE_META[source].label;
+}
 
 export const FOODS: FoodItem[] = [
   {

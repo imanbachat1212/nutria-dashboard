@@ -77,9 +77,23 @@ export interface APIFood extends APIMicronutrients {
   brand?: string;
   category?: string;
   source?: string;
+  // FDC's raw dataType for USDA-imported foods ("Foundation" / "SR Legacy" / "Survey (FNDDS)" /
+  // "Branded"); null/absent for lebanese/custom foods and for USDA imports that had no fdcId to
+  // backfill from. Mapped to a display label via USDA_DATA_TYPE_LABEL.
+  usdaDataType?: string | null;
+  // FDA %DV nutrient content claims (prompt-65) — derived server-side, read-only here.
+  nutrientClaims?: { nutrient: string; level: "high" | "good"; pct?: number }[];
+  // mg EPA+DHA per typical serving (prompt-67) — measured quantity, not a claim.
+  omega3EpaDhaPerServingMg?: number | null;
   servingSize: number;
   servingUnit: string;
   commonServings?: ServingSize[];
+  // Real, food-specific measure descriptions (e.g. "1 pitted date" -> 7.1g) from USDA FNDDS/
+  // SR-Legacy — auto-populated server-side only, never dietitian-edited (see food.model.js).
+  // Distinct from commonServings above, which the dietitian freely edits via the Add Food UI.
+  // Mirrors the backend's { description, grams } shape exactly (not ServingSize's { label,
+  // grams }) — toFoodItem below is the one place that reshapes it into the frontend's `servings`.
+  portions?: { description: string; grams: number }[];
   calories: number;
   protein: number;
   carbs: number;
@@ -118,6 +132,9 @@ export interface UnitWeightMatch {
     gramsPerPiece?: number;
     gramsPerMl?: number;
   };
+  // Real per-food measure descriptions for this same match (see foods.service.js's
+  // toUnitWeightMatch) — [] when the matched FNDDS/SR-Legacy entry has no usable portion rows.
+  portions: { description: string; grams: number }[];
 }
 
 interface APIListResult {
@@ -239,6 +256,9 @@ function toFoodItem(f: APIFood): FoodItem {
     brand: f.brand,
     category: mapCategory(f.category),
     source: mapSource(f.source),
+    usdaDataType: f.usdaDataType ?? null,
+    nutrientClaims: f.nutrientClaims ?? [],
+    omega3EpaDhaPerServingMg: f.omega3EpaDhaPerServingMg ?? null,
     macros: {
       kcal: f.calories,
       protein: f.protein,
@@ -249,10 +269,20 @@ function toFoodItem(f: APIFood): FoodItem {
       sodium: f.sodium ?? 0,
     },
     micros: toMicronutrients(f),
+    // Real per-food portions (e.g. "1 pitted date") take priority over the dietitian's own
+    // freeform commonServings, which in turn beats the flat single-row serving-size fallback —
+    // matches prompt-45's "real stored portions first, generic list only when a food has none
+    // at all" priority, reused here for the Food Database detail drawer's read-only display too.
     servings:
-      f.commonServings && f.commonServings.length > 0
-        ? f.commonServings
-        : [{ label: `${f.servingSize} ${f.servingUnit}`, grams: f.servingSize }],
+      f.portions && f.portions.length > 0
+        ? f.portions.map((p) => ({ label: p.description, grams: p.grams }))
+        : f.commonServings && f.commonServings.length > 0
+          ? f.commonServings
+          : [{ label: `${f.servingSize} ${f.servingUnit}`, grams: f.servingSize }],
+    portions:
+      f.portions && f.portions.length > 0
+        ? f.portions.map((p) => ({ label: p.description, grams: p.grams }))
+        : undefined,
     unitWeights: {
       cup: f.gramsPerCup ?? null,
       tbsp: f.gramsPerTbsp ?? null,
@@ -278,6 +308,13 @@ interface FoodFilterParams {
   // "Favorites" always means the requesting user's own favorites (scoped server-side by auth
   // token) — never a client-supplied user id.
   favorites?: boolean;
+  // FDA %DV nutrient content claim filter (prompt-65) — e.g. { claimNutrient: "vitaminB5",
+  // claimLevel: "good" }. Omitting claimLevel matches any qualifying level (high or good).
+  claimNutrient?: string;
+  claimLevel?: "high" | "good";
+  // Plain numeric minimum, mg EPA+DHA per typical serving (prompt-67). Deliberately not part of
+  // the claim filter above — omega-3 has no FDA Daily Value and no tier vocabulary.
+  minEpaDhaMg?: number;
 }
 
 // Shared by fetchFoods and fetchFoodStats so the two never drift on how a category/source/
@@ -290,6 +327,10 @@ function buildFoodQuery(params?: FoodFilterParams & { page?: number; limit?: num
   if (params?.source) qs.set("source", params.source);
   if (params?.verified) qs.set("verified", "true");
   if (params?.favorites) qs.set("favorites", "true");
+  // FDA %DV claim filter (prompt-65) — level omitted means "any qualifying level".
+  if (params?.claimNutrient) qs.set("claimNutrient", params.claimNutrient);
+  if (params?.claimNutrient && params?.claimLevel) qs.set("claimLevel", params.claimLevel);
+  if (params?.minEpaDhaMg) qs.set("minEpaDhaMg", String(params.minEpaDhaMg));
 
   if (params?.category) {
     const backendCats = CATEGORY_REVERSE[params.category];
@@ -308,6 +349,9 @@ export async function fetchFoods(params?: {
   source?: FoodSource;
   verified?: boolean;
   favorites?: boolean;
+  claimNutrient?: string;
+  claimLevel?: "high" | "good";
+  minEpaDhaMg?: number;
   page?: number;
   limit?: number;
 }): Promise<{ foods: FoodItem[]; total: number }> {
@@ -420,6 +464,8 @@ export interface UpdateFoodPayload extends Partial<Micronutrients> {
   gramsPerTsp?: number | null;
   gramsPerPiece?: number | null;
   gramsPerMl?: number | null;
+  // Same "written by explicit Apply/Clear, never a normal form save" rule as gramsPerCup etc.
+  portions?: { description: string; grams: number }[];
 }
 
 export async function updateFood(

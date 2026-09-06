@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Search, Plus, X, UtensilsCrossed, Apple, Loader2 } from "lucide-react";
 
@@ -17,13 +17,25 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { fetchFoods } from "@/lib/foods-api";
 import { fetchMeals } from "@/lib/meals-api";
-import { addPlanItem } from "@/lib/mealplans-api";
+import type { AddItemPayload } from "@/lib/mealplans-api";
 import { SLOT_META, type MealSlot } from "@/lib/meal-plans-mock";
+import type { ServingSize, UnitWeights } from "@/lib/food-database-mock";
+import { gramsPerUnitForFood } from "@/lib/unit-conversion";
+import { resolveMeasure } from "@/lib/measure-options";
+import { MeasureSelect } from "@/components/measure-select";
 
 interface PlanItemPickerProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  planId: string;
+  // Generic over what "adding an item" actually does — a real plan's addPlanItem(planId, data)
+  // or a template's addTemplateItem(templateId, data) — so this same picker/staging UI is
+  // shared by both editors instead of being hardcoded to real plans (see meal-plans.tsx and
+  // meal-plan-templates.$templateId.tsx for the two call sites).
+  onAdd: (data: AddItemPayload) => Promise<unknown>;
+  // Called once after a batch of adds has settled (at least one succeeded) — lets each caller
+  // invalidate whatever query key its own data lives under, rather than this shared component
+  // hardcoding one.
+  onAdded?: () => void;
   day: number;
   slot: string;
 }
@@ -35,25 +47,40 @@ interface ItemMacros {
   fat: number;
 }
 
-// One entry per selected food OR recipe. `amount` is grams for food, servings for recipe —
-// keeping a single field (rather than two, one of which is always unused) since a given entry
-// is only ever one type. `macrosPerUnit` is captured at selection time (per-100g for food,
-// per-serving for recipe) so the preview/total math doesn't depend on the food/recipe still
-// being present in the current (possibly since-changed-by-search) query results.
+// One entry per selected food OR recipe. `amount` is "how many of `unit`" for food (e.g. 3
+// dates, or 150 g) and servings for recipe — keeping a single field (rather than two, one of
+// which is always unused) since a given entry is only ever one type. `macrosPerUnit` is
+// captured at selection time (per-100g for food, per-serving for recipe) so the preview/total
+// math doesn't depend on the food/recipe still being present in the current (possibly
+// since-changed-by-search) query results. `unit`/`realMeasures`/etc are food-only, unused for
+// recipes (always "srv").
 interface SelectedItem {
   id: string;
   type: "food" | "recipe";
   name: string;
   amount: number;
   macrosPerUnit: ItemMacros;
+  unit: string;
+  realMeasures?: ServingSize[];
+  unitWeights?: UnitWeights;
+  commonServings?: ServingSize[];
 }
 
 function selectionKey(type: "food" | "recipe", id: string) {
   return `${type}:${id}`;
 }
 
+// Resolves a food item's selected measure (real per-food portion or generic unit) down to a
+// gram total exactly like new-recipe-dialog.tsx's live preview does — resolveMeasure()
+// normalizes a real-measure selection to unit="g" first, so gramsPerUnitForFood's existing
+// generic-unit resolution always runs on a value it already understands either way.
+function foodGrams(item: SelectedItem): number {
+  const resolved = resolveMeasure(item.realMeasures, item.unit, item.amount);
+  return resolved.quantity * gramsPerUnitForFood(item.commonServings, item.unitWeights, resolved.unit);
+}
+
 function scaleMacros(item: SelectedItem): ItemMacros {
-  const factor = item.type === "food" ? item.amount / 100 : item.amount;
+  const factor = item.type === "food" ? foodGrams(item) / 100 : item.amount;
   return {
     kcal: Math.round(item.macrosPerUnit.kcal * factor),
     protein: Math.round(item.macrosPerUnit.protein * factor),
@@ -65,11 +92,11 @@ function scaleMacros(item: SelectedItem): ItemMacros {
 export function PlanItemPicker({
   open,
   onOpenChange,
-  planId,
+  onAdd,
+  onAdded,
   day,
   slot,
 }: PlanItemPickerProps) {
-  const qc = useQueryClient();
   const [tab, setTab] = useState<"food" | "recipe">("food");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -106,14 +133,31 @@ export function PlanItemPicker({
   const recipes = mealsData?.meals ?? [];
   const isLoading = tab === "food" ? foodsLoading : mealsLoading;
 
-  function toggleFood(id: string, name: string, macros: ItemMacros) {
-    const key = selectionKey("food", id);
+  function toggleFood(f: {
+    id: string;
+    name: string;
+    macros: ItemMacros;
+    unitWeights?: UnitWeights;
+    servings: ServingSize[];
+    portions?: ServingSize[];
+  }) {
+    const key = selectionKey("food", f.id);
     setSelectedItems((prev) => {
       const next = new Map(prev);
       if (next.has(key)) {
         next.delete(key);
       } else {
-        next.set(key, { id, type: "food", name, amount: 100, macrosPerUnit: macros });
+        next.set(key, {
+          id: f.id,
+          type: "food",
+          name: f.name,
+          amount: 100,
+          unit: "g",
+          macrosPerUnit: f.macros,
+          unitWeights: f.unitWeights,
+          commonServings: f.servings,
+          realMeasures: f.portions,
+        });
       }
       return next;
     });
@@ -126,7 +170,7 @@ export function PlanItemPicker({
       if (next.has(key)) {
         next.delete(key);
       } else {
-        next.set(key, { id, type: "recipe", name, amount: 1, macrosPerUnit: macros });
+        next.set(key, { id, type: "recipe", name, amount: 1, unit: "srv", macrosPerUnit: macros });
       }
       return next;
     });
@@ -138,6 +182,16 @@ export function PlanItemPicker({
       if (!item) return prev;
       const next = new Map(prev);
       next.set(key, { ...item, amount });
+      return next;
+    });
+  }
+
+  function updateUnit(key: string, unit: string) {
+    setSelectedItems((prev) => {
+      const item = prev.get(key);
+      if (!item) return prev;
+      const next = new Map(prev);
+      next.set(key, { ...item, unit });
       return next;
     });
   }
@@ -172,24 +226,26 @@ export function PlanItemPicker({
     setAdding(true);
     try {
       const settled = await Promise.allSettled(
-        selectedList.map(([, item]) =>
-          item.type === "food"
-            ? addPlanItem(planId, {
-                day,
-                slot,
-                type: "food",
-                food: item.id,
-                quantity: item.amount,
-                unit: "g",
-              })
-            : addPlanItem(planId, {
-                day,
-                slot,
-                type: "recipe",
-                meal: item.id,
-                servings: item.amount,
-              }),
-        ),
+        selectedList.map(([, item]) => {
+          if (item.type !== "food") {
+            return onAdd({ day, slot, type: "recipe", meal: item.id, servings: item.amount });
+          }
+          // A real-measure selection resolves to its exact gram total here (unit="g") — see
+          // measure-select.tsx/measure-options.ts; a generic-unit selection passes through
+          // unchanged, exactly as this already sent before prompt-45 (unit was always "g").
+          const resolved = resolveMeasure(item.realMeasures, item.unit, item.amount);
+          return onAdd({
+            day,
+            slot,
+            type: "food",
+            food: item.id,
+            quantity: resolved.quantity,
+            unit: resolved.unit,
+            measureLabel: resolved.measureLabel,
+            measureDescription: resolved.measureDescription,
+            measureCount: resolved.measureCount,
+          });
+        }),
       );
 
       const failedKeys = new Set(
@@ -200,7 +256,7 @@ export function PlanItemPicker({
       // Refresh only after every add has settled (success or failure), not after the first
       // one resolves — a partial failure still means some items landed and the slot changed.
       if (succeeded > 0) {
-        qc.invalidateQueries({ queryKey: ["mealplan"] });
+        onAdded?.();
       }
 
       if (failedKeys.size === 0) {
@@ -278,7 +334,16 @@ export function PlanItemPicker({
                 return (
                   <button
                     key={f.id}
-                    onClick={() => toggleFood(f.id, f.name, f.macros)}
+                    onClick={() =>
+                      toggleFood({
+                        id: f.id,
+                        name: f.name,
+                        macros: f.macros,
+                        unitWeights: f.unitWeights,
+                        servings: f.servings,
+                        portions: f.portions,
+                      })
+                    }
                     className={cn(
                       "w-full text-left rounded-md px-2.5 py-2 transition-colors",
                       selected
@@ -287,7 +352,10 @@ export function PlanItemPicker({
                     )}
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm font-medium truncate">
+                      <span
+                        className="min-w-0 truncate text-sm font-medium"
+                        title={f.name}
+                      >
                         {f.name}
                       </span>
                       {f.verified && (
@@ -364,21 +432,45 @@ export function PlanItemPicker({
         {selectedList.length > 0 && (
           <div className="px-5 py-3 border-t bg-muted/10 space-y-3">
             <div className="max-h-40 overflow-y-auto space-y-2 -mr-1 pr-1">
-              {selectedList.map(([key, item]) => (
+              {selectedList.map(([key, item]) => {
+                // Same scaleMacros() the footer total below reduces over — one shared
+                // computation, so a per-item row and the running total can never disagree
+                // (prompt-51: they previously could, since this row didn't exist at all and
+                // nothing guaranteed a future one would derive from the same function).
+                const itemMacros = scaleMacros(item);
+                return (
                 <div key={key} className="flex items-center gap-2">
-                  <p className="flex-1 min-w-0 text-sm truncate">{item.name}</p>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm truncate" title={item.name}>{item.name}</p>
+                    <p className="text-[10px] text-muted-foreground tabular-nums">
+                      {itemMacros.kcal} kcal · P{itemMacros.protein} C{itemMacros.carbs} F
+                      {itemMacros.fat}
+                    </p>
+                  </div>
                   <div className="flex items-center gap-1.5 shrink-0">
-                    <Input
-                      type="number"
-                      value={item.amount}
-                      onChange={(e) => updateAmount(key, Number(e.target.value) || 0)}
-                      className="h-8 w-16 text-sm tabular-nums text-right"
-                      min={item.type === "recipe" ? 0.5 : 0}
-                      step={item.type === "recipe" ? 0.5 : undefined}
-                    />
-                    <span className="text-xs text-muted-foreground w-6">
-                      {item.type === "food" ? "g" : "srv"}
-                    </span>
+                    {item.type === "food" ? (
+                      <MeasureSelect
+                        realMeasures={item.realMeasures}
+                        option={item.unit}
+                        count={item.amount}
+                        onOptionChange={(u) => updateUnit(key, u)}
+                        onCountChange={(v) => updateAmount(key, typeof v === "number" ? v : 0)}
+                        quantityClassName="h-8 w-16 text-sm tabular-nums text-right"
+                        unitClassName="h-8 w-24 text-xs"
+                      />
+                    ) : (
+                      <>
+                        <Input
+                          type="number"
+                          value={item.amount}
+                          onChange={(e) => updateAmount(key, Number(e.target.value) || 0)}
+                          className="h-8 w-16 text-sm tabular-nums text-right"
+                          min={0.5}
+                          step={0.5}
+                        />
+                        <span className="text-xs text-muted-foreground w-6">srv</span>
+                      </>
+                    )}
                     <button
                       onClick={() => removeSelected(key)}
                       className="text-muted-foreground hover:text-foreground"
@@ -388,7 +480,8 @@ export function PlanItemPicker({
                     </button>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
 
             <div className="flex items-center gap-3 text-[11px] tabular-nums text-muted-foreground border-t pt-2">

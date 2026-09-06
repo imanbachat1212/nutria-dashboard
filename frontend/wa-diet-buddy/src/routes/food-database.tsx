@@ -72,6 +72,12 @@ import { cn } from "@/lib/utils";
 import {
   CATEGORY_META,
   SOURCE_META,
+  sourceLabel,
+  USDA_DATA_TYPE_LABEL,
+  NUTRIENT_CLAIM_LABEL,
+  CLAIM_LEVEL_META,
+  epaDhaMgPerServing,
+  type NutrientClaimLevel,
   MICRO_FIELD_GROUPS,
   EMPTY_MICROS,
   type FoodItem,
@@ -158,6 +164,12 @@ function FoodDatabasePage() {
   const [source, setSource] = useState<FoodSource | "all">("all");
   const [onlyVerified, setOnlyVerified] = useState(false);
   const [onlyFavorites, setOnlyFavorites] = useState(false);
+  // FDA %DV claim filter (prompt-65): nutrient + optional level ("" = any qualifying level).
+  const [claimNutrient, setClaimNutrient] = useState<string>("");
+  const [claimLevel, setClaimLevel] = useState<NutrientClaimLevel | "">("");
+  // Plain numeric omega-3 minimum (prompt-67), separate from the claim filter above because
+  // omega-3 has no tier/%DV — "" means off.
+  const [minEpaDha, setMinEpaDha] = useState<string>("");
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<FoodItem | null>(null);
   const [newOpen, setNewOpen] = useState(false);
@@ -175,10 +187,10 @@ function FoodDatabasePage() {
   useEffect(() => {
     setPage(1);
     setBulkSelection(new Map());
-  }, [query, category, source, onlyVerified, onlyFavorites]);
+  }, [query, category, source, onlyVerified, onlyFavorites, claimNutrient, claimLevel, minEpaDha]);
 
   const { data, isLoading } = useQuery({
-    queryKey: ["foods", query, category, source, onlyVerified, onlyFavorites, page],
+    queryKey: ["foods", query, category, source, onlyVerified, onlyFavorites, claimNutrient, claimLevel, minEpaDha, page],
     queryFn: () =>
       fetchFoods({
         search: query || undefined,
@@ -186,6 +198,9 @@ function FoodDatabasePage() {
         source: source !== "all" ? source : undefined,
         verified: onlyVerified || undefined,
         favorites: onlyFavorites || undefined,
+        claimNutrient: claimNutrient || undefined,
+        claimLevel: claimNutrient && claimLevel ? claimLevel : undefined,
+        minEpaDhaMg: minEpaDha ? Number(minEpaDha) : undefined,
         page,
         limit: FOODS_PAGE_SIZE,
       }),
@@ -208,7 +223,7 @@ function FoodDatabasePage() {
   // aggregate — NOT derived from `allFoods`, which is capped at the 100-row page size above
   // and would silently freeze these KPIs once the library passed that size (it already has).
   const { data: statsData } = useQuery({
-    queryKey: ["foods", "stats", query, category, source, onlyVerified, onlyFavorites],
+    queryKey: ["foods", "stats", query, category, source, onlyVerified, onlyFavorites, claimNutrient, claimLevel, minEpaDha],
     queryFn: () =>
       fetchFoodStats({
         search: query || undefined,
@@ -216,6 +231,9 @@ function FoodDatabasePage() {
         source: source !== "all" ? source : undefined,
         verified: onlyVerified || undefined,
         favorites: onlyFavorites || undefined,
+        claimNutrient: claimNutrient || undefined,
+        claimLevel: claimNutrient && claimLevel ? claimLevel : undefined,
+        minEpaDhaMg: minEpaDha ? Number(minEpaDha) : undefined,
       }),
     enabled: mode === "library",
   });
@@ -385,6 +403,80 @@ function FoodDatabasePage() {
               </Button>
             </div>
             <Separator className="my-3" />
+            {/* FDA %DV nutrient content claim filter (prompt-65) — "High Source" is >=20% DV per
+                typical serving, "Good Source" is 10-19% (21 CFR 101.54). Leaving the level on
+                "Any" matches either. Only nutrients with an FDA Daily Value that this app
+                actually stores are listed. */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                Nutrient claim
+              </span>
+              <select
+                value={claimNutrient}
+                onChange={(e) => setClaimNutrient(e.target.value)}
+                className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+              >
+                <option value="">Any nutrient</option>
+                {Object.entries(NUTRIENT_CLAIM_LABEL)
+                  .sort((a, b) => a[1].localeCompare(b[1]))
+                  .map(([key, label]) => (
+                    <option key={key} value={key}>
+                      {label}
+                    </option>
+                  ))}
+              </select>
+              <select
+                value={claimLevel}
+                onChange={(e) => setClaimLevel(e.target.value as NutrientClaimLevel | "")}
+                disabled={!claimNutrient}
+                className="h-8 rounded-md border border-input bg-background px-2 text-xs disabled:opacity-50"
+              >
+                <option value="">Any level</option>
+                <option value="high">High Source (&ge;20% DV)</option>
+                <option value="good">Good Source (10-19% DV)</option>
+              </select>
+              {claimNutrient && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={() => {
+                    setClaimNutrient("");
+                    setClaimLevel("");
+                  }}
+                >
+                  <X className="size-3.5" />
+                  Clear
+                </Button>
+              )}
+
+              {/* Omega-3 minimum (prompt-67). Same filter area, deliberately its own control and
+                  its own wording: this is a measured quantity in mg, not a High/Good tier, and
+                  must not read as an FDA-style claim. Divider keeps it visually separate from the
+                  claim selects. */}
+              <span className="mx-1 hidden h-5 w-px bg-border sm:block" />
+              <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                Omega-3
+              </span>
+              <select
+                value={minEpaDha}
+                onChange={(e) => setMinEpaDha(e.target.value)}
+                className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+              >
+                <option value="">Any amount</option>
+                <option value="100">&ge; 100 mg EPA+DHA / serving</option>
+                <option value="200">&ge; 200 mg EPA+DHA / serving</option>
+                <option value="500">&ge; 500 mg EPA+DHA / serving</option>
+                <option value="1000">&ge; 1000 mg EPA+DHA / serving</option>
+              </select>
+              {minEpaDha && (
+                <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => setMinEpaDha("")}>
+                  <X className="size-3.5" />
+                  Clear
+                </Button>
+              )}
+            </div>
+            <Separator className="my-3" />
             {/* flex-wrap, not ScrollArea — with 11+ category pills this row doesn't fit in one
                 line at standard viewport widths, and ScrollArea here had no horizontal ScrollBar
                 affordance so overflow pills (e.g. Sweets) just clipped invisibly. Wrapping to a
@@ -462,7 +554,10 @@ function FoodDatabasePage() {
               </div>
             ) : (
               <div className="overflow-x-auto">
-              <Table>
+              {/* table-fixed + explicit widths on every column except Food, same fix as the
+                  USDA search table below: without it, an unbounded Food column grows to fit
+                  the longest untruncated name instead of giving `truncate` a box to clip to. */}
+              <Table className="table-fixed">
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-10 pl-4">
@@ -473,19 +568,21 @@ function FoodDatabasePage() {
                       />
                     </TableHead>
                     <TableHead>Food</TableHead>
-                    <TableHead>Source</TableHead>
-                    <TableHead className="text-right">kcal</TableHead>
-                    <TableHead className="text-right">P</TableHead>
-                    <TableHead className="text-right">C</TableHead>
-                    <TableHead className="text-right">F</TableHead>
-                    <TableHead className="text-right">Fib</TableHead>
-                    <TableHead className="text-right">Used</TableHead>
+                    <TableHead className="w-24">Source</TableHead>
+                    <TableHead className="w-16 text-right">kcal</TableHead>
+                    <TableHead className="w-12 text-right">P</TableHead>
+                    <TableHead className="w-12 text-right">C</TableHead>
+                    <TableHead className="w-12 text-right">F</TableHead>
+                    <TableHead className="w-14 text-right">Fib</TableHead>
+                    <TableHead className="w-28 text-right">Used</TableHead>
                     <TableHead className="w-10 pr-4" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filtered.map((f) => {
                     const src = SOURCE_META[f.source];
+                    // Specific FDC type when known (prompt-64), else the plain source label.
+                    const srcLabel = sourceLabel(f.source, f.usdaDataType);
                     return (
                       <TableRow
                         key={f.id}
@@ -502,21 +599,61 @@ function FoodDatabasePage() {
                         <TableCell>
                           <div className="min-w-0">
                             <div className="flex items-center gap-1.5">
-                              <span className="font-medium text-foreground truncate">{f.name}</span>
-                              {f.verified && <ShieldCheck className="size-3.5 text-emerald-600" />}
+                              {/* min-w-0 on the span itself, not just its ancestors — it's a
+                                  flex item here and flex items default to min-width:auto,
+                                  which overrides `truncate`'s overflow:hidden. */}
+                              <span
+                                className="min-w-0 truncate font-medium text-foreground"
+                                title={f.name}
+                              >
+                                {f.name}
+                              </span>
+                              {f.verified && <ShieldCheck className="size-3.5 text-emerald-600 shrink-0" />}
                               {f.isFavorite && (
-                                <Heart className="size-3.5 fill-rose-500 text-rose-500" />
+                                <Heart className="size-3.5 fill-rose-500 text-rose-500 shrink-0" />
                               )}
                             </div>
                             <div className="flex items-center gap-2 text-xs text-muted-foreground">
                               {f.brand && <span>{f.brand}</span>}
                               {f.arabicName && <span className="font-arabic">{f.arabicName}</span>}
                             </div>
+                            {/* FDA %DV claims (prompt-65) — High before Good, then strongest
+                                %DV first, capped at 3 so a nutrient-dense food doesn't blow out
+                                the row height. Full list lives in the detail drawer. */}
+                            {!!f.nutrientClaims?.length && (
+                              <div className="mt-1 flex flex-wrap items-center gap-1">
+                                {[...f.nutrientClaims]
+                                  .sort(
+                                    (a, b) =>
+                                      (a.level === b.level ? 0 : a.level === "high" ? -1 : 1) ||
+                                      (b.pct ?? 0) - (a.pct ?? 0),
+                                  )
+                                  .slice(0, 3)
+                                  .map((c) => (
+                                    <Badge
+                                      key={c.nutrient + c.level}
+                                      variant="secondary"
+                                      className={cn("text-[9px] px-1.5 py-0", CLAIM_LEVEL_META[c.level].color)}
+                                      title={`${CLAIM_LEVEL_META[c.level].label} of ${
+                                        NUTRIENT_CLAIM_LABEL[c.nutrient] ?? c.nutrient
+                                      }${c.pct != null ? ` — ~${c.pct}% DV per serving` : ""}`}
+                                    >
+                                      {CLAIM_LEVEL_META[c.level].short}{" "}
+                                      {NUTRIENT_CLAIM_LABEL[c.nutrient] ?? c.nutrient}
+                                    </Badge>
+                                  ))}
+                                {f.nutrientClaims.length > 3 && (
+                                  <span className="text-[9px] text-muted-foreground">
+                                    +{f.nutrientClaims.length - 3}
+                                  </span>
+                                )}
+                              </div>
+                            )}
                           </div>
                         </TableCell>
                         <TableCell>
                           <Badge variant="secondary" className={cn("text-[10px]", src.color)}>
-                            {src.label}
+                            {srcLabel}
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right font-medium tabular-nums">
@@ -1079,8 +1216,10 @@ function UsdaSearchPanel() {
                             {r.name}
                           </span>
                           {r.dataType && (
+                            // Same short label My Library shows for an imported food, so the
+                            // source reads identically before and after saving (prompt-64).
                             <Badge variant="outline" className="text-[10px] shrink-0">
-                              {r.dataType}
+                              {USDA_DATA_TYPE_LABEL[r.dataType] ?? r.dataType}
                             </Badge>
                           )}
                         </div>
@@ -1270,6 +1409,8 @@ function FoodDrawer({ food, onClose }: { food: FoodItem | null; onClose: () => v
   if (!food) return null;
   const meta = CATEGORY_META[food.category];
   const src = SOURCE_META[food.source];
+  const srcLabel = sourceLabel(food.source, food.usdaDataType);
+  const omega3 = epaDhaMgPerServing(food);
   const m = food.macros;
 
   return (
@@ -1292,7 +1433,7 @@ function FoodDrawer({ food, onClose }: { food: FoodItem | null; onClose: () => v
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
             <Badge variant="secondary" className={src.color}>
-              {src.label}
+              {srcLabel}
             </Badge>
             <Badge variant="outline" className="capitalize">
               {meta.label}
@@ -1306,6 +1447,63 @@ function FoodDrawer({ food, onClose }: { food: FoodItem | null; onClose: () => v
         </SheetHeader>
 
         <div className="mt-5 space-y-5">
+          {/* FDA %DV nutrient content claims (prompt-65). Shown before the macro panel because
+              this is the "why is this food useful" summary. Computed against the food's typical
+              real serving (its first stored portion), not per 100 g — which is why the serving
+              is spelled out here rather than left implicit. */}
+          {!!food.nutrientClaims?.length && (
+            <section>
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-sm font-semibold">Nutrient claims</h3>
+                {!!food.servings?.length && (
+                  <span className="text-xs text-muted-foreground">
+                    per {food.servings[0].label} ({food.servings[0].grams} g)
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {[...food.nutrientClaims]
+                  .sort(
+                    (a, b) =>
+                      (a.level === b.level ? 0 : a.level === "high" ? -1 : 1) ||
+                      (b.pct ?? 0) - (a.pct ?? 0),
+                  )
+                  .map((c) => (
+                    <Badge
+                      key={c.nutrient + c.level}
+                      variant="secondary"
+                      className={cn("text-[10px]", CLAIM_LEVEL_META[c.level].color)}
+                    >
+                      {CLAIM_LEVEL_META[c.level].label} of{" "}
+                      {NUTRIENT_CLAIM_LABEL[c.nutrient] ?? c.nutrient}
+                      {c.pct != null && (
+                        <span className="ml-1 opacity-70">~{c.pct}% DV</span>
+                      )}
+                    </Badge>
+                  ))}
+              </div>
+              <p className="mt-1.5 text-[10px] text-muted-foreground">
+                FDA thresholds (21 CFR 101.54): High Source &ge;20% DV, Good Source 10-19% DV.
+              </p>
+            </section>
+          )}
+
+          {/* Omega-3 (prompt-66). Deliberately plain text, NOT a badge: FDA has set no Daily
+              Value for omega-3 and specifically prohibits "high in"/"rich in"/"excellent source
+              of" claims for EPA/DHA, so this must never look or read like the FDA claim badges
+              above. No tier, no percentage, no claim word — just the measured amount and the
+              serving it refers to. Absent entirely when the food has no EPA/DHA or no serving
+              basis (rather than showing a 0 that could be read as a statement about the food). */}
+          {omega3 && (
+            <p className="text-xs text-muted-foreground border-l-2 border-border pl-2.5">
+              <span className="font-medium text-foreground">EPA+DHA (long-chain omega-3):</span>{" "}
+              {omega3.mg.toLocaleString()} mg per {omega3.serving.label} ({omega3.serving.grams} g)
+              <span className="block text-[10px] opacity-80">
+                Excludes ALA — see the omega-3 total per 100 g below.
+              </span>
+            </p>
+          )}
+
           {/* Macros per 100g */}
           <section>
             <div className="mb-2 flex items-center justify-between">
@@ -1528,7 +1726,7 @@ function MicronutrientSection({ food }: { food: MicronutrientSectionFood }) {
       <div className="mb-2 grid grid-cols-3 gap-2 text-xs">
         <MicroStat label="Net carbs" value={`${netCarbs} g`} />
         <MicroStat
-          label="Omega-3 (partial)"
+          label="Omega-3 total, incl. ALA"
           value={omega3Sum == null ? "No Data" : `${omega3Sum} g`}
         />
         <MicroStat
@@ -1537,9 +1735,11 @@ function MicronutrientSection({ food }: { food: MicronutrientSectionFood }) {
         />
       </div>
       <p className="mb-3 text-[10px] leading-snug text-muted-foreground">
-        Net carbs = carbs − fiber, computed here, not stored. Omega-3/6 are a partial sum of
-        only the named sub-components below — USDA never reports one verified total, and other
-        unmeasured fatty acids in the family may exist.
+        Net carbs = carbs − fiber, computed here, not stored. Omega-3/6 here are a partial sum
+        of only the named sub-components below (omega-3 = ALA + EPA + DHA) — USDA never reports
+        one verified total, and other unmeasured fatty acids in the family may exist. This
+        omega-3 figure is per 100 g and includes plant-source ALA; the EPA+DHA line above is the
+        marine long-chain fraction only, per serving — the two measure different things.
         {omega6IsApprox &&
           " * includes a sub-component pulled from USDA's generic (non-n-6-confirmed) fatty acid id — see that field below."}
       </p>

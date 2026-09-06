@@ -19,6 +19,7 @@ const PERMISSION_KEYS = [
   "foods.create", "foods.read", "foods.update", "foods.delete",
   "meals.create", "meals.read", "meals.update", "meals.delete",
   "mealplans.create", "mealplans.read", "mealplans.update", "mealplans.delete",
+  "mealplantemplates.create", "mealplantemplates.read", "mealplantemplates.update", "mealplantemplates.delete",
   "journal.create", "journal.read", "journal.update", "journal.delete",
   "appointments.create", "appointments.read", "appointments.update", "appointments.delete",
   "leads.create", "leads.read", "leads.update", "leads.delete",

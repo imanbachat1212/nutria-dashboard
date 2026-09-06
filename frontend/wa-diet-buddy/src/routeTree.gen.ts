@@ -14,6 +14,7 @@ import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as ReportsRouteImport } from './routes/reports'
 import { Route as MessagesRouteImport } from './routes/messages'
 import { Route as MealPlansRouteImport } from './routes/meal-plans'
+import { Route as MealPlanTemplatesRouteImport } from './routes/meal-plan-templates'
 import { Route as MealLibraryRouteImport } from './routes/meal-library'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as LeadsRouteImport } from './routes/leads'
@@ -25,8 +26,10 @@ import { Route as ClientsRouteImport } from './routes/clients'
 import { Route as BillingRouteImport } from './routes/billing'
 import { Route as AppointmentsRouteImport } from './routes/appointments'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as MealPlanTemplatesIndexRouteImport } from './routes/meal-plan-templates.index'
 import { Route as CmsIndexRouteImport } from './routes/cms.index'
 import { Route as ClientsIndexRouteImport } from './routes/clients.index'
+import { Route as MealPlanTemplatesTemplateIdRouteImport } from './routes/meal-plan-templates.$templateId'
 import { Route as ClientsClientIdRouteImport } from './routes/clients.$clientId'
 import { Route as CmsPagesPageIdRouteImport } from './routes/cms.pages.$pageId'
 
@@ -53,6 +56,11 @@ const MessagesRoute = MessagesRouteImport.update({
 const MealPlansRoute = MealPlansRouteImport.update({
   id: '/meal-plans',
   path: '/meal-plans',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MealPlanTemplatesRoute = MealPlanTemplatesRouteImport.update({
+  id: '/meal-plan-templates',
+  path: '/meal-plan-templates',
   getParentRoute: () => rootRouteImport,
 } as any)
 const MealLibraryRoute = MealLibraryRouteImport.update({
@@ -110,6 +118,11 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const MealPlanTemplatesIndexRoute = MealPlanTemplatesIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => MealPlanTemplatesRoute,
+} as any)
 const CmsIndexRoute = CmsIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -120,6 +133,12 @@ const ClientsIndexRoute = ClientsIndexRouteImport.update({
   path: '/',
   getParentRoute: () => ClientsRoute,
 } as any)
+const MealPlanTemplatesTemplateIdRoute =
+  MealPlanTemplatesTemplateIdRouteImport.update({
+    id: '/$templateId',
+    path: '/$templateId',
+    getParentRoute: () => MealPlanTemplatesRoute,
+  } as any)
 const ClientsClientIdRoute = ClientsClientIdRouteImport.update({
   id: '/$clientId',
   path: '/$clientId',
@@ -143,14 +162,17 @@ export interface FileRoutesByFullPath {
   '/leads': typeof LeadsRoute
   '/login': typeof LoginRoute
   '/meal-library': typeof MealLibraryRoute
+  '/meal-plan-templates': typeof MealPlanTemplatesRouteWithChildren
   '/meal-plans': typeof MealPlansRoute
   '/messages': typeof MessagesRoute
   '/reports': typeof ReportsRoute
   '/settings': typeof SettingsRoute
   '/team': typeof TeamRoute
   '/clients/$clientId': typeof ClientsClientIdRoute
+  '/meal-plan-templates/$templateId': typeof MealPlanTemplatesTemplateIdRoute
   '/clients/': typeof ClientsIndexRoute
   '/cms/': typeof CmsIndexRoute
+  '/meal-plan-templates/': typeof MealPlanTemplatesIndexRoute
   '/cms/pages/$pageId': typeof CmsPagesPageIdRoute
 }
 export interface FileRoutesByTo {
@@ -169,8 +191,10 @@ export interface FileRoutesByTo {
   '/settings': typeof SettingsRoute
   '/team': typeof TeamRoute
   '/clients/$clientId': typeof ClientsClientIdRoute
+  '/meal-plan-templates/$templateId': typeof MealPlanTemplatesTemplateIdRoute
   '/clients': typeof ClientsIndexRoute
   '/cms': typeof CmsIndexRoute
+  '/meal-plan-templates': typeof MealPlanTemplatesIndexRoute
   '/cms/pages/$pageId': typeof CmsPagesPageIdRoute
 }
 export interface FileRoutesById {
@@ -186,14 +210,17 @@ export interface FileRoutesById {
   '/leads': typeof LeadsRoute
   '/login': typeof LoginRoute
   '/meal-library': typeof MealLibraryRoute
+  '/meal-plan-templates': typeof MealPlanTemplatesRouteWithChildren
   '/meal-plans': typeof MealPlansRoute
   '/messages': typeof MessagesRoute
   '/reports': typeof ReportsRoute
   '/settings': typeof SettingsRoute
   '/team': typeof TeamRoute
   '/clients/$clientId': typeof ClientsClientIdRoute
+  '/meal-plan-templates/$templateId': typeof MealPlanTemplatesTemplateIdRoute
   '/clients/': typeof ClientsIndexRoute
   '/cms/': typeof CmsIndexRoute
+  '/meal-plan-templates/': typeof MealPlanTemplatesIndexRoute
   '/cms/pages/$pageId': typeof CmsPagesPageIdRoute
 }
 export interface FileRouteTypes {
@@ -210,14 +237,17 @@ export interface FileRouteTypes {
     | '/leads'
     | '/login'
     | '/meal-library'
+    | '/meal-plan-templates'
     | '/meal-plans'
     | '/messages'
     | '/reports'
     | '/settings'
     | '/team'
     | '/clients/$clientId'
+    | '/meal-plan-templates/$templateId'
     | '/clients/'
     | '/cms/'
+    | '/meal-plan-templates/'
     | '/cms/pages/$pageId'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -236,8 +266,10 @@ export interface FileRouteTypes {
     | '/settings'
     | '/team'
     | '/clients/$clientId'
+    | '/meal-plan-templates/$templateId'
     | '/clients'
     | '/cms'
+    | '/meal-plan-templates'
     | '/cms/pages/$pageId'
   id:
     | '__root__'
@@ -252,14 +284,17 @@ export interface FileRouteTypes {
     | '/leads'
     | '/login'
     | '/meal-library'
+    | '/meal-plan-templates'
     | '/meal-plans'
     | '/messages'
     | '/reports'
     | '/settings'
     | '/team'
     | '/clients/$clientId'
+    | '/meal-plan-templates/$templateId'
     | '/clients/'
     | '/cms/'
+    | '/meal-plan-templates/'
     | '/cms/pages/$pageId'
   fileRoutesById: FileRoutesById
 }
@@ -275,6 +310,7 @@ export interface RootRouteChildren {
   LeadsRoute: typeof LeadsRoute
   LoginRoute: typeof LoginRoute
   MealLibraryRoute: typeof MealLibraryRoute
+  MealPlanTemplatesRoute: typeof MealPlanTemplatesRouteWithChildren
   MealPlansRoute: typeof MealPlansRoute
   MessagesRoute: typeof MessagesRoute
   ReportsRoute: typeof ReportsRoute
@@ -317,6 +353,13 @@ declare module '@tanstack/react-router' {
       path: '/meal-plans'
       fullPath: '/meal-plans'
       preLoaderRoute: typeof MealPlansRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/meal-plan-templates': {
+      id: '/meal-plan-templates'
+      path: '/meal-plan-templates'
+      fullPath: '/meal-plan-templates'
+      preLoaderRoute: typeof MealPlanTemplatesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/meal-library': {
@@ -396,6 +439,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/meal-plan-templates/': {
+      id: '/meal-plan-templates/'
+      path: '/'
+      fullPath: '/meal-plan-templates/'
+      preLoaderRoute: typeof MealPlanTemplatesIndexRouteImport
+      parentRoute: typeof MealPlanTemplatesRoute
+    }
     '/cms/': {
       id: '/cms/'
       path: '/'
@@ -409,6 +459,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/clients/'
       preLoaderRoute: typeof ClientsIndexRouteImport
       parentRoute: typeof ClientsRoute
+    }
+    '/meal-plan-templates/$templateId': {
+      id: '/meal-plan-templates/$templateId'
+      path: '/$templateId'
+      fullPath: '/meal-plan-templates/$templateId'
+      preLoaderRoute: typeof MealPlanTemplatesTemplateIdRouteImport
+      parentRoute: typeof MealPlanTemplatesRoute
     }
     '/clients/$clientId': {
       id: '/clients/$clientId'
@@ -452,6 +509,19 @@ const CmsRouteChildren: CmsRouteChildren = {
 
 const CmsRouteWithChildren = CmsRoute._addFileChildren(CmsRouteChildren)
 
+interface MealPlanTemplatesRouteChildren {
+  MealPlanTemplatesTemplateIdRoute: typeof MealPlanTemplatesTemplateIdRoute
+  MealPlanTemplatesIndexRoute: typeof MealPlanTemplatesIndexRoute
+}
+
+const MealPlanTemplatesRouteChildren: MealPlanTemplatesRouteChildren = {
+  MealPlanTemplatesTemplateIdRoute: MealPlanTemplatesTemplateIdRoute,
+  MealPlanTemplatesIndexRoute: MealPlanTemplatesIndexRoute,
+}
+
+const MealPlanTemplatesRouteWithChildren =
+  MealPlanTemplatesRoute._addFileChildren(MealPlanTemplatesRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AppointmentsRoute: AppointmentsRoute,
@@ -464,6 +534,7 @@ const rootRouteChildren: RootRouteChildren = {
   LeadsRoute: LeadsRoute,
   LoginRoute: LoginRoute,
   MealLibraryRoute: MealLibraryRoute,
+  MealPlanTemplatesRoute: MealPlanTemplatesRouteWithChildren,
   MealPlansRoute: MealPlansRoute,
   MessagesRoute: MessagesRoute,
   ReportsRoute: ReportsRoute,

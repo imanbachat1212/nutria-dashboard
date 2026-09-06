@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -18,9 +18,13 @@ import {
   Beef,
   Wheat,
   Droplet,
+  Leaf,
   Archive,
   Pill,
   Info,
+  Layers,
+  GripVertical,
+  Loader2,
 } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
@@ -60,15 +64,21 @@ import {
   fetchMealPlans,
   fetchMealPlan,
   updateMealPlan,
+  addPlanItem,
+  updatePlanItem,
   removePlanItem,
   downloadPlanPdf,
   copyPlanDay,
   copyMealSlot,
+  copySlotToSlot,
   updateSlotTime,
 } from "@/lib/mealplans-api";
+import { toast } from "sonner";
 import { NewPlanDialog } from "@/components/new-plan-dialog";
 import { DuplicatePlanDialog } from "@/components/duplicate-plan-dialog";
+import { SaveAsTemplateDialog } from "@/components/save-as-template-dialog";
 import { PlanItemPicker } from "@/components/plan-item-picker";
+import { EditPlanItemDialog, type EditableItem } from "@/components/edit-plan-item-dialog";
 
 export const Route = createFileRoute("/meal-plans")({
   head: () => ({
@@ -102,10 +112,12 @@ function MealPlansPage() {
     day: number;
     slot: string;
   }>({ open: false, day: 0, slot: "breakfast" });
+  const [editingItem, setEditingItem] = useState<EditableItem | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
   const [activating, setActivating] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [duplicateDialogOpen, setDuplicateDialogOpen] = useState(false);
+  const [saveAsTemplateOpen, setSaveAsTemplateOpen] = useState(false);
   const [copyDayOpen, setCopyDayOpen] = useState(false);
   const [copyTargetDays, setCopyTargetDays] = useState<number[]>([]);
   const [copying, setCopying] = useState(false);
@@ -119,8 +131,26 @@ function MealPlansPage() {
   const [copyingSlot, setCopyingSlot] = useState(false);
   const [editTimeValue, setEditTimeValue] = useState("");
   const [savingTime, setSavingTime] = useState(false);
+  // Drag-and-drop same-day slot copy (prompt-56) — draggedSlot is the slot currently being
+  // dragged (by its header), dragOverSlot is whichever slot card the pointer is currently over
+  // (drives the drop-target highlight). Both cleared on drop or drag end/cancel.
+  const [draggedSlot, setDraggedSlot] = useState<string | null>(null);
+  const [dragOverSlot, setDragOverSlot] = useState<string | null>(null);
+  // Edge auto-scroll while dragging (prompt-57) — refs, not state, since these update on every
+  // dragover (many times a second) and don't need to trigger a re-render themselves; only the
+  // interval's own scrollTop writes need to happen on each tick. slotListRef is the ScrollArea
+  // instance itself (its forwarded ref lands on Radix's Root, an ancestor of the actual
+  // scrollable [data-radix-scroll-area-viewport] div, not that div itself — queried out of it
+  // on demand below rather than plumbing a second ref through the shared ScrollArea component).
+  const slotListRef = useRef<HTMLDivElement>(null);
+  const autoScrollDirRef = useRef<"up" | "down" | null>(null);
+  const autoScrollIntervalRef = useRef<number | null>(null);
 
-  const { data: listData } = useQuery({
+  // isPending matters as much as data here (prompt-60): this list previously rendered its
+  // "Create your first meal plan to get started." empty state while the very first fetch was
+  // still in flight, so a slow response looked exactly like "this dietitian has no plans" —
+  // which reads as a broken/empty page and prompts a pointless manual reload.
+  const { data: listData, isPending: plansPending } = useQuery({
     queryKey: ["mealplans"],
     queryFn: () => fetchMealPlans({ limit: 100 }),
   });
@@ -128,11 +158,14 @@ function MealPlansPage() {
 
   const effectiveId = selectedId ?? plans[0]?.id ?? null;
 
-  const { data: detailPlan } = useQuery({
+  const { data: detailPlan, isPending: detailPending } = useQuery({
     queryKey: ["mealplan", effectiveId],
     queryFn: () => fetchMealPlan(effectiveId!),
     enabled: !!effectiveId,
   });
+  // `enabled: false` also reports isPending, so only treat the detail query as loading when it
+  // actually has an id to fetch.
+  const planLoading = plansPending || (!!effectiveId && detailPending);
 
   const plan = detailPlan ?? plans.find((p) => p.id === effectiveId);
   const day = plan?.days.find((d) => d.day === activeDay) ?? plan?.days[0];
@@ -146,8 +179,8 @@ function MealPlansPage() {
     });
   }, [query, statusFilter, plans]);
 
-  const totals = day ? dayMacros(day) : { kcal: 0, protein: 0, carbs: 0, fat: 0 };
-  const targets = plan?.targets ?? { kcal: 0, protein: 0, carbs: 0, fat: 0 };
+  const totals = day ? dayMacros(day) : { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 };
+  const targets = plan?.targets ?? { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 };
   const microTotals = day ? dayMicros(day) : {};
 
   async function handleRemoveItem(itemId: string) {
@@ -159,6 +192,15 @@ function MealPlansPage() {
     } finally {
       setRemoving(null);
     }
+  }
+
+  // In-place edit (prompt-48) — PATCH via updatePlanItem, never remove+re-add, so the item keeps
+  // its exact day/slot position instead of landing at the end of the slot's list.
+  async function handleSaveEditedItem(data: Parameters<typeof updatePlanItem>[2]) {
+    if (!effectiveId || !editingItem) return;
+    await updatePlanItem(effectiveId, editingItem.id, data);
+    toast.success("Item updated");
+    qc.invalidateQueries({ queryKey: ["mealplan", effectiveId] });
   }
 
   async function handleActivate() {
@@ -264,6 +306,112 @@ function MealPlansPage() {
     }
   }
 
+  // Drag-and-drop same-day slot copy (prompt-56/57). Native HTML5 DnD, not a library — nothing
+  // like dnd-kit/react-dnd is already a dependency here, and this interaction (drag one card,
+  // drop on another card in the same list) doesn't need more than that. dataTransfer carries the
+  // source slot and is the actual source of truth read in handleSlotDrop below — a state closure
+  // read at drop time could be stale if drop fires before a React re-render catches up (draggedSlot
+  // state is still tracked for the drag-source/drop-target highlight styling, which is allowed to
+  // lag a tick without breaking anything functional).
+  const AUTO_SCROLL_EDGE_PX = 56;
+  const AUTO_SCROLL_STEP_PX = 14;
+
+  function getSlotListViewport(): HTMLElement | null {
+    return slotListRef.current?.querySelector<HTMLElement>("[data-radix-scroll-area-viewport]") ?? null;
+  }
+
+  function stopAutoScroll() {
+    if (autoScrollIntervalRef.current != null) {
+      window.clearInterval(autoScrollIntervalRef.current);
+      autoScrollIntervalRef.current = null;
+    }
+    autoScrollDirRef.current = null;
+  }
+
+  function startAutoScroll() {
+    if (autoScrollIntervalRef.current != null) return;
+    autoScrollIntervalRef.current = window.setInterval(() => {
+      const dir = autoScrollDirRef.current;
+      if (!dir) return;
+      const viewport = getSlotListViewport();
+      if (!viewport) return;
+      viewport.scrollTop += dir === "down" ? AUTO_SCROLL_STEP_PX : -AUTO_SCROLL_STEP_PX;
+    }, 16);
+  }
+
+  // Attached to the ScrollArea itself (not each individual slot card) so it keeps tracking
+  // pointer position via bubbled dragover events no matter which child is currently under the
+  // pointer, or whether the pointer is over the gap between cards / empty space below the last
+  // one. Only updates a ref, not state — this fires continuously during a drag and doesn't need
+  // to trigger a re-render on every pointer movement.
+  function handleSlotListDragOver(e: React.DragEvent) {
+    const viewport = getSlotListViewport();
+    if (!viewport) return;
+    const rect = viewport.getBoundingClientRect();
+    if (e.clientY < rect.top + AUTO_SCROLL_EDGE_PX) {
+      autoScrollDirRef.current = "up";
+    } else if (e.clientY > rect.bottom - AUTO_SCROLL_EDGE_PX) {
+      autoScrollDirRef.current = "down";
+    } else {
+      autoScrollDirRef.current = null;
+    }
+  }
+
+  function handleSlotDragStart(e: React.DragEvent, slot: string) {
+    setDraggedSlot(slot);
+    e.dataTransfer.effectAllowed = "copy";
+    e.dataTransfer.setData("text/plain", slot);
+    startAutoScroll();
+  }
+
+  function handleSlotDragOver(e: React.DragEvent, slot: string) {
+    // preventDefault unconditionally — every slot is a valid drop target (self-drop is allowed
+    // to land here too; it's rejected as a no-op in handleSlotDrop below, not blocked at the
+    // browser level), and the browser disallows dropping on anything that doesn't call this in
+    // dragover. Gating it on draggedSlot state would make the very first dragover after
+    // dragstart a no-op whenever state hasn't re-rendered yet (a real risk on a fast drag, not
+    // just a synthetic one), silently breaking the drop that follows it.
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    if (dragOverSlot !== slot) setDragOverSlot(slot);
+  }
+
+  function handleSlotDragLeave(slot: string) {
+    setDragOverSlot((prev) => (prev === slot ? null : prev));
+  }
+
+  function handleSlotDragEnd() {
+    setDraggedSlot(null);
+    setDragOverSlot(null);
+    stopAutoScroll();
+  }
+
+  async function handleSlotDrop(e: React.DragEvent, toSlot: string) {
+    e.preventDefault();
+    // dataTransfer, not the draggedSlot state closure, is the source of truth here — it's
+    // attached to the native drag gesture itself (set once in onDragStart, read directly off
+    // this event), so it can't go stale the way a state closure could if drop fires before a
+    // React re-render has caught up on a fast drag.
+    const fromSlot = e.dataTransfer.getData("text/plain") || draggedSlot;
+    setDraggedSlot(null);
+    setDragOverSlot(null);
+    stopAutoScroll();
+    if (!effectiveId || !fromSlot) return;
+    // Self-drop (prompt-57 reversal of prompt-56's original "append is fine either way" call):
+    // an accidental small/imprecise drag that starts and ends on the same slot must not double
+    // up that slot's own items — true no-op, no API call at all.
+    if (fromSlot === toSlot) return;
+    try {
+      await copySlotToSlot(effectiveId, { day: activeDayIdx, fromSlot, toSlot });
+      qc.invalidateQueries({ queryKey: ["mealplan", effectiveId] });
+      const fromLabel = SLOT_META[fromSlot as MealSlot]?.label ?? fromSlot;
+      const toLabel = SLOT_META[toSlot as MealSlot]?.label ?? toSlot;
+      toast.success(`Copied ${fromLabel} into ${toLabel}`);
+    } catch {
+      toast.error(`Couldn't copy into ${SLOT_META[toSlot as MealSlot]?.label ?? toSlot} — try again`);
+    }
+  }
+
   async function handleSaveSlotTime() {
     if (!effectiveId || !slotAction || !editTimeValue) return;
     setSavingTime(true);
@@ -304,8 +452,8 @@ function MealPlansPage() {
           <KpiCard
             icon={Users}
             label="Active plans"
-            value={String(plans.filter((p) => p.status === "active").length)}
-            hint={`${plans.length} total`}
+            value={plansPending ? "—" : String(plans.filter((p) => p.status === "active").length)}
+            hint={plansPending ? "Loading…" : `${plans.length} total`}
           />
           <KpiCard
             icon={FileText}
@@ -369,6 +517,24 @@ function MealPlansPage() {
               <Separator />
               <ScrollArea className="h-140 pr-2 -mr-2">
                 <div className="space-y-1.5">
+                  {plansPending &&
+                    Array.from({ length: 4 }).map((_, i) => (
+                      <div
+                        key={`skeleton-${i}`}
+                        className="rounded-lg border border-transparent p-2.5 flex items-center gap-2.5"
+                      >
+                        <div className="h-8 w-8 rounded-full bg-muted animate-pulse shrink-0" />
+                        <div className="flex-1 min-w-0 space-y-1.5">
+                          <div className="h-3 w-2/3 rounded bg-muted animate-pulse" />
+                          <div className="h-2.5 w-1/2 rounded bg-muted animate-pulse" />
+                        </div>
+                      </div>
+                    ))}
+                  {!plansPending && filteredPlans.length === 0 && (
+                    <p className="text-xs text-muted-foreground text-center py-8">
+                      {plans.length === 0 ? "No plans yet" : "No plans match your filters"}
+                    </p>
+                  )}
                   {filteredPlans.map((p) => {
                     const active = p.id === selectedId;
                     return (
@@ -425,7 +591,12 @@ function MealPlansPage() {
           {/* Center: builder */}
           <Card className="col-span-12 lg:col-span-9 border-border/60">
             <CardContent className="p-4 space-y-4">
-              {!plan ? (
+              {!plan && planLoading ? (
+                <div className="flex items-center justify-center h-100 text-sm text-muted-foreground gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading plans…
+                </div>
+              ) : !plan ? (
                 <div className="flex items-center justify-center h-100 text-sm text-muted-foreground">
                   Create your first meal plan to get started.
                 </div>
@@ -492,6 +663,19 @@ function MealPlansPage() {
                           {downloading ? "Generating PDF…" : "Export PDF"}
                         </TooltipContent>
                       </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => setSaveAsTemplateOpen(true)}
+                          >
+                            <Layers className="h-4 w-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Save as template</TooltipContent>
+                      </Tooltip>
                       <Button size="sm" className="h-8">
                         <Send className="h-4 w-4" />
                         Send to client
@@ -512,7 +696,7 @@ function MealPlansPage() {
                         Micronutrients
                       </Button>
                     </div>
-                    <div className="grid grid-cols-4 gap-2">
+                    <div className="grid grid-cols-5 gap-2">
                       <MacroBar
                         icon={Flame}
                         label="kcal"
@@ -543,6 +727,14 @@ function MealPlansPage() {
                         target={targets.fat}
                         unit="g"
                         tone="violet"
+                      />
+                      <MacroBar
+                        icon={Leaf}
+                        label="Fiber"
+                        value={totals.fiber}
+                        target={targets.fiber}
+                        unit="g"
+                        tone="emerald"
                       />
                     </div>
                   </div>
@@ -634,7 +826,11 @@ function MealPlansPage() {
                   <Separator />
 
                   {/* meal slots */}
-                  <ScrollArea className="h-130 pr-2 -mr-2">
+                  <ScrollArea
+                    ref={slotListRef}
+                    onDragOver={handleSlotListDragOver}
+                    className="h-130 pr-2 -mr-2"
+                  >
                     <div className="space-y-3">
                       {day?.meals.map((meal) => {
                         const mm = mealMacros(meal);
@@ -642,10 +838,33 @@ function MealPlansPage() {
                         return (
                           <div
                             key={meal.id}
-                            className="rounded-lg border border-border/60 bg-card/40 overflow-hidden"
+                            onDragOver={(e) => handleSlotDragOver(e, meal.slot)}
+                            onDragLeave={() => handleSlotDragLeave(meal.slot)}
+                            onDrop={(e) => handleSlotDrop(e, meal.slot)}
+                            className={cn(
+                              "rounded-lg border overflow-hidden transition-colors",
+                              // No drop-allowed highlight on the slot being dragged itself —
+                              // dropping onto itself is a no-op (prompt-57), so it shouldn't
+                              // advertise itself as a target.
+                              dragOverSlot === meal.slot &&
+                                draggedSlot &&
+                                draggedSlot !== meal.slot
+                                ? "border-primary bg-primary/5 ring-2 ring-primary/30"
+                                : "border-border/60 bg-card/40",
+                            )}
                           >
-                            <div className="flex items-center justify-between px-3 py-2 bg-muted/30 border-b border-border/60">
+                            <div
+                              draggable
+                              onDragStart={(e) => handleSlotDragStart(e, meal.slot)}
+                              onDragEnd={handleSlotDragEnd}
+                              title="Drag onto another slot to copy these items into it"
+                              className={cn(
+                                "flex items-center justify-between px-3 py-2 bg-muted/30 border-b border-border/60 cursor-grab active:cursor-grabbing",
+                                draggedSlot === meal.slot && "opacity-50",
+                              )}
+                            >
                               <div className="flex items-center gap-2.5">
+                                <GripVertical className="h-3.5 w-3.5 text-muted-foreground/50 shrink-0" />
                                 <span className="text-base leading-none">
                                   {SLOT_META[meal.slot as MealSlot]?.emoji ?? "🍽️"}
                                 </span>
@@ -729,6 +948,29 @@ function MealPlansPage() {
                                       <Button
                                         variant="ghost"
                                         size="icon"
+                                        className="h-6 w-6"
+                                        disabled={!it.itemType}
+                                        onClick={() =>
+                                          setEditingItem({
+                                            id: it.id,
+                                            name: it.name,
+                                            itemType: it.itemType ?? "food",
+                                            rawQuantity: it.rawQuantity ?? 0,
+                                            rawUnit: it.rawUnit ?? "g",
+                                            measureLabel: it.measureLabel,
+                                            measureDescription: it.measureDescription,
+                                            measureCount: it.measureCount,
+                                            realMeasures: it.realMeasures,
+                                            unitWeights: it.unitWeights,
+                                            commonServings: it.commonServings,
+                                          })
+                                        }
+                                      >
+                                        <Pencil className="h-3 w-3" />
+                                      </Button>
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
                                         className="h-6 w-6 text-destructive"
                                         disabled={removing === it.id}
                                         onClick={() => handleRemoveItem(it.id)}
@@ -787,15 +1029,31 @@ function MealPlansPage() {
           />
         )}
 
+        {plan && (
+          <SaveAsTemplateDialog
+            open={saveAsTemplateOpen}
+            onOpenChange={setSaveAsTemplateOpen}
+            sourcePlan={plan}
+            onSaved={() => toast.success(`Saved "${plan.name}" as a template`)}
+          />
+        )}
+
         {effectiveId && (
           <PlanItemPicker
             open={pickerState.open}
             onOpenChange={(o) => setPickerState((s) => ({ ...s, open: o }))}
-            planId={effectiveId}
+            onAdd={(data) => addPlanItem(effectiveId, data)}
+            onAdded={() => qc.invalidateQueries({ queryKey: ["mealplan"] })}
             day={pickerState.day}
             slot={pickerState.slot}
           />
         )}
+
+        <EditPlanItemDialog
+          item={editingItem}
+          onOpenChange={(o) => !o && setEditingItem(null)}
+          onSave={handleSaveEditedItem}
+        />
 
         <Dialog open={!!slotAction} onOpenChange={(o) => !o && closeSlotAction()}>
           <DialogContent className="sm:max-w-80">
@@ -967,7 +1225,7 @@ function MacroBar({
   value: number;
   target: number;
   unit?: string;
-  tone: "primary" | "rose" | "amber" | "violet";
+  tone: "primary" | "rose" | "amber" | "violet" | "emerald";
 }) {
   const pct = target ? Math.min(100, Math.round((value / target) * 100)) : 0;
   const toneMap: Record<string, string> = {
@@ -975,6 +1233,7 @@ function MacroBar({
     rose: "text-rose-300",
     amber: "text-amber-300",
     violet: "text-violet-300",
+    emerald: "text-emerald-300",
   };
   return (
     <div className="rounded-md border border-border/60 bg-card/40 p-2.5 space-y-1.5">

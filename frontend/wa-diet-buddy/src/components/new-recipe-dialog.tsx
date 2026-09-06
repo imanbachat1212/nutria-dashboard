@@ -4,6 +4,8 @@ import { createMeal, updateMeal, getMeal, type PhotoItem } from "@/lib/meals-api
 import { fetchFoods } from "@/lib/foods-api";
 import type { UnitWeights, ServingSize } from "@/lib/food-database-mock";
 import { commonServingOverride } from "@/lib/unit-conversion";
+import { resolveMeasure, pickInitialMeasureSelection } from "@/lib/measure-options";
+import { MeasureSelect } from "@/components/measure-select";
 import { uploadMedia } from "@/lib/api";
 import { fetchDietaryPreferences } from "@/lib/settings-api";
 import {
@@ -64,12 +66,13 @@ import {
   type Allergen,
 } from "@/lib/meal-library-mock";
 
-type Unit = "g" | "ml" | "cup" | "tbsp" | "tsp" | "oz" | "piece";
-const UNITS: Unit[] = ["g", "ml", "cup", "tbsp", "tsp", "oz", "piece"];
-
 const MAX_PHOTOS = 6;
 
-const UNIT_TO_GRAMS: Record<Unit, number> = {
+// `unit` is now a broader string than just these 7 keys — it can also be a real per-food
+// measure's own label (e.g. "1 pitted date, pitted"), which resolveMeasure() below always
+// normalizes to unit="g" before it ever reaches this map, so indexing with an unrecognized
+// string here just falls through to the flat constants exactly as it always has for `oz`.
+const UNIT_TO_GRAMS: Record<string, number> = {
   g: 1,
   ml: 1,
   cup: 240,
@@ -85,7 +88,7 @@ const UNIT_TO_GRAMS: Record<Unit, number> = {
 
 // cup/tbsp/tsp/piece/ml vary by food density (1 cup of oats != 1 cup of spinach, 1 ml of
 // honey != 1 ml of skim milk) — only g/oz are always exact regardless of which food.
-const UNIT_TO_FOOD_FIELD: Partial<Record<Unit, keyof UnitWeights>> = {
+const UNIT_TO_FOOD_FIELD: Partial<Record<string, keyof UnitWeights>> = {
   cup: "cup",
   tbsp: "tbsp",
   tsp: "tsp",
@@ -96,11 +99,12 @@ const UNIT_TO_FOOD_FIELD: Partial<Record<Unit, keyof UnitWeights>> = {
 // Mirrors gramsPerUnitForFood in backend/src/lib/calc/recipeMacros.js — this dialog's macro
 // preview is only an estimate shown while editing (the backend recomputes the authoritative
 // totals from scratch on save), but it should still resolve unit weights the same way so the
-// preview doesn't drift from what actually gets saved.
+// preview doesn't drift from what actually gets saved. Always called with resolveMeasure()'s
+// OUTPUT unit (see liveMacros below), never a raw real-measure label directly.
 function gramsPerUnitForFood(
   commonServings: ServingSize[] | undefined,
   unitWeights: UnitWeights | undefined,
-  unit: Unit,
+  unit: string,
 ): number {
   const commonOverride = commonServingOverride(commonServings, unit);
   if (commonOverride != null) return commonOverride;
@@ -112,8 +116,10 @@ function gramsPerUnitForFood(
 }
 
 // g/oz are always exact regardless of which food, so they never need the indicator — only
-// cup/tbsp/tsp/piece/ml vary by food density and can silently fall back to a flat guess.
-function isApproximateUnit(unitWeights: UnitWeights | undefined, unit: Unit): boolean {
+// cup/tbsp/tsp/piece/ml vary by food density and can silently fall back to a flat guess. A real
+// per-food measure label (see realMeasures on IngredientDraft below) is never approximate either
+// — it isn't one of UNIT_TO_FOOD_FIELD's keys, so this already returns false for one unchanged.
+function isApproximateUnit(unitWeights: UnitWeights | undefined, unit: string): boolean {
   const field = UNIT_TO_FOOD_FIELD[unit];
   if (!field) return false;
   return (unitWeights?.[field] ?? null) == null;
@@ -130,11 +136,28 @@ interface IngredientMacros {
 interface IngredientDraft {
   foodId: string;
   name: string;
+  // "How many of `unit`" — when `unit` is a real measure's own label (see realMeasures), this
+  // is a count (e.g. 3 dates); resolveMeasure() turns that into an actual gram quantity only at
+  // preview/submit time, never stored pre-multiplied here.
   quantity: number | "";
-  unit: Unit;
+  // "g" | a generic unit (ml/cup/tbsp/tsp/oz/piece) | one of realMeasures' own labels.
+  unit: string;
   per100g: IngredientMacros | null;
   unitWeights?: UnitWeights;
   commonServings?: ServingSize[];
+  // This food's real, food-specific measures (e.g. "1 pitted date, pitted") — undefined/empty
+  // falls back to the generic unit list, per prompt-45's MeasureSelect.
+  realMeasures?: ServingSize[];
+  // Display-only (prompt-47) — carries either a freshly-picked real measure's label (see the
+  // final save mapping below, which prefers a fresh resolveMeasure() result) or, for a row
+  // loaded from an existing recipe and never re-touched, whatever label was already saved —
+  // so simply opening "Edit recipe" and saving again doesn't silently wipe it.
+  measureLabel?: string | null;
+  // Structured pick info (prompt-49) — same "fresh pick wins, else preserve what was loaded"
+  // rule as measureLabel above; used on edit-load to pre-select the exact real measure
+  // originally picked (see the editData hydration below) instead of always defaulting to grams.
+  measureDescription?: string | null;
+  measureCount?: number | null;
 }
 
 interface NewRecipeDialogProps {
@@ -235,7 +258,18 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
     setServings(editData.servings);
     setIngredients(
       editData.ingredients.length
-        ? editData.ingredients.map((i) => ({ ...i, unit: (i.unit as Unit) || "g" }))
+        ? editData.ingredients.map((i) => {
+            // Pre-selects the exact real measure originally picked (prompt-49) when it still
+            // matches one of this food's current portions, else falls back to grams + the
+            // stored quantity — same rule as EditPlanItemDialog.
+            const initial = pickInitialMeasureSelection(
+              i.realMeasures,
+              i.measureDescription,
+              i.measureCount,
+              typeof i.quantity === "number" ? i.quantity : 0,
+            );
+            return { ...i, unit: initial.option, quantity: initial.count };
+          })
         : [{ foodId: "", name: "", quantity: "", unit: "g", per100g: null }],
     );
     setMethodSteps(editData.steps.length ? editData.steps : [""]);
@@ -260,7 +294,11 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
       if (!ing.per100g) continue;
       matched++;
       const qty = typeof ing.quantity === "number" ? ing.quantity : 0;
-      const grams = qty * gramsPerUnitForFood(ing.commonServings, ing.unitWeights, ing.unit);
+      // resolveMeasure turns a real-measure selection into an exact gram total (unit="g"); for
+      // the generic-unit path it passes qty/unit through unchanged, so gramsPerUnitForFood below
+      // still does the existing per-food-density resolution exactly as before either way.
+      const resolved = resolveMeasure(ing.realMeasures, ing.unit, qty);
+      const grams = resolved.quantity * gramsPerUnitForFood(ing.commonServings, ing.unitWeights, resolved.unit);
       const factor = grams / 100;
       kcal += ing.per100g.kcal * factor;
       protein += ing.per100g.protein * factor;
@@ -559,7 +597,7 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                         <FoodSearchInput
                           value={ing.name}
                           foodId={ing.foodId}
-                          onSelect={(id, label, macros, unitWeights, commonServings) => {
+                          onSelect={(id, label, macros, unitWeights, commonServings, realMeasures) => {
                             const copy = [...ingredients];
                             copy[idx] = {
                               ...copy[idx],
@@ -568,6 +606,15 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                               per100g: macros,
                               unitWeights,
                               commonServings,
+                              realMeasures,
+                              // A fresh food swap resets to plain grams rather than keeping the
+                              // previous food's measure selection, which may not even exist for
+                              // this one (e.g. "1 stick" doesn't apply to a vegetable) — and its
+                              // label along with it, since it described that other food's measure.
+                              unit: "g",
+                              measureLabel: null,
+                              measureDescription: null,
+                              measureCount: null,
                             };
                             setIngredients(copy);
                           }}
@@ -580,46 +627,29 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                               per100g: null,
                               unitWeights: undefined,
                               commonServings: undefined,
+                              realMeasures: undefined,
+                              measureLabel: null,
+                              measureDescription: null,
+                              measureCount: null,
                             };
                             setIngredients(copy);
                           }}
                         />
-                        <Input
-                          type="number"
-                          min={0}
-                          step="any"
-                          placeholder="150"
-                          value={ing.quantity}
-                          onChange={(e) => {
+                        <MeasureSelect
+                          realMeasures={ing.realMeasures}
+                          option={ing.unit}
+                          count={ing.quantity}
+                          onOptionChange={(v) => {
                             const copy = [...ingredients];
-                            const v = e.target.value;
-                            copy[idx] = {
-                              ...copy[idx],
-                              quantity: v === "" ? "" : Math.max(0, Number(v)),
-                            };
+                            copy[idx] = { ...copy[idx], unit: v };
                             setIngredients(copy);
                           }}
-                          className="w-20"
+                          onCountChange={(v) => {
+                            const copy = [...ingredients];
+                            copy[idx] = { ...copy[idx], quantity: v };
+                            setIngredients(copy);
+                          }}
                         />
-                        <Select
-                          value={ing.unit}
-                          onValueChange={(v) => {
-                            const copy = [...ingredients];
-                            copy[idx] = { ...copy[idx], unit: v as Unit };
-                            setIngredients(copy);
-                          }}
-                        >
-                          <SelectTrigger className="w-24">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {UNITS.map((u) => (
-                              <SelectItem key={u} value={u}>
-                                {u}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
                         {isApproximateUnit(ing.unitWeights, ing.unit) && (
                           <Tooltip>
                             <TooltipTrigger asChild>
@@ -1000,12 +1030,32 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                     cookTime: cookMin,
                     dietTags: diets,
                     allergens,
-                    ingredients: validIngredients.map((i) => ({
-                      food: i.foodId,
-                      name: i.name,
-                      quantity: typeof i.quantity === "number" ? i.quantity : undefined,
-                      unit: i.unit,
-                    })),
+                    ingredients: validIngredients.map((i) => {
+                      // Same resolution as the live preview — a real-measure selection (e.g.
+                      // "3" × "1 pitted date, pitted") is sent as its exact resolved gram total
+                      // with unit="g", since that's the only unit value every downstream
+                      // consumer (recipeMacros.js's gramsPerUnitForFood, re-run on every future
+                      // edit) can resolve correctly for an arbitrary per-food measure.
+                      const qty = typeof i.quantity === "number" ? i.quantity : 0;
+                      const resolved = resolveMeasure(i.realMeasures, i.unit, qty);
+                      return {
+                        food: i.foodId,
+                        name: i.name,
+                        quantity: resolved.quantity,
+                        unit: resolved.unit,
+                        // A freshly-picked real measure (resolved.measureLabel set) always wins;
+                        // otherwise preserve whatever this row already had loaded (e.g. editing
+                        // an existing recipe without re-touching this ingredient) rather than
+                        // wiping it just because it currently resolves through plain grams. In
+                        // practice the edit-load hydration above already pre-selects the real
+                        // measure when one exists, so `resolved` is correct here even for an
+                        // untouched row — these `i.*` fallbacks only matter if that food's
+                        // portions failed to load for some reason.
+                        measureLabel: resolved.measureLabel ?? i.measureLabel ?? null,
+                        measureDescription: resolved.measureDescription ?? i.measureDescription ?? null,
+                        measureCount: resolved.measureCount ?? i.measureCount ?? null,
+                      };
+                    }),
                     steps: validSteps,
                     notes: notes.trim() || undefined,
                     photos,
@@ -1098,6 +1148,7 @@ interface FoodSearchResult {
   macros: IngredientMacros;
   unitWeights?: UnitWeights;
   commonServings?: ServingSize[];
+  realMeasures?: ServingSize[];
 }
 
 function FoodSearchInput({
@@ -1114,6 +1165,7 @@ function FoodSearchInput({
     macros: IngredientMacros,
     unitWeights: UnitWeights | undefined,
     commonServings: ServingSize[] | undefined,
+    realMeasures: ServingSize[] | undefined,
   ) => void;
   onChange: (val: string) => void;
 }) {
@@ -1157,6 +1209,7 @@ function FoodSearchInput({
           macros: f.macros,
           unitWeights: f.unitWeights,
           commonServings: f.servings,
+          realMeasures: f.portions,
         })),
       );
     } catch {
@@ -1176,7 +1229,7 @@ function FoodSearchInput({
 
   const pick = (r: FoodSearchResult) => {
     selectingRef.current = true;
-    onSelect(r.id, r.name, r.macros, r.unitWeights, r.commonServings);
+    onSelect(r.id, r.name, r.macros, r.unitWeights, r.commonServings, r.realMeasures);
     setQuery(r.name);
     setOpen(false);
     setResults([]);

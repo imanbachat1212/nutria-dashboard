@@ -9,11 +9,25 @@ const planItemSchema = new mongoose.Schema({
   name: { type: String, required: true },
   quantity: { type: Number, default: 0 },
   unit: { type: String, default: "g" },
+  // Display-only (prompt-47) — the real per-food measure the dietitian actually picked (e.g.
+  // "3 pitted dates"), when one was picked via MeasureSelect. quantity/unit above are always the
+  // already-resolved gram total, which is what every calculation (computeItemDetails below,
+  // dayMacros/mealMacros on the frontend) reads — this field is never read by any calculation,
+  // purely a nicer label for item rows to show instead of a bare gram amount. null/absent for a
+  // generic-unit selection (cup/tbsp/tsp/piece/ml/g) or any item added before this field existed.
+  measureLabel: { type: String, default: null },
+  // Structured counterparts to measureLabel (prompt-49) — see the identical comment on
+  // meal.model.js's ingredientSchema.measureDescription/measureCount. Lets an edit-in-place UI
+  // (EditPlanItemDialog) re-open pre-selected on the exact real measure originally picked,
+  // instead of always falling back to grams. Never read by any calculation.
+  measureDescription: { type: String, default: null },
+  measureCount: { type: Number, default: null },
   servings: { type: Number, default: 1 },
   calories: { type: Number, default: 0 },
   protein: { type: Number, default: 0 },
   carbs: { type: Number, default: 0 },
   fat: { type: Number, default: 0 },
+  fiber: { type: Number, default: 0 },
   // DRI-matched micronutrient snapshot — same 22 fields as Food/Client.driTargets (see
   // lib/calc/dri.js), computed once when the item is added (mealplans.service.js
   // computeItemDetails), same denormalized-at-add-time pattern as calories/protein/carbs/fat
@@ -66,6 +80,7 @@ const mealPlanSchema = new mongoose.Schema(
     targetProtein: { type: Number, default: 0 },
     targetCarbs: { type: Number, default: 0 },
     targetFat: { type: Number, default: 0 },
+    targetFiber: { type: Number, default: 0 },
     // Per-slot times for the WHOLE plan (not per-item, not per-day) — e.g. { breakfast: "08:00" }.
     // Sparse on purpose: a slot with no entry here falls back to SLOT_META's hardcoded default
     // on the frontend (mealplans-api.ts), so plans created before this field existed keep

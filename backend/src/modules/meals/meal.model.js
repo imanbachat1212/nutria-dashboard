@@ -7,6 +7,24 @@ const ingredientSchema = new mongoose.Schema(
     name: { type: String, required: true },
     quantity: { type: Number },
     unit: { type: String },
+    // Display-only (prompt-47) — the real per-food measure the dietitian actually picked (e.g.
+    // "3 pitted dates"), when one was picked via MeasureSelect. quantity/unit above are always
+    // the already-resolved gram total ("g"), which is what every calculation (computeRecipeMacros
+    // in recipeMacros.js, unchanged) reads — this field is never read by any calculation, purely
+    // a nicer label for item rows to show instead of a bare gram amount. null/absent for a
+    // generic-unit selection (cup/tbsp/tsp/piece/ml/g) or any item created before this field
+    // existed — display falls back to `${quantity} ${unit}` in that case.
+    measureLabel: { type: String, default: null },
+    // Structured counterparts to measureLabel (prompt-49) — measureLabel alone (a single
+    // fully-composed string) can't be reliably reversed back into "which portions option" +
+    // "what count" for re-opening an edit UI pre-selected correctly. measureDescription is the
+    // exact raw description as it appears in that food's own `portions` list (e.g. "1 date,
+    // pitted") — matched against it verbatim to pre-select, never fuzzy-matched. measureCount is
+    // the count picked (e.g. 3). Both null/absent exactly when measureLabel is: a generic-unit
+    // selection, or any item created before this field existed. Also display-only/purely
+    // additive — never read by computeRecipeMacros' calculation, same as measureLabel.
+    measureDescription: { type: String, default: null },
+    measureCount: { type: Number, default: null },
   },
   { _id: false }
 );

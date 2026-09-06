@@ -10,10 +10,13 @@ import {
   listPlansSchema,
   copyDaySchema,
   copyMealSlotSchema,
+  copySlotToSlotSchema,
   updateSlotTimeSchema,
   duplicatePlanSchema,
   addItemSchema,
+  updateItemSchema,
   removeItemSchema,
+  saveAsTemplateSchema,
 } from "./mealplans.validation.js";
 
 const router = Router();
@@ -63,6 +66,14 @@ router.post(
   ctrl.copyMealSlot
 );
 
+router.post(
+  "/:id/copy-slot-to-slot",
+  requirePermission("mealplans.update"),
+  validate(copySlotToSlotSchema),
+  auditAction("update", "mealplan"),
+  ctrl.copySlotToSlot
+);
+
 router.patch(
   "/:id/slot-time",
   requirePermission("mealplans.update"),
@@ -94,12 +105,32 @@ router.post(
   ctrl.addItem
 );
 
+router.patch(
+  "/:id/items/:itemId",
+  requirePermission("mealplans.update"),
+  validate(updateItemSchema),
+  auditAction("update", "mealplan"),
+  ctrl.updateItem
+);
+
 router.delete(
   "/:id/items/:itemId",
   requirePermission("mealplans.update"),
   validate(removeItemSchema),
   auditAction("update", "mealplan"),
   ctrl.removeItem
+);
+
+// The primary template-authoring path — build a real plan first, then snapshot it into a
+// reusable template. Gated on mealplantemplates.create (the permission for the thing being
+// created), not mealplans.*, since reading the source plan only requires mealplans.read-level
+// access to view it in the first place (already implied by the dietitian being on this page).
+router.post(
+  "/:id/save-as-template",
+  requirePermission("mealplantemplates.create"),
+  validate(saveAsTemplateSchema),
+  auditAction("create", "mealplantemplate"),
+  ctrl.saveAsTemplate
 );
 
 export default router;

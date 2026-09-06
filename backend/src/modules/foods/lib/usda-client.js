@@ -315,13 +315,65 @@ function toFullNutrition(foodNutrients) {
 // Confirmed live: FDC's dataType param accepts a comma-joined value for multiple types (which is
 // exactly how URLSearchParams's object-form constructor serializes an array value below) with
 // identical results to sending the param repeated once per type.
+// FDC's /foods/search treats a plain multi-word query as OR-with-relevance-ranking, not AND:
+// confirmed live by querying USDA directly, extra words make the match set GROW, not shrink
+// ("chicken breast" 21,651 hits -> "chicken breast boneless skinless" 23,232). That's why a
+// longer, more specific query never felt like it narrowed anything — the extra words only
+// nudged ranking. FDC does honour Lucene required-term syntax (`+word`), which turns those
+// same extra words into real filters (23,232 -> 1,404; "sweet potato raw unprepared" 73,992 ->
+// exactly 1, the right food, where the plain query's top hit was "Sweet Potato puffs, frozen").
+//
+// Only applied from MIN_TOKENS_TO_REQUIRE words up, so today's 1-2 word searches keep their
+// existing broad, relevance-ranked behavior unchanged. Capped at MAX_REQUIRED_TOKENS — past
+// ~5 words the extra terms stop adding signal and just risk over-filtering.
+// Bare `+`/`-` prefixes a dietitian typed herself are stripped first so we never emit `++word`,
+// and any token that isn't plain alphanumeric is left out of the required set rather than
+// escaped, since unbalanced Lucene punctuation is what makes FDC 400 (quoted phrases do).
+const MIN_TOKENS_TO_REQUIRE = 3;
+const MAX_REQUIRED_TOKENS = 5;
+
+export function buildRequiredTermsQuery(query) {
+  const tokens = String(query).trim().split(/\s+/).filter(Boolean);
+  if (tokens.length < MIN_TOKENS_TO_REQUIRE) return null;
+
+  const cleaned = tokens
+    .map((t) => t.replace(/^[+-]+/, ""))
+    .filter((t) => /^[a-z0-9]+$/i.test(t))
+    .slice(0, MAX_REQUIRED_TOKENS);
+
+  // If stripping left us with fewer real words than the threshold, the query is punctuation-
+  // heavy enough that we're better off sending it verbatim than half-filtering it.
+  if (cleaned.length < MIN_TOKENS_TO_REQUIRE) return null;
+  return cleaned.map((t) => `+${t}`).join(" ");
+}
+
 export async function searchUsdaFoods(query, { pageSize = 200, pageNumber = 1, dataTypes } = {}) {
-  const data = await usdaFetch("/foods/search", {
-    query,
-    pageSize: String(pageSize),
-    pageNumber: String(pageNumber),
-    ...(dataTypes && dataTypes.length > 0 ? { dataType: dataTypes } : {}),
-  });
+  const dataTypeParam = dataTypes && dataTypes.length > 0 ? { dataType: dataTypes } : {};
+  const requiredQuery = buildRequiredTermsQuery(query);
+
+  let data;
+  if (requiredQuery) {
+    data = await usdaFetch("/foods/search", {
+      query: requiredQuery,
+      pageSize: String(pageSize),
+      pageNumber: String(pageNumber),
+      ...dataTypeParam,
+    });
+    // Requiring every word can legitimately match nothing (an unusual word combination, or a
+    // dataType filter that excludes the only matches). Falling back to the original loose query
+    // keeps this strictly better than before: narrower when narrowing is possible, never emptier.
+    if ((data.totalHits ?? 0) === 0) data = null;
+  }
+
+  if (!data) {
+    data = await usdaFetch("/foods/search", {
+      query,
+      pageSize: String(pageSize),
+      pageNumber: String(pageNumber),
+      ...dataTypeParam,
+    });
+  }
+
   return {
     results: (data.foods ?? []).map((f) => ({
       fdcId: f.fdcId,
@@ -334,6 +386,34 @@ export async function searchUsdaFoods(query, { pageSize = 200, pageNumber = 1, d
   };
 }
 
+// Bulk fdcId -> dataType lookup, for backfilling foods imported before usdaDataType was stored
+// (migrate-usda-datatype.js). Uses FDC's POST /foods with format=abridged so ~1,200 foods cost
+// ~60 requests instead of ~1,200 — far kinder to the API key's rate limit.
+//
+// FDC caps this endpoint at 20 ids per request, and — confirmed live — silently OMITS ids it
+// can't return rather than erroring or returning a placeholder, so the caller must diff what it
+// asked for against what came back instead of assuming a 1:1 response.
+export const USDA_BULK_CHUNK_SIZE = 20;
+
+export async function getUsdaDataTypesBulk(fdcIds) {
+  const apiKey = requireApiKey();
+  const res = await fetch(`${BASE_URL}/foods?api_key=${apiKey}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fdcIds, format: "abridged" }),
+  });
+  if (!res.ok) {
+    if (res.status === 429) throw new ApiError(429, "USDA FoodData Central rate limit hit");
+    throw new ApiError(502, `USDA bulk lookup failed (${res.status})`);
+  }
+  const data = await res.json();
+  const out = new Map();
+  for (const f of Array.isArray(data) ? data : []) {
+    if (f?.fdcId != null && f.dataType) out.set(Number(f.fdcId), f.dataType);
+  }
+  return out;
+}
+
 // fdcId -> full detail, mapped straight onto this app's Food fields (minus source/createdBy,
 // which the caller sets — this is a pure USDA-shape-to-our-shape mapper, not a persistence
 // concern; foods.service.js decides what to do with the result).
@@ -344,6 +424,11 @@ export async function getUsdaFoodDetails(fdcId) {
     fdcId: f.fdcId,
     name: f.description,
     brand: f.brandOwner || f.brandName || undefined,
+    // Confirmed live: /food/{fdcId} reports dataType too, not just /foods/search — so an import
+    // can capture the real source type ("SR Legacy", "Survey (FNDDS)", …) rather than the
+    // blanket "USDA" the library used to show. Passed through raw; display mapping is the
+    // frontend's job.
+    dataType: f.dataType,
     servingSize: 100,
     servingUnit: "g",
     // Category signal, confirmed live to differ by dataType: SR Legacy/Foundation records carry

@@ -38,7 +38,14 @@ const DialogContent = React.forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 sm:rounded-lg",
+        // `[&>*]:min-w-0`: this is a `grid` container, and grid items default to
+        // `min-width: auto` — so any direct child holding nowrap/truncate text (a search
+        // result row, a staged-item row, ...) contributes its full unwrapped content width
+        // to the grid track, silently growing this box past `max-w-lg` instead of letting
+        // that child shrink and truncate within it. Forcing min-width:0 on every direct
+        // child makes the fixed width here actually fixed, for any current or future dialog
+        // content, not just the callers that remembered to add it themselves.
+        "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 sm:rounded-lg *:min-w-0",
         className,
       )}
       {...props}

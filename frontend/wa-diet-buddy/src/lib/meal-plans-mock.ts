@@ -1,3 +1,5 @@
+import type { ServingSize, UnitWeights } from "./food-database-mock";
+
 export type MealSlot = "breakfast" | "snack-am" | "lunch" | "snack-pm" | "dinner";
 export type DayKey = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
 
@@ -6,6 +8,7 @@ export interface Macros {
   protein: number;
   carbs: number;
   fat: number;
+  fiber: number;
 }
 
 // The 22 DRI-matched micronutrient fields (see backend lib/calc/dri.js) — keyed the same as
@@ -77,6 +80,24 @@ export interface FoodItem {
   // weight for the unit (cup/tbsp/tsp/piece only — see isApproximateItem in mealplans-api.ts).
   // Undefined on mock data, which doesn't model per-food unit weights.
   isApproximate?: boolean;
+  // Everything below is only populated for a real (non-mock) meal plan item (prompt-48) — needed
+  // to open the in-place edit dialog (edit-plan-item-dialog.tsx) pre-filled with this item's
+  // current selection and that food's real measures, without a second fetch. Undefined on mock
+  // demo data and on recipe-type items other than `itemType`/`rawQuantity` (recipes have no
+  // per-unit measure, just a `rawQuantity` = servings count).
+  itemType?: "food" | "recipe";
+  foodId?: string | null;
+  mealId?: string | null;
+  rawQuantity?: number;
+  rawUnit?: string;
+  measureLabel?: string | null;
+  // Structured counterparts to measureLabel (prompt-49) — let the edit dialog pre-select the
+  // exact real measure originally picked instead of always defaulting to grams.
+  measureDescription?: string | null;
+  measureCount?: number | null;
+  realMeasures?: ServingSize[];
+  unitWeights?: UnitWeights;
+  commonServings?: ServingSize[];
 }
 
 export interface MealEntry {
@@ -142,16 +163,28 @@ export const DAYS: { key: DayKey; label: string; short: string }[] = [
   { key: "sun", label: "Sunday", short: "Sun" },
 ];
 
+// Rounded at the point the sum is produced (kcal to a whole number, protein/carbs/fat to 1
+// decimal — matching every other macro number in this app) rather than at render time, since
+// plain `+` across already-rounded item-level decimals doesn't reliably land on a clean float
+// (e.g. 12.6 + 0.6 + 0.2 can literally evaluate to 13.399999999999999 in JS).
 export function sumMacros(items: { macros: Macros }[]): Macros {
-  return items.reduce(
+  const raw = items.reduce(
     (a, i) => ({
       kcal: a.kcal + i.macros.kcal,
       protein: a.protein + i.macros.protein,
       carbs: a.carbs + i.macros.carbs,
       fat: a.fat + i.macros.fat,
+      fiber: a.fiber + (i.macros.fiber || 0),
     }),
-    { kcal: 0, protein: 0, carbs: 0, fat: 0 },
+    { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 },
   );
+  return {
+    kcal: Math.round(raw.kcal),
+    protein: Math.round(raw.protein * 10) / 10,
+    carbs: Math.round(raw.carbs * 10) / 10,
+    fat: Math.round(raw.fat * 10) / 10,
+    fiber: Math.round(raw.fiber * 10) / 10,
+  };
 }
 
 export function mealMacros(m: MealEntry): Macros {
@@ -203,7 +236,11 @@ const f = (
   c: number,
   fat: number,
   tags?: string[],
-): FoodItem => ({ id, name, amount, macros: { kcal, protein: p, carbs: c, fat }, tags });
+  // Optional — this mock dataset predates the Fiber tile (prompt-53) and wasn't hand-authored
+  // with real per-food fiber values, so it defaults to a plausible ~12% of carbs (a reasonable
+  // whole-food ratio) rather than leaving every mock item at a misleading 0.
+  fiber = Math.round(c * 0.12 * 10) / 10,
+): FoodItem => ({ id, name, amount, macros: { kcal, protein: p, carbs: c, fat, fiber }, tags });
 
 function buildWeek(template: Partial<Record<DayKey, MealEntry[]>>, fallback: MealEntry[]): DayPlan[] {
   return DAYS.map(({ key }) => ({
@@ -211,64 +248,6 @@ function buildWeek(template: Partial<Record<DayKey, MealEntry[]>>, fallback: Mea
     meals: (template[key] ?? fallback).map((m, idx) => ({ ...m, id: `${key}-${idx}-${m.slot}` })),
   }));
 }
-
-export const SAMPLE_DAY: MealEntry[] = [
-  {
-    id: "sample-breakfast",
-    slot: "breakfast",
-    title: "Labneh manakish + cucumber",
-    time: "08:00",
-    items: [
-      f("sm-a", "Whole-wheat manakish (½)", "60 g", 220, 7, 32, 6, ["lebanese"]),
-      f("sm-b", "Labneh", "30 g", 75, 4, 2, 5),
-      f("sm-c", "Cucumber + mint", "100 g", 16, 1, 3, 0),
-      f("sm-d", "Black coffee", "1 cup", 5, 0, 0, 0),
-    ],
-  },
-  {
-    id: "sample-snack-am",
-    slot: "snack-am",
-    title: "Greek yogurt + berries",
-    time: "10:30",
-    items: [
-      f("sm-e", "Greek yogurt 2%", "170 g", 130, 17, 8, 3, ["high-protein"]),
-      f("sm-f", "Mixed berries", "80 g", 40, 1, 9, 0),
-    ],
-  },
-  {
-    id: "sample-lunch",
-    slot: "lunch",
-    title: "Grilled chicken tabbouleh bowl",
-    time: "13:00",
-    items: [
-      f("sm-g", "Grilled chicken breast", "150 g", 240, 45, 0, 6, ["high-protein", "lebanese"]),
-      f("sm-h", "Tabbouleh", "1 cup", 180, 4, 18, 11, ["lebanese"]),
-      f("sm-i", "Hummus", "60 g", 160, 5, 14, 9, ["lebanese"]),
-      f("sm-j", "Whole-wheat pita (¼)", "15 g", 40, 1, 8, 0),
-    ],
-  },
-  {
-    id: "sample-snack-pm",
-    slot: "snack-pm",
-    title: "Apple + almonds",
-    time: "16:30",
-    items: [
-      f("sm-k", "Apple, medium", "180 g", 95, 0, 25, 0),
-      f("sm-l", "Raw almonds", "20 g", 120, 4, 4, 11),
-    ],
-  },
-  {
-    id: "sample-dinner",
-    slot: "dinner",
-    title: "Baked salmon + roasted veg",
-    time: "20:00",
-    items: [
-      f("sm-m", "Salmon fillet", "140 g", 280, 30, 0, 17, ["high-protein"]),
-      f("sm-n", "Roasted zucchini + peppers", "200 g", 110, 3, 14, 5),
-      f("sm-o", "Quinoa", "½ cup cooked", 110, 4, 20, 2),
-    ],
-  },
-];
 
 export function blankDays(): DayPlan[] {
   return DAYS.map(({ key }) => ({
@@ -281,26 +260,6 @@ export function blankDays(): DayPlan[] {
       items: [],
     })),
   }));
-}
-
-export function daysFromTemplate(targets: Macros): DayPlan[] {
-  const baseKcal = SAMPLE_DAY.reduce((acc, m) => acc + mealMacros(m).kcal, 0);
-  const scale = targets.kcal ? targets.kcal / baseKcal : 1;
-  const scaled: MealEntry[] = SAMPLE_DAY.map((meal) => ({
-    ...meal,
-    id: `m-${Date.now()}-${meal.slot}`,
-    items: meal.items.map((it) => ({
-      ...it,
-      id: `f-${Date.now()}-${it.id}`,
-      macros: {
-        kcal: Math.round(it.macros.kcal * scale),
-        protein: Math.round(it.macros.protein * scale),
-        carbs: Math.round(it.macros.carbs * scale),
-        fat: Math.round(it.macros.fat * scale),
-      },
-    })),
-  }));
-  return buildWeek({}, scaled);
 }
 
 // ---------- Mock data ----------
@@ -391,7 +350,7 @@ export const MEAL_PLANS: MealPlan[] = [
     goal: "weight-loss",
     startDate: "2026-06-02",
     endDate: "2026-06-29",
-    targets: { kcal: 1650, protein: 130, carbs: 170, fat: 55 },
+    targets: { kcal: 1650, protein: 130, carbs: 170, fat: 55, fiber: 23 },
     driTargets: null,
     adherencePct: 88,
     days: buildWeek({ mon: ranaMonday, tue: ranaTuesday }, ranaMonday),
@@ -408,7 +367,7 @@ export const MEAL_PLANS: MealPlan[] = [
     goal: "muscle-gain",
     startDate: "2026-05-12",
     endDate: "2026-07-06",
-    targets: { kcal: 3180, protein: 175, carbs: 360, fat: 90 },
+    targets: { kcal: 3180, protein: 175, carbs: 360, fat: 90, fiber: 45 },
     driTargets: null,
     adherencePct: 92,
     days: buildWeek({}, [
@@ -474,7 +433,7 @@ export const MEAL_PLANS: MealPlan[] = [
     goal: "weight-loss",
     startDate: "2026-05-20",
     endDate: "2026-06-30",
-    targets: { kcal: 1500, protein: 110, carbs: 150, fat: 50 },
+    targets: { kcal: 1500, protein: 110, carbs: 150, fat: 50, fiber: 21 },
     driTargets: null,
     adherencePct: 71,
     days: buildWeek({}, ranaMonday),
@@ -491,7 +450,7 @@ export const MEAL_PLANS: MealPlan[] = [
     goal: "maintenance",
     startDate: "2026-06-01",
     endDate: "2026-07-31",
-    targets: { kcal: 1850, protein: 135, carbs: 195, fat: 60 },
+    targets: { kcal: 1850, protein: 135, carbs: 195, fat: 60, fiber: 26 },
     driTargets: null,
     adherencePct: 84,
     days: buildWeek({}, ranaMonday),
@@ -508,7 +467,7 @@ export const MEAL_PLANS: MealPlan[] = [
     goal: "clinical",
     startDate: "2026-06-22",
     endDate: "2026-07-22",
-    targets: { kcal: 2400, protein: 165, carbs: 240, fat: 80 },
+    targets: { kcal: 2400, protein: 165, carbs: 240, fat: 80, fiber: 34 },
     driTargets: null,
     adherencePct: 0,
     days: buildWeek({}, ranaMonday),
@@ -524,7 +483,7 @@ export const MEAL_PLANS: MealPlan[] = [
     goal: "weight-loss",
     startDate: "2026-04-10",
     endDate: "2026-06-07",
-    targets: { kcal: 1450, protein: 105, carbs: 150, fat: 48 },
+    targets: { kcal: 1450, protein: 105, carbs: 150, fat: 48, fiber: 20 },
     driTargets: null,
     adherencePct: 0,
     days: buildWeek({}, ranaMonday),
@@ -537,7 +496,7 @@ export const SWAP_POOL: SwapSuggestion[] = [
     id: "s-1",
     forSlot: "breakfast",
     name: "Foul moudammas + tomato",
-    macros: { kcal: 310, protein: 16, carbs: 38, fat: 9 },
+    macros: { kcal: 310, protein: 16, carbs: 38, fat: 9, fiber: 4.6 },
     reason: "Same fiber, +5g protein, Lebanese",
     tag: "lebanese",
   },
@@ -545,7 +504,7 @@ export const SWAP_POOL: SwapSuggestion[] = [
     id: "s-2",
     forSlot: "lunch",
     name: "Grilled fish + freekeh",
-    macros: { kcal: 520, protein: 42, carbs: 48, fat: 14 },
+    macros: { kcal: 520, protein: 42, carbs: 48, fat: 14, fiber: 5.8 },
     reason: "Lower fat, similar protein",
     tag: "high-protein",
   },
@@ -553,7 +512,7 @@ export const SWAP_POOL: SwapSuggestion[] = [
     id: "s-3",
     forSlot: "snack-pm",
     name: "Cottage cheese + cucumber",
-    macros: { kcal: 140, protein: 16, carbs: 6, fat: 4 },
+    macros: { kcal: 140, protein: 16, carbs: 6, fat: 4, fiber: 0.7 },
     reason: "Higher protein, lower carbs",
     tag: "high-protein",
   },
@@ -561,7 +520,7 @@ export const SWAP_POOL: SwapSuggestion[] = [
     id: "s-4",
     forSlot: "dinner",
     name: "Lentil mjadara + salad",
-    macros: { kcal: 480, protein: 18, carbs: 72, fat: 12 },
+    macros: { kcal: 480, protein: 18, carbs: 72, fat: 12, fiber: 8.6 },
     reason: "Plant-based, fiber-rich",
     tag: "vegan",
   },
@@ -569,7 +528,7 @@ export const SWAP_POOL: SwapSuggestion[] = [
     id: "s-5",
     forSlot: "snack-am",
     name: "Boiled eggs (2) + olives",
-    macros: { kcal: 180, protein: 14, carbs: 1, fat: 14 },
+    macros: { kcal: 180, protein: 14, carbs: 1, fat: 14, fiber: 0.1 },
     reason: "Low-carb, fast",
     tag: "low-carb",
   },
@@ -577,17 +536,12 @@ export const SWAP_POOL: SwapSuggestion[] = [
     id: "s-6",
     forSlot: "breakfast",
     name: "Shakshuka (small)",
-    macros: { kcal: 290, protein: 18, carbs: 14, fat: 18 },
+    macros: { kcal: 290, protein: 18, carbs: 14, fat: 18, fiber: 1.7 },
     reason: "Hot option, +protein",
     tag: "quick",
   },
 ];
 
-export const PLAN_TEMPLATES = [
-  { id: "t-1", name: "Mediterranean 1600", kcal: 1600, days: 7, tag: "Weight loss" },
-  { id: "t-2", name: "High-protein 2000", kcal: 2000, days: 7, tag: "Recomp" },
-  { id: "t-3", name: "Lean bulk 3000", kcal: 3000, days: 7, tag: "Muscle gain" },
-  { id: "t-4", name: "Vegan balanced 1500", kcal: 1500, days: 7, tag: "Plant-based" },
-  { id: "t-5", name: "Ramadan iftar/sohour", kcal: 1800, days: 30, tag: "Seasonal" },
-  { id: "t-6", name: "PCOS-friendly 1700", kcal: 1700, days: 7, tag: "Clinical" },
-];
+// PLAN_TEMPLATES (the old {id, name, kcal, days, tag} stub with no real meal content) has been
+// superseded by real backend-stored templates — see mealplantemplates-api.ts's
+// fetchMealPlanTemplates and new-plan-dialog.tsx's use of it.

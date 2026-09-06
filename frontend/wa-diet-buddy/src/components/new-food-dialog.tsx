@@ -582,6 +582,10 @@ export function NewFoodDialog({ open, onOpenChange, editFoodId }: NewFoodDialogP
         gramsPerPiece: null,
         gramsPerMl: null,
         commonServings: toCommonServingsPayload(prunedServings),
+        // The rejected match's real per-food measures came from the same match — clear them
+        // too, so a wrong match doesn't leave stale "1 pitted date"-style options behind for an
+        // unrelated food.
+        portions: [],
       });
       setServings(prunedServings);
       setUnitWeightMatch(null);
@@ -596,7 +600,10 @@ export function NewFoodDialog({ open, onOpenChange, editFoodId }: NewFoodDialogP
     if (!savedFoodId || !unitWeightMatch) return;
     setMatchActionLoading(true);
     try {
-      await updateFood(savedFoodId, unitWeightMatch.fields);
+      await updateFood(savedFoodId, {
+        ...unitWeightMatch.fields,
+        portions: unitWeightMatch.portions,
+      });
       // Converges to the same "auto-filled, here's how to undo it" state as a direct match.
       setUnitWeightMatch({ ...unitWeightMatch, tier: "match" });
       await applyAutoServings(savedFoodId, unitWeightMatch.fields);
@@ -1028,6 +1035,15 @@ export function NewFoodDialog({ open, onOpenChange, editFoodId }: NewFoodDialogP
                               <li key={line}>{line}</li>
                             ))}
                           </ul>
+                          {unitWeightMatch.portions.length > 0 && (
+                            <p className="mt-1.5 text-xs text-muted-foreground/90">
+                              Real measures on file: {unitWeightMatch.portions
+                                .map((p) => `${p.description} (${p.grams}g)`)
+                                .join(", ")}
+                              — these are what the Meal Plan/Meal Library pickers will offer for
+                              this food.
+                            </p>
+                          )}
                         </div>
                       </div>
                       <Button

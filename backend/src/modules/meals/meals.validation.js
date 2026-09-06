@@ -5,6 +5,11 @@ const ingredientSchema = z.object({
   name: z.string().min(1),
   quantity: z.number().min(0).optional(),
   unit: z.string().optional(),
+  // Display-only (prompt-47/49) — see ingredientSchema's measureLabel/measureDescription/
+  // measureCount comments in meal.model.js. Never used in computeRecipeMacros' calculation.
+  measureLabel: z.string().nullable().optional(),
+  measureDescription: z.string().nullable().optional(),
+  measureCount: z.number().nullable().optional(),
 });
 
 const photoItemSchema = z.object({

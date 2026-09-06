@@ -33,8 +33,9 @@ import {
 import { cn } from "@/lib/utils";
 import { fetchClients } from "@/lib/clients-api";
 import type { ClientRecord } from "@/lib/clients-mock";
-import { PLAN_TEMPLATES, type MealPlan } from "@/lib/meal-plans-mock";
+import type { MealPlan } from "@/lib/meal-plans-mock";
 import { createMealPlan } from "@/lib/mealplans-api";
+import { fetchMealPlanTemplates } from "@/lib/mealplantemplates-api";
 
 type Goal = MealPlan["goal"];
 type StartMethod = "blank" | "template";
@@ -96,7 +97,28 @@ export function NewPlanDialog({
   const [carbs, setCarbs] = useState(170);
   const [fat, setFat] = useState(55);
   const [starter, setStarter] = useState<StartMethod>("template");
-  const [templateId, setTemplateId] = useState<string | null>(PLAN_TEMPLATES[0].id);
+  const [templateId, setTemplateId] = useState<string | null>(null);
+
+  const { data: templatesData } = useQuery({
+    queryKey: ["meal-plan-templates"],
+    queryFn: () => fetchMealPlanTemplates(),
+    enabled: open,
+  });
+  const templates = templatesData ?? [];
+
+  // Default to the first available template, same UX as before (the old PLAN_TEMPLATES stub
+  // always had templateId pre-selected to its first entry) — but now against real data that
+  // loads asynchronously, so this can't just be the initial state value.
+  useEffect(() => {
+    if (open && starter === "template" && !templateId && templates.length > 0) {
+      const first = templates[0];
+      setTemplateId(first._id);
+      setKcalOverride(first.dailyTotals.calories);
+      applySuggestedMacros(first.dailyTotals.calories, goal);
+    }
+    // Only re-run when templates finish loading or the dialog opens — not on every goal change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, starter, templateId, templates]);
 
   const [debouncedSearch, setDebouncedSearch] = useState("");
   useEffect(() => {
@@ -172,7 +194,9 @@ export function NewPlanDialog({
     setCarbs(170);
     setFat(55);
     setStarter("template");
-    setTemplateId(PLAN_TEMPLATES[0].id);
+    // Not the first template's id — templates are fetched async, and the effect above
+    // re-selects the first one once they're loaded/reloaded after a reset.
+    setTemplateId(null);
   }
 
   const [saving, setSaving] = useState(false);
@@ -193,6 +217,10 @@ export function NewPlanDialog({
         targetProtein: protein,
         targetCarbs: carbs,
         targetFat: fat,
+        // Previously read into local state but never actually sent — every plan was created
+        // empty regardless of the template picked (see prompt-39's investigation). Blank canvas
+        // correctly sends nothing here, same as before.
+        templateId: starter === "template" ? (templateId ?? undefined) : undefined,
       });
       onCreate(plan);
       onOpenChange(false);
@@ -547,38 +575,46 @@ export function NewPlanDialog({
                 />
               </div>
 
-              {starter === "template" && (
-                <div className="border rounded-md p-2 space-y-1">
-                  {PLAN_TEMPLATES.map((t) => {
-                    const selected = t.id === templateId;
-                    return (
-                      <button
-                        key={t.id}
-                        onClick={() => {
-                          setTemplateId(t.id);
-                          setKcalOverride(t.kcal);
-                          applySuggestedMacros(t.kcal, goal);
-                        }}
-                        className={cn(
-                          "w-full flex items-center gap-3 px-2.5 py-2 rounded-md text-left transition-colors",
-                          selected ? "bg-primary/10 ring-1 ring-primary/30" : "hover:bg-muted/40",
-                        )}
-                      >
-                        <div className="flex-1">
-                          <div className="text-sm font-medium">{t.name}</div>
-                          <div className="text-[11px] text-muted-foreground">
-                            {t.kcal} kcal · {t.days} days
+              {starter === "template" &&
+                (templates.length === 0 ? (
+                  <div className="border rounded-md p-4 text-center text-xs text-muted-foreground">
+                    No templates yet — build a plan and use "Save as template," or start from a
+                    blank canvas instead.
+                  </div>
+                ) : (
+                  <div className="border rounded-md p-2 space-y-1">
+                    {templates.map((t) => {
+                      const selected = t._id === templateId;
+                      return (
+                        <button
+                          key={t._id}
+                          onClick={() => {
+                            setTemplateId(t._id);
+                            setKcalOverride(t.dailyTotals.calories);
+                            applySuggestedMacros(t.dailyTotals.calories, goal);
+                          }}
+                          className={cn(
+                            "w-full flex items-center gap-3 px-2.5 py-2 rounded-md text-left transition-colors",
+                            selected ? "bg-primary/10 ring-1 ring-primary/30" : "hover:bg-muted/40",
+                          )}
+                        >
+                          <div className="flex-1">
+                            <div className="text-sm font-medium">{t.name}</div>
+                            <div className="text-[11px] text-muted-foreground">
+                              {t.dailyTotals.calories} kcal/day · {t.days} days
+                            </div>
                           </div>
-                        </div>
-                        <Badge variant="outline" className="text-[10px]">
-                          {t.tag}
-                        </Badge>
-                        {selected && <Check className="h-4 w-4 text-primary" />}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
+                          {t.tag && (
+                            <Badge variant="outline" className="text-[10px]">
+                              {t.tag}
+                            </Badge>
+                          )}
+                          {selected && <Check className="h-4 w-4 text-primary" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ))}
             </div>
           )}
 
@@ -611,7 +647,7 @@ export function NewPlanDialog({
                   Starter:{" "}
                   <span className="text-foreground font-medium">
                     {starter === "template" &&
-                      `Template — ${PLAN_TEMPLATES.find((t) => t.id === templateId)?.name}`}
+                      `Template — ${templates.find((t) => t._id === templateId)?.name}`}
                     {starter === "blank" && "Blank canvas"}
                   </span>
                 </div>

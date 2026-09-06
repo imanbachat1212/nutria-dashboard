@@ -4,8 +4,25 @@ import { normalizePhone } from "../../lib/phone.js";
 import { ApiError } from "../../lib/ApiError.js";
 import { guardClinicalWrite } from "./client.serializer.js";
 import { deleteImage } from "../../lib/storage.js";
-import { calcTargets, canComputeTargets, ageFromDOB } from "../../lib/calc/targets.js";
+import { calcTargets, calcFiberTarget, canComputeTargets, ageFromDOB } from "../../lib/calc/targets.js";
 import { getDriTargets } from "../../lib/calc/dri.js";
+
+// Manual targets have no fiber input in the entry form (prompt-55 decision: auto-suggest rather
+// than add one) — the manual-save request body never carries a fiber field at all (see
+// clients-api.ts's manual-targets payload on the frontend), so targets.fiber would otherwise stay
+// permanently unset. Sticky once set: `existingFiber` (the client's currently-stored value, passed
+// by the caller) takes priority over recomputing, so a later edit that only changes
+// calories/protein/carbs/fat doesn't drift an already-set fiber value away from whatever it was
+// first computed against — matching how every other manual target field already behaves here
+// (kept exactly as given, never silently overwritten by an unrelated edit). Only a client with no
+// stored fiber yet (a brand-new manual client, or one saved before this existed) gets one computed
+// fresh, from that save's own calories.
+function fillManualFiberIfMissing(targets, existingFiber) {
+  if (!targets || !targets.calories) return targets;
+  const fiber = targets.fiber || existingFiber;
+  if (fiber) return { ...targets, fiber };
+  return { ...targets, fiber: calcFiberTarget(targets.calories) };
+}
 
 function computeTargetsIfEligible(profile, existingTargets) {
   if (existingTargets?.method === "manual") return existingTargets;
@@ -48,7 +65,9 @@ export async function createClient(data, actor) {
   if (exists) throw new ApiError(409, "Client with this phone already exists");
 
   if (data.targets?.method === "manual") {
-    // keep manual targets as provided
+    // keep manual targets as provided, aside from auto-filling a missing fiber value — brand
+    // new client, so there's no existing stored fiber to preserve
+    data.targets = fillManualFiberIfMissing(data.targets, null);
   } else {
     data.targets = computeTargetsIfEligible(data.profile, null);
   }
@@ -126,7 +145,10 @@ export async function updateClient(id, data, actor) {
   const mergedProfile = data.profile ? { ...existing.profile, ...data.profile } : null;
 
   if (data.targets?.method === "manual") {
-    // explicit manual override — use as-is
+    // explicit manual override — use as-is, aside from preserving/auto-filling fiber (see
+    // fillManualFiberIfMissing — the form never sends fiber, so the existing stored value has
+    // to be threaded through explicitly or it would look "missing" on every single save)
+    data.targets = fillManualFiberIfMissing(data.targets, existing.targets?.fiber);
   } else if (mergedProfile) {
     data.targets = computeTargetsIfEligible(mergedProfile, existing.targets);
   }

@@ -42,7 +42,14 @@ export async function listMeals({ page, limit, search, category }) {
 
 export async function getMealById(id) {
   const meal = await Meal.findById(id)
-    .populate("ingredients.food", "name calories protein carbs fat fiber")
+    .populate(
+      "ingredients.food",
+      // gramsPerX/commonServings/portions added (prompt-49) so the recipe edit form's
+      // MeasureSelect can offer this food's real measures — and pre-select the one originally
+      // picked (measureDescription) — for an already-added ingredient, not just when first
+      // adding one.
+      "name calories protein carbs fat fiber gramsPerCup gramsPerTbsp gramsPerTsp gramsPerPiece gramsPerMl commonServings portions",
+    )
     .lean();
   if (!meal) throw new ApiError(404, "Meal not found");
   return normalizePhotos(meal);

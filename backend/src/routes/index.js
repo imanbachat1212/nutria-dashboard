@@ -11,6 +11,7 @@ import intakeRoutes from "../modules/intake/intake.routes.js";
 import journalRoutes from "../modules/journal/journal.routes.js";
 import appointmentsRoutes from "../modules/appointments/appointments.routes.js";
 import mealplansRoutes from "../modules/mealplans/mealplans.routes.js";
+import mealplantemplatesRoutes from "../modules/mealplantemplates/mealplantemplates.routes.js";
 import mealsRoutes from "../modules/meals/meals.routes.js";
 import messagesRoutes from "../modules/messages/messages.routes.js";
 import reportsRoutes from "../modules/reports/reports.routes.js";
@@ -35,6 +36,7 @@ router.use("/intake", intakeRoutes);
 router.use("/journal", journalRoutes);
 router.use("/appointments", appointmentsRoutes);
 router.use("/mealplans", mealplansRoutes);
+router.use("/meal-plan-templates", mealplantemplatesRoutes);
 router.use("/meals", mealsRoutes);
 // Gym Booking merged into /appointments (gym-machine / gym-class types). gym.routes.js is left
 // in place, unmounted, as scaffolding for a future Workout API — see workout.model.js.

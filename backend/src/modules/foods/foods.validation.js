@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CLAIMABLE_NUTRIENTS } from "./lib/nutrientClaims.js";
 import { USDA_DATA_TYPES } from "./lib/usda-client.js";
 
 // Shared by createFoodSchema and updateFoodSchema — ~44 optional/nullable micronutrient
@@ -126,6 +127,12 @@ export const updateFoodSchema = z.object({
     gramsPerTsp: z.number().min(0).nullable().optional(),
     gramsPerPiece: z.number().min(0).nullable().optional(),
     gramsPerMl: z.number().min(0).nullable().optional(),
+    // Same "written by the dietitian explicitly accepting/dismissing a match" rule as
+    // gramsPerCup etc above (prompt-45's MeasureSelect real-measures source) — never auto-sent
+    // as part of a normal create/edit form submission.
+    portions: z
+      .array(z.object({ description: z.string().min(1), grams: z.number().min(0) }))
+      .optional(),
     ...micronutrientFields,
   }),
 });
@@ -148,6 +155,14 @@ export const listFoodsSchema = z.object({
     // "Favorites" always means the requesting user's own favorites — there is no
     // client-supplied user filter, so this is just an on/off switch.
     favorites: booleanQueryParam,
+    // FDA %DV claim filter (prompt-65) — e.g. claimNutrient=vitaminB5&claimLevel=good.
+    // Validated against the same nutrient list the DV table defines, so a typo/unknown nutrient
+    // is a 400 rather than a silent "no results". Level omitted = any qualifying level.
+    claimNutrient: z.enum(CLAIMABLE_NUTRIENTS).optional(),
+    claimLevel: z.enum(["high", "good"]).optional(),
+    // Plain numeric omega-3 minimum in mg EPA+DHA per typical serving (prompt-67). Not a claim
+    // threshold — no tier vocabulary attached.
+    minEpaDhaMg: z.coerce.number().min(0).optional(),
   }),
 });
 
@@ -158,6 +173,14 @@ export const foodsStatsSchema = z.object({
     source: z.enum(["usda", "lebanese", "custom"]).optional(),
     verified: booleanQueryParam,
     favorites: booleanQueryParam,
+    // FDA %DV claim filter (prompt-65) — e.g. claimNutrient=vitaminB5&claimLevel=good.
+    // Validated against the same nutrient list the DV table defines, so a typo/unknown nutrient
+    // is a 400 rather than a silent "no results". Level omitted = any qualifying level.
+    claimNutrient: z.enum(CLAIMABLE_NUTRIENTS).optional(),
+    claimLevel: z.enum(["high", "good"]).optional(),
+    // Plain numeric omega-3 minimum in mg EPA+DHA per typical serving (prompt-67). Not a claim
+    // threshold — no tier vocabulary attached.
+    minEpaDhaMg: z.coerce.number().min(0).optional(),
   }),
 });
 

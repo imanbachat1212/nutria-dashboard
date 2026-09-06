@@ -43,3 +43,50 @@ export function commonServingOverride(
   }
   return override;
 }
+
+export interface UnitWeightsLike {
+  cup: number | null;
+  tbsp: number | null;
+  tsp: number | null;
+  piece: number | null;
+  ml: number | null;
+}
+
+const UNIT_TO_GRAMS: Record<string, number> = {
+  g: 1,
+  ml: 1,
+  cup: 240,
+  tbsp: 15,
+  tsp: 5,
+  oz: 28.3495,
+  piece: 50,
+};
+
+const UNIT_TO_FOOD_FIELD: Partial<Record<string, keyof UnitWeightsLike>> = {
+  cup: "cup",
+  tbsp: "tbsp",
+  tsp: "tsp",
+  piece: "piece",
+  ml: "ml",
+};
+
+// Mirrors gramsPerUnitForFood in backend/src/lib/calc/recipeMacros.js (and new-recipe-dialog.tsx's
+// own copy) for callers that need the full generic-unit-list resolution, not just the
+// approximate/non-approximate check above — currently plan-item-picker.tsx, which never
+// supported a non-gram unit before prompt-45's MeasureSelect. `unit` may also be a real
+// per-food measure's own label; resolveMeasure() in measure-options.ts always normalizes those
+// to unit="g" before they'd ever reach here, so an unrecognized string just falls through to
+// the flat constants exactly like `oz` already does.
+export function gramsPerUnitForFood(
+  commonServings: ServingSizeLike[] | undefined,
+  unitWeights: UnitWeightsLike | undefined,
+  unit: string,
+): number {
+  const commonOverride = commonServingOverride(commonServings, unit);
+  if (commonOverride != null) return commonOverride;
+
+  const field = UNIT_TO_FOOD_FIELD[unit];
+  const override = field ? unitWeights?.[field] : null;
+  if (override != null) return override;
+  return UNIT_TO_GRAMS[unit] ?? 1;
+}

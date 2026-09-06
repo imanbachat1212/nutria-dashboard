@@ -27,6 +27,20 @@ const foodSchema = new mongoose.Schema(
         grams: { type: Number, required: true, min: 0 },
       },
     ],
+    // Real, food-specific measure descriptions from USDA FNDDS/SR-Legacy (e.g. "1 pitted date"
+    // -> 7.1g, "1 stick" -> 113g for butter) — auto-populated ONLY from a confident
+    // foodMatching.js match (see foods.service.js/lib/foodPortions.js), never dietitian-edited.
+    // Deliberately separate from commonServings above (which IS freely dietitian-edited via the
+    // Add Food UI) so a backfill/re-match can always safely refresh this array without any risk
+    // of clobbering something a dietitian typed by hand. Empty when no confident match exists
+    // (manually-added or branded foods) — pickers fall back to the generic unit list then.
+    portions: [
+      {
+        _id: false,
+        description: { type: String, required: true },
+        grams: { type: Number, required: true, min: 0 },
+      },
+    ],
     // ── Per-food unit weights ──────────────────────────────────────────────────────────
     // Real gram weight of 1 cup / tbsp / tsp / piece / ml of THIS specific food, for
     // recipeMacros.js's unit conversion to look up instead of applying one flat constant
@@ -161,11 +175,50 @@ const foodSchema = new mongoose.Schema(
     // non-USDA food omit it; unique (among documents that do have it) prevents importing the
     // same fdcId twice.
     fdcId: { type: Number, index: true, sparse: true, unique: true },
+    // FDC's own dataType for an imported food — one of "Foundation" / "SR Legacy" /
+    // "Survey (FNDDS)" / "Branded" (see USDA_DATA_TYPES in lib/usda-client.js). Stored raw,
+    // exactly as FDC reports it; the frontend maps it to a display label. These differ in data
+    // quality/completeness (Foundation records often carry no portions at all), so showing the
+    // specific type rather than a blanket "USDA" is what lets a dietitian judge a food's
+    // provenance. null for non-USDA foods (lebanese/custom — which must never display a
+    // fabricated USDA type) and for USDA foods imported before this field existed that had no
+    // fdcId to backfill from (see migrate-usda-datatype.js).
+    usdaDataType: { type: String, default: null },
+    // FDA %DV nutrient content claims (prompt-65) — derived, read-only: which vitamins/minerals/
+    // fiber this food is a "High Source" (>=20% DV) or "Good Source" (10-19% DV) of, per its
+    // typical real serving. Computed by lib/nutrientClaims.js at import time and backfilled by
+    // migrate-nutrient-claims.js; never hand-edited, and never an input to any macro/calorie
+    // calculation. Empty for foods with no portions data (no serving basis -> no claim).
+    // `pct` is retained for traceability so a displayed tag can always be explained.
+    // EPA+DHA per the food's typical serving, in mg (prompt-67). Derived like nutrientClaims —
+    // computed at write time by lib/omega3.js, backfilled by migrate-omega3-per-serving.js —
+    // but deliberately NOT a claim: no tier, no %DV, no "high/good source" language, per FDA's
+    // prohibition on omega-3 content claims. Stored (rather than computed per request) so the
+    // Food Database can filter/sort on it the same cheap indexed way it filters nutrientClaims.
+    // null for foods with no serving basis or no measured EPA/DHA — never 0.
+    omega3EpaDhaPerServingMg: { type: Number, default: null },
+    nutrientClaims: {
+      type: [
+        {
+          _id: false,
+          nutrient: { type: String, required: true },
+          level: { type: String, enum: ["high", "good"], required: true },
+          pct: { type: Number },
+        },
+      ],
+      default: [],
+    },
   },
   { timestamps: true }
 );
 
 foodSchema.index({ name: "text", nameAr: "text" });
 foodSchema.index({ favoritedBy: 1 });
+// Backs the Food Database's "good source of X" filter — a multikey index on the claims
+// subdocuments, so filtering by nutrient (optionally + level) doesn't scan the collection.
+foodSchema.index({ "nutrientClaims.nutrient": 1, "nutrientClaims.level": 1 });
+// Backs the Food Database's numeric "at least N mg EPA+DHA" filter and any sort on it. Sparse:
+// only ~110 of 1,300 foods have a value, so there's no point indexing the nulls.
+foodSchema.index({ omega3EpaDhaPerServingMg: -1 }, { sparse: true });
 
 export default mongoose.model("Food", foodSchema);

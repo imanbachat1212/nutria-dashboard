@@ -1,5 +1,6 @@
 import { api } from "./api";
 import type { Recipe, RecipeCategory, RecipeCuisine } from "./meal-library-mock";
+import type { ServingSize, UnitWeights } from "./food-database-mock";
 
 export interface PhotoItem {
   url: string;
@@ -21,7 +22,17 @@ interface APIMeal {
   coverHue: string;
   dietTags: string[];
   allergens: string[];
-  ingredients: { food?: string; name: string; quantity?: number; unit?: string }[];
+  ingredients: {
+    food?: string;
+    name: string;
+    quantity?: number;
+    unit?: string;
+    // Display-only (prompt-47/49) — see meal.model.js's ingredientSchema.measureLabel/
+    // measureDescription/measureCount comments.
+    measureLabel?: string | null;
+    measureDescription?: string | null;
+    measureCount?: number | null;
+  }[];
   steps: string[];
   totalCalories: number;
   totalProtein: number;
@@ -75,7 +86,7 @@ function toRecipe(m: APIMeal): Recipe {
     },
     ingredients: (m.ingredients || []).map((i) => ({
       name: i.name,
-      amount: i.quantity ? `${i.quantity} ${i.unit || "g"}` : "",
+      amount: i.measureLabel || (i.quantity ? `${i.quantity} ${i.unit || "g"}` : ""),
     })),
     steps: m.steps || [],
     allergens: (m.allergens || []) as Recipe["allergens"],
@@ -115,6 +126,11 @@ export interface CreateMealIngredient {
   name: string;
   quantity?: number;
   unit?: string;
+  // Display-only (prompt-47/49) — see meal.model.js's ingredientSchema.measureLabel/
+  // measureDescription/measureCount comments.
+  measureLabel?: string | null;
+  measureDescription?: string | null;
+  measureCount?: number | null;
 }
 
 export interface CreateMealPayload {
@@ -162,12 +178,24 @@ interface APIMealIngredientDetail {
         carbs: number;
         fat: number;
         fiber: number;
+        // Added (prompt-49) so an already-added ingredient's real measures/generic-unit
+        // overrides are available on edit-load, not just when first adding an ingredient.
+        gramsPerCup?: number | null;
+        gramsPerTbsp?: number | null;
+        gramsPerTsp?: number | null;
+        gramsPerPiece?: number | null;
+        gramsPerMl?: number | null;
+        commonServings?: ServingSize[];
+        portions?: { description: string; grams: number }[];
       }
     | string
     | null;
   name: string;
   quantity?: number;
   unit?: string;
+  measureLabel?: string | null;
+  measureDescription?: string | null;
+  measureCount?: number | null;
 }
 
 interface APIMealDetail extends Omit<APIMeal, "ingredients"> {
@@ -179,6 +207,15 @@ export interface EditableIngredient {
   name: string;
   quantity: number | "";
   unit: string;
+  // Display-only (prompt-47/49) — carried through edit-mode; measureDescription/measureCount
+  // let new-recipe-dialog.tsx pre-select the real measure originally picked (falls back to
+  // grams if absent, or if it no longer matches one of realMeasures below).
+  measureLabel?: string | null;
+  measureDescription?: string | null;
+  measureCount?: number | null;
+  realMeasures?: ServingSize[];
+  unitWeights?: UnitWeights;
+  commonServings?: ServingSize[];
   per100g: { kcal: number; protein: number; carbs: number; fat: number; fiber: number } | null;
 }
 
@@ -219,6 +256,20 @@ export async function getMeal(id: string): Promise<EditableMeal> {
         name: i.name,
         quantity: i.quantity ?? "",
         unit: i.unit || "g",
+        measureLabel: i.measureLabel ?? null,
+        measureDescription: i.measureDescription ?? null,
+        measureCount: i.measureCount ?? null,
+        realMeasures: food?.portions?.map((p) => ({ label: p.description, grams: p.grams })),
+        unitWeights: food
+          ? {
+              cup: food.gramsPerCup ?? null,
+              tbsp: food.gramsPerTbsp ?? null,
+              tsp: food.gramsPerTsp ?? null,
+              piece: food.gramsPerPiece ?? null,
+              ml: food.gramsPerMl ?? null,
+            }
+          : undefined,
+        commonServings: food?.commonServings,
         per100g: food
           ? {
               kcal: food.calories,

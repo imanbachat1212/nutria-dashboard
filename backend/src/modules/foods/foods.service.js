@@ -8,10 +8,17 @@ import { deleteImage } from "../../lib/storage.js";
 import { searchUsdaFoods, getUsdaFoodDetails } from "./lib/usda-client.js";
 import { guessFoodCategory } from "./lib/food-category.js";
 import { matchFoodName } from "../../lib/foodMatching.js";
+import { getPortionsByFoodCode } from "../../lib/foodPortions.js";
+import { computeNutrientClaims } from "./lib/nutrientClaims.js";
+import { computeEpaDhaPerServingMg } from "./lib/omega3.js";
 
 // Shapes a foodMatching.js result into what the API/frontend actually needs — never returned
 // for "no-match" (nothing to show), and never exposes the internal coreMismatch/compositeDish
-// debug flags that only the historical CSV report cares about.
+// debug flags that only the historical CSV report cares about. `portions` is looked up
+// separately (see lib/foodPortions.js) from the complete FNDDS+SR-Legacy dataset by the match's
+// own foodCode, so the "matched serving sizes" preview can show real per-food descriptions
+// (e.g. "1 pitted date") alongside the existing derived cup/tbsp/tsp/piece/ml fields, reusing
+// this exact same match result rather than a second lookup path.
 function toUnitWeightMatch(match) {
   if (!match || match.tier === "no-match") return null;
   return {
@@ -20,6 +27,7 @@ function toUnitWeightMatch(match) {
     matchedDescription: match.matchedDescription,
     matchedCategory: match.matchedCategory,
     fields: match.fields,
+    portions: getPortionsByFoodCode(match.foodCode),
   };
 }
 
@@ -38,9 +46,18 @@ export function toPublicFood(food, userId) {
 export async function createFood(data, actor) {
   const match = matchFoodName(data.name);
   // Auto-populate only on a high-confidence match — low-confidence is surfaced as a
-  // suggestion for the dietitian to accept, never written without confirmation.
+  // suggestion for the dietitian to accept, never written without confirmation. Same gate for
+  // the real per-food portions array as the existing gramsPerX fields.
   const autoFields = match.tier === "match" ? match.fields : {};
-  const food = await Food.create({ ...data, ...autoFields, createdBy: actor._id });
+  const portions = match.tier === "match" ? getPortionsByFoodCode(match.foodCode) : [];
+  const draft = { ...data, ...autoFields, portions, createdBy: actor._id };
+  // Derived FDA %DV claims (prompt-65) — computed from the same resolved doc that gets stored,
+  // so a manually-added food with real portions gets tagged exactly like an imported one.
+  const food = await Food.create({
+    ...draft,
+    nutrientClaims: computeNutrientClaims(draft),
+    omega3EpaDhaPerServingMg: computeEpaDhaPerServingMg(draft),
+  });
   return { food, unitWeightMatch: toUnitWeightMatch(match) };
 }
 
@@ -64,12 +81,29 @@ function escapeRegex(s) {
 // five other real foods that plainly contain both words. A single-token search (today's only
 // working case) is the trivial one-element case of this same $and, so existing single-word
 // searches are unaffected.
-function buildFoodFilter({ search, category, source, verified, favorites, userId }) {
+function buildFoodFilter({ search, category, source, verified, favorites, userId, claimNutrient, claimLevel, minEpaDhaMg }) {
   const filter = {};
   if (category) filter.category = category;
   if (source) filter.source = source;
   if (verified !== undefined) filter.verified = verified;
   if (favorites) filter.favoritedBy = userId;
+  // FDA %DV claim filter (prompt-65). $elemMatch, not two separate dotted conditions: those
+  // would match a food whose claims merely contain the nutrient somewhere AND the level
+  // somewhere — so "good source of iron" would wrongly return a food that's HIGH in iron and
+  // good in something else. $elemMatch forces both to hold on the same claim entry.
+  // claimLevel "good" means exactly good; a caller wanting "at least good" passes no level,
+  // which matches any qualifying claim for that nutrient (high or good).
+  if (claimNutrient) {
+    filter.nutrientClaims = {
+      $elemMatch: { nutrient: claimNutrient, ...(claimLevel ? { level: claimLevel } : {}) },
+    };
+  }
+  // Plain numeric omega-3 minimum (prompt-67) — a measured quantity, not a claim tier, so it's
+  // a separate $gte rather than anything resembling the %DV claim filter above. Nulls (no
+  // serving basis / no measured EPA-DHA) never satisfy $gte, so they're excluded automatically.
+  if (minEpaDhaMg != null) {
+    filter.omega3EpaDhaPerServingMg = { $gte: minEpaDhaMg };
+  }
   if (search) {
     const tokens = search
       .split(/[\s,]+/)
@@ -85,8 +119,8 @@ function buildFoodFilter({ search, category, source, verified, favorites, userId
   return filter;
 }
 
-export async function listFoods({ page, limit, search, category, source, verified, favorites, userId }) {
-  const filter = buildFoodFilter({ search, category, source, verified, favorites, userId });
+export async function listFoods({ page, limit, search, category, source, verified, favorites, userId, claimNutrient, claimLevel, minEpaDhaMg }) {
+  const filter = buildFoodFilter({ search, category, source, verified, favorites, userId, claimNutrient, claimLevel, minEpaDhaMg });
 
   const skip = (page - 1) * limit;
   const [foods, total] = await Promise.all([
@@ -106,8 +140,8 @@ export async function listFoods({ page, limit, search, category, source, verifie
 // crossed 100 documents. Respects the same search/category/source/verified/favorites filter as
 // listFoods, so the KPIs reflect "matching the current filter," consistent with how `total`
 // already behaved (e.g. verified=true&source=lebanese returns the correct intersection).
-export async function getFoodsStats({ search, category, source, verified, favorites, userId }) {
-  const filter = buildFoodFilter({ search, category, source, verified, favorites, userId });
+export async function getFoodsStats({ search, category, source, verified, favorites, userId, claimNutrient, claimLevel, minEpaDhaMg }) {
+  const filter = buildFoodFilter({ search, category, source, verified, favorites, userId, claimNutrient, claimLevel, minEpaDhaMg });
   const [total, verifiedCount, lebanese] = await Promise.all([
     Food.countDocuments(filter),
     Food.countDocuments({ ...filter, verified: true }),
@@ -135,9 +169,15 @@ export async function updateFood(id, data, userId) {
     if (match.tier === "match") {
       // Don't clobber a value that's already set (e.g. a prior manual correction, or a
       // previously-accepted match) just because the name was edited — only fill in gaps.
-      const existing = await Food.findById(id, Object.keys(match.fields).join(" ")).lean();
+      const existing = await Food.findById(id, [...Object.keys(match.fields), "portions"].join(" ")).lean();
       for (const [key, value] of Object.entries(match.fields)) {
         if (existing?.[key] == null) autoFields[key] = value;
+      }
+      // portions is never dietitian-edited (unlike gramsPerX above), so "empty" always means
+      // "no real data yet" — safe to fill whenever it's currently empty, same gap-only rule.
+      if (!existing?.portions?.length) {
+        const portions = getPortionsByFoodCode(match.foodCode);
+        if (portions.length) autoFields.portions = portions;
       }
     }
   }
@@ -300,6 +340,7 @@ export async function importUsdaFood(fdcId, actor) {
   // gramsPerX field null and commonServings empty, never a guessed value.
   const match = matchFoodName(details.name);
   const autoFields = match.tier === "match" ? match.fields : {};
+  const portions = match.tier === "match" ? getPortionsByFoodCode(match.foodCode) : [];
   // USDA doesn't share this app's category taxonomy directly — guessFoodCategory bridges the
   // gap (FDC's own standardized SR/Foundation category first, then name/WWEIA-category keyword
   // matching, then a macro-dominance fallback). Previously left unset entirely, which every
@@ -315,7 +356,7 @@ export async function importUsdaFood(fdcId, actor) {
     carbs: details.carbs,
     fat: details.fat,
   });
-  const food = await Food.create({
+  const draft = {
     name: details.name,
     brand: details.brand,
     category,
@@ -323,6 +364,7 @@ export async function importUsdaFood(fdcId, actor) {
     servingSize: details.servingSize,
     servingUnit: details.servingUnit,
     commonServings: buildCommonServingsFromFields(autoFields),
+    portions,
     calories: details.calories,
     protein: details.protein,
     carbs: details.carbs,
@@ -331,6 +373,9 @@ export async function importUsdaFood(fdcId, actor) {
     sugar: details.sugar,
     sodium: details.sodium,
     fdcId: details.fdcId,
+    // Real FDC source type, so My Library can show "SR Legacy"/"FNDDS"/… instead of a generic
+    // "USDA" badge. Previously discarded — the detail response carried it but nothing stored it.
+    usdaDataType: details.dataType ?? null,
     createdBy: actor._id,
     ...autoFields,
 
@@ -389,6 +434,13 @@ export async function importUsdaFood(fdcId, actor) {
     potassium: details.potassium,
     selenium: details.selenium,
     zinc: details.zinc,
+  };
+  // Derived FDA %DV claims (prompt-65), computed from the fully-resolved draft above so the
+  // serving basis (portions) and the micronutrient values are the exact ones being stored.
+  const food = await Food.create({
+    ...draft,
+    nutrientClaims: computeNutrientClaims(draft),
+    omega3EpaDhaPerServingMg: computeEpaDhaPerServingMg(draft),
   });
   return { food, created: true };
 }
