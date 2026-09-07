@@ -4,7 +4,12 @@ import { requirePermission } from "../../middleware/rbac.js";
 import { validate } from "../../middleware/validate.js";
 import { auditAction } from "../../middleware/audit.js";
 import * as ctrl from "./meals.controller.js";
-import { createMealSchema, updateMealSchema, listMealsSchema } from "./meals.validation.js";
+import {
+  createMealSchema,
+  updateMealSchema,
+  listMealsSchema,
+  duplicateMealSchema,
+} from "./meals.validation.js";
 
 const router = Router();
 
@@ -29,6 +34,16 @@ router.get(
   "/:id",
   requirePermission("meals.read"),
   ctrl.getOne
+);
+
+// Same shape as mealplans.routes.js's /:id/duplicate — gated on the CREATE permission (it
+// makes a new record, it doesn't modify the source) and audited as a create.
+router.post(
+  "/:id/duplicate",
+  requirePermission("meals.create"),
+  validate(duplicateMealSchema),
+  auditAction("create", "meal"),
+  ctrl.duplicate
 );
 
 router.patch(

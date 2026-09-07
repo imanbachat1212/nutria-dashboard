@@ -668,8 +668,12 @@ function FoodDatabasePage() {
                         <TableCell className="text-right tabular-nums text-muted-foreground">
                           {f.macros.fat}
                         </TableCell>
+                        {/* Unmeasured fiber reads as an em dash rather than "0" (prompt-73) —
+                            same null-vs-zero distinction as the detail drawer, using this
+                            table's existing empty-cell idiom instead of its "No Data" wording,
+                            which doesn't fit a narrow numeric column. */}
                         <TableCell className="text-right tabular-nums text-muted-foreground">
-                          {f.macros.fiber}
+                          {f.macros.fiber ?? <span title="Not measured">—</span>}
                         </TableCell>
                         <TableCell className="text-right text-xs text-muted-foreground">
                           {f.usedInPlans}× · {f.lastUsed}
@@ -1537,9 +1541,12 @@ function FoodDrawer({ food, onClose }: { food: FoodItem | null; onClose: () => v
               />
             </div>
             <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
-              <MicroStat label="Fiber" value={`${m.fiber} g`} />
-              <MicroStat label="Sugar" value={m.sugar != null ? `${m.sugar} g` : "—"} />
-              <MicroStat label="Sodium" value={m.sodium != null ? `${m.sodium} mg` : "—"} />
+              {/* "No Data" for a genuine null, a real "0 g" for a measured zero — the same
+                  distinction (and the same wording) the MicroStat rows and omega-3 line in
+                  MicronutrientSection below already make. */}
+              <MicroStat label="Fiber" value={m.fiber == null ? "No Data" : `${m.fiber} g`} />
+              <MicroStat label="Sugar" value={m.sugar == null ? "No Data" : `${m.sugar} g`} />
+              <MicroStat label="Sodium" value={m.sodium == null ? "No Data" : `${m.sodium} mg`} />
             </div>
           </section>
 
@@ -1708,13 +1715,19 @@ function partialSum(values: (number | null)[]): number | null {
 // unimported USDA result) can reuse this directly instead of a second display implementation.
 // Only ever reads macros.carbs/fiber and micros, so this is a strict subset of FoodItem's shape.
 interface MicronutrientSectionFood {
-  macros: { carbs: number; fiber: number };
+  macros: { carbs: number; fiber: number | null };
   micros?: Micronutrients;
 }
 
 function MicronutrientSection({ food }: { food: MicronutrientSectionFood }) {
   const micros = food.micros ?? EMPTY_MICROS;
-  const netCarbs = Math.round((food.macros.carbs - food.macros.fiber) * 10) / 10;
+  // Unchanged formula; it just no longer runs on a fabricated input. With fiber unmeasured
+  // there is no net-carb figure to state — subtracting an assumed 0 would print the food's
+  // whole carb count as if the fiber had been checked and found to be none (prompt-73).
+  const netCarbs =
+    food.macros.fiber == null
+      ? null
+      : Math.round((food.macros.carbs - food.macros.fiber) * 10) / 10;
   const omega3Sum = partialSum([micros.omega3Ala, micros.omega3Epa, micros.omega3Dha]);
   const omega6Sum = partialSum([micros.omega6La, micros.omega6Aa]);
   const omega6IsApprox = micros.omega6LaApprox || micros.omega6AaApprox;
@@ -1724,7 +1737,7 @@ function MicronutrientSection({ food }: { food: MicronutrientSectionFood }) {
       <h3 className="mb-2 text-sm font-semibold">Micronutrients</h3>
 
       <div className="mb-2 grid grid-cols-3 gap-2 text-xs">
-        <MicroStat label="Net carbs" value={`${netCarbs} g`} />
+        <MicroStat label="Net carbs" value={netCarbs == null ? "No Data" : `${netCarbs} g`} />
         <MicroStat
           label="Omega-3 total, incl. ALA"
           value={omega3Sum == null ? "No Data" : `${omega3Sum} g`}

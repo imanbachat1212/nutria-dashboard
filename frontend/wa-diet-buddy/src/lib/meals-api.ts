@@ -1,6 +1,11 @@
 import { api } from "./api";
 import type { Recipe, RecipeCategory, RecipeCuisine } from "./meal-library-mock";
 import type { ServingSize, UnitWeights } from "./food-database-mock";
+import {
+  formatSavedMeasureAmount,
+  formatSavedGenericUnitAmount,
+  type SavedItemFood,
+} from "./measure-options";
 
 export interface PhotoItem {
   url: string;
@@ -23,7 +28,10 @@ interface APIMeal {
   dietTags: string[];
   allergens: string[];
   ingredients: {
-    food?: string;
+    // Populated (prompt-75) with this food's own unit weights so the drawer can show what a
+    // stored "0.25 cup" actually weighs; still a bare id string on any response predating that
+    // populate, which formatSavedGenericUnitAmount treats as "no data, show nothing".
+    food?: SavedItemFood & { _id: string; name: string };
     name: string;
     quantity?: number;
     unit?: string;
@@ -55,6 +63,27 @@ function toPhotoArray(m: Pick<APIMeal, "photos" | "photo">): PhotoItem[] {
   return [];
 }
 
+// Meal.totalX on the server is the WHOLE recipe as prepared — computeRecipeMacros sums every
+// ingredient and never sees `servings` (see backend lib/calc/recipeMacros.js). Recipe.macros,
+// by contrast, is per-serving everywhere it's consumed: the Meal Library drawer labels it
+// "Per serving", and plan-item-picker.tsx documents macrosPerUnit as "per-serving for recipe"
+// and multiplies it by the number of servings being added. So the division belongs here, at
+// the one place the API shape becomes the UI shape — not repeated at each display site.
+//
+// Rounding mirrors computeItemDetails' recipe branch in mealplans.service.js exactly (kcal to
+// a whole number, the rest to one decimal, with the same servings divisor), so what the picker
+// previews for 1 srv is digit-for-digit what the plan item shows once it's actually added.
+function perServing(m: APIMeal): Recipe["macros"] {
+  const s = m.servings || 1;
+  return {
+    kcal: Math.round((m.totalCalories || 0) / s),
+    protein: Math.round(((m.totalProtein || 0) / s) * 10) / 10,
+    carbs: Math.round(((m.totalCarbs || 0) / s) * 10) / 10,
+    fat: Math.round(((m.totalFat || 0) / s) * 10) / 10,
+    fiber: Math.round(((m.totalFiber || 0) / s) * 10) / 10,
+  };
+}
+
 interface APIListResult {
   meals: APIMeal[];
   total: number;
@@ -77,16 +106,14 @@ function toRecipe(m: APIMeal): Recipe {
     prepMin: m.prepTime || 0,
     cookMin: m.cookTime || 0,
     servings: m.servings || 1,
-    macros: {
-      kcal: m.totalCalories || 0,
-      protein: m.totalProtein || 0,
-      carbs: m.totalCarbs || 0,
-      fat: m.totalFat || 0,
-      fiber: m.totalFiber || 0,
-    },
+    macros: perServing(m),
     ingredients: (m.ingredients || []).map((i) => ({
       name: i.name,
-      amount: i.measureLabel || (i.quantity ? `${i.quantity} ${i.unit || "g"}` : ""),
+      amount:
+        formatSavedMeasureAmount(i) ||
+        formatSavedGenericUnitAmount(i, typeof i.food === "object" ? i.food : null) ||
+        i.measureLabel ||
+        (i.quantity ? `${i.quantity} ${i.unit || "g"}` : ""),
     })),
     steps: m.steps || [],
     allergens: (m.allergens || []) as Recipe["allergens"],
@@ -161,6 +188,13 @@ export async function updateMeal(
   data: Partial<CreateMealPayload> & { verified?: boolean },
 ): Promise<Recipe> {
   const raw = await api.patch<APIMeal>(`/api/meals/${id}`, data);
+  return toRecipe(raw);
+}
+
+// Mirrors duplicateMealPlan in mealplans-api.ts. `name` is optional — omitting it lets the
+// server append " (copy)", so the naming convention lives in exactly one place.
+export async function duplicateMeal(id: string, opts: { name?: string } = {}): Promise<Recipe> {
+  const raw = await api.post<APIMeal>(`/api/meals/${id}/duplicate`, opts);
   return toRecipe(raw);
 }
 

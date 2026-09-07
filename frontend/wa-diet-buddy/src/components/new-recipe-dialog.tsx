@@ -4,7 +4,7 @@ import { createMeal, updateMeal, getMeal, type PhotoItem } from "@/lib/meals-api
 import { fetchFoods } from "@/lib/foods-api";
 import type { UnitWeights, ServingSize } from "@/lib/food-database-mock";
 import { commonServingOverride } from "@/lib/unit-conversion";
-import { resolveMeasure, pickInitialMeasureSelection } from "@/lib/measure-options";
+import { resolveMeasure, pickInitialMeasureSelection, formatGramEquivalent } from "@/lib/measure-options";
 import { MeasureSelect } from "@/components/measure-select";
 import { uploadMedia } from "@/lib/api";
 import { fetchDietaryPreferences } from "@/lib/settings-api";
@@ -160,6 +160,51 @@ interface IngredientDraft {
   measureCount?: number | null;
 }
 
+// The one place this dialog turns a {count, unit} selection into grams. resolveMeasure() turns
+// a real-measure selection into an exact gram total (unit="g"); for the generic-unit path it
+// passes quantity/unit through unchanged, so gramsPerUnitForFood still does the existing
+// per-food-density resolution exactly as before either way.
+//
+// Extracted (prompt-69) from liveMacros, which was its only caller, so the gram equivalent now
+// shown beside each row is by construction the very number the macro preview is dividing by —
+// not a parallel recomputation that could quietly disagree with it.
+function ingredientGrams(ing: IngredientDraft): number {
+  const qty = typeof ing.quantity === "number" ? ing.quantity : 0;
+  const resolved = resolveMeasure(ing.realMeasures, ing.unit, qty);
+  return resolved.quantity * gramsPerUnitForFood(ing.commonServings, ing.unitWeights, resolved.unit);
+}
+
+// One ingredient's contribution at the amount actually entered for it (prompt-78) — the same
+// `per-100g × grams/100` scaling computeRecipeMacros applies per ingredient on the server
+// before summing. That server loop accumulates inline and exposes no per-ingredient value to
+// import, so this is the frontend's single copy of that formula: liveMacros below sums exactly
+// these objects, and the ingredient rows print exactly these objects. A row can therefore never
+// disagree with the total it feeds.
+//
+// Returns raw unrounded values on purpose. liveMacros rounds once at the end, as it always has,
+// so surfacing these per-row changes the recipe total by nothing at all; the row does its own
+// rounding purely for display.
+function ingredientMacros(ing: IngredientDraft): IngredientMacros | null {
+  if (!ing.per100g) return null;
+  const factor = ingredientGrams(ing) / 100;
+  return {
+    kcal: ing.per100g.kcal * factor,
+    protein: ing.per100g.protein * factor,
+    carbs: ing.per100g.carbs * factor,
+    fat: ing.per100g.fat * factor,
+    fiber: ing.per100g.fiber * factor,
+  };
+}
+
+// Formatted to read as the same sentence the food search shows for its per-100g reference
+// ("884 kcal · P0 C0 F100") — same four fields, same order, same separators — so the dietitian
+// is comparing like with like, just at the real amount instead of 100 g. kcal whole, macros to
+// one decimal, matching how per-serving figures round elsewhere in the app.
+function formatIngredientMacros(m: IngredientMacros): string {
+  const r1 = (v: number) => Math.round(v * 10) / 10;
+  return `${Math.round(m.kcal)} kcal · P${r1(m.protein)} C${r1(m.carbs)} F${r1(m.fat)}`;
+}
+
 interface NewRecipeDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -267,6 +312,7 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
               i.measureDescription,
               i.measureCount,
               typeof i.quantity === "number" ? i.quantity : 0,
+              i.unit,
             );
             return { ...i, unit: initial.option, quantity: initial.count };
           })
@@ -291,20 +337,14 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
       fiber = 0;
     let matched = 0;
     for (const ing of validIngredients) {
-      if (!ing.per100g) continue;
+      const m = ingredientMacros(ing);
+      if (!m) continue;
       matched++;
-      const qty = typeof ing.quantity === "number" ? ing.quantity : 0;
-      // resolveMeasure turns a real-measure selection into an exact gram total (unit="g"); for
-      // the generic-unit path it passes qty/unit through unchanged, so gramsPerUnitForFood below
-      // still does the existing per-food-density resolution exactly as before either way.
-      const resolved = resolveMeasure(ing.realMeasures, ing.unit, qty);
-      const grams = resolved.quantity * gramsPerUnitForFood(ing.commonServings, ing.unitWeights, resolved.unit);
-      const factor = grams / 100;
-      kcal += ing.per100g.kcal * factor;
-      protein += ing.per100g.protein * factor;
-      carbs += ing.per100g.carbs * factor;
-      fat += ing.per100g.fat * factor;
-      fiber += ing.per100g.fiber * factor;
+      kcal += m.kcal;
+      protein += m.protein;
+      carbs += m.carbs;
+      fat += m.fat;
+      fiber += m.fiber;
     }
     const s = Math.max(1, servings);
     return {
@@ -590,7 +630,8 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                   </div>
                   <div className="space-y-2">
                     {ingredients.map((ing, idx) => (
-                      <div key={idx} className="flex items-center gap-2">
+                      <div key={idx} className="space-y-1">
+                      <div className="flex items-center gap-2">
                         <span className="h-6 w-6 rounded-full bg-muted text-xs flex items-center justify-center shrink-0">
                           {idx + 1}
                         </span>
@@ -650,6 +691,17 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                             setIngredients(copy);
                           }}
                         />
+                        {/* Gram equivalent (prompt-69) — the weight this selection already
+                            resolves to, for clients who think in metric. tabular-nums + a fixed
+                            min-width so the row doesn't jitter as digits change while typing. */}
+                        {(() => {
+                          const eq = formatGramEquivalent(ing.unit, ing.quantity, ingredientGrams(ing));
+                          return eq ? (
+                            <span className="text-[11px] text-muted-foreground tabular-nums shrink-0 min-w-14">
+                              {eq}
+                            </span>
+                          ) : null;
+                        })()}
                         {isApproximateUnit(ing.unitWeights, ing.unit) && (
                           <Tooltip>
                             <TooltipTrigger asChild>
@@ -670,6 +722,21 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
+                      </div>
+                      {/* This ingredient's own macros at the amount entered above (prompt-78).
+                          Its own line rather than more text on the row, which already carries
+                          the name, the amount picker and the gram equivalent; pl-8 lines it up
+                          under the food name (past the h-6 index badge + gap-2). Deliberately
+                          plainer than the "Live preview" card below, which is the recipe total
+                          — a small grey figure per row can't be mistaken for the headline. */}
+                      {(() => {
+                        const m = ingredientMacros(ing);
+                        return m && m.kcal > 0 ? (
+                          <p className="pl-8 text-[11px] text-muted-foreground tabular-nums">
+                            {formatIngredientMacros(m)}
+                          </p>
+                        ) : null;
+                      })()}
                       </div>
                     ))}
                   </div>
@@ -1206,7 +1273,11 @@ function FoodSearchInput({
           name: f.name,
           arabicName: f.arabicName,
           category: f.category,
-          macros: f.macros,
+          // fiber is nullable on FoodMacrosPer100g (prompt-73) but this is a CALCULATION input
+          // — liveMacros sums it into the recipe's fiber total — so the 0 fallback that was
+          // previously applied invisibly in foods-api.ts is applied explicitly here instead.
+          // Identical arithmetic to before; the assumption is just now visible where it's made.
+          macros: { ...f.macros, fiber: f.macros.fiber ?? 0 },
           unitWeights: f.unitWeights,
           commonServings: f.servings,
           realMeasures: f.portions,

@@ -205,7 +205,12 @@ function toMacros(foodNutrients) {
     protein: pickNutrient(nutrients, NUTRIENT_IDS.protein) ?? 0,
     carbs: pickNutrient(nutrients, NUTRIENT_IDS.carbs) ?? 0,
     fat: pickNutrient(nutrients, NUTRIENT_IDS.fat) ?? 0,
-    fiber: pickNutrient(nutrients, NUTRIENT_IDS.fiber) ?? 0,
+    // No `?? 0` (prompt-76), matching sugar/sodium below: pickNutrient already returns null
+    // only when FDC carries no fiber datum at all, and a record that reports fiber as 0 still
+    // comes through as 0. Coercing here erased that distinction on import, storing a confident
+    // "0 g fiber" for foods USDA simply never measured — see migrate-usda-fiber-null.js, which
+    // backfilled the records written before this line was fixed.
+    fiber: pickNutrient(nutrients, NUTRIENT_IDS.fiber),
     sugar: pickNutrient(nutrients, NUTRIENT_IDS.sugar),
     sodium: pickNutrient(nutrients, NUTRIENT_IDS.sodium),
   };

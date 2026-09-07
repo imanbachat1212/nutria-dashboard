@@ -17,9 +17,19 @@ export interface FoodMacrosPer100g {
   protein: number;
   carbs: number;
   fat: number;
-  fiber: number;
-  sugar: number;
-  sodium: number; // mg
+  // Nullable (prompt-73) for the same reason every field on Micronutrients below is: null means
+  // "not measured", which is NOT the same claim as a measured 0. food.model.js declares all
+  // three as nullable-in-practice (sugar/sodium default null; fiber defaults to 0 but 9 of the
+  // Hoteit lab-analyzed Lebanese dishes carry an explicit null), and 110 sugar / 56 sodium /
+  // 9 fiber values in the database really are null today. kcal/protein/carbs/fat stay
+  // non-nullable: the schema marks them required.
+  //
+  // Any CALCULATION consuming these must apply its own explicit `?? 0` at the point of use, so
+  // the fallback is a visible decision there rather than an invisible one here — see
+  // new-recipe-dialog.tsx's ingredient picker.
+  fiber: number | null;
+  sugar: number | null;
+  sodium: number | null; // mg
 }
 
 export interface ServingSize {

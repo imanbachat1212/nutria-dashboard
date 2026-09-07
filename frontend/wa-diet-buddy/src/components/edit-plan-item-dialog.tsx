@@ -12,7 +12,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MeasureSelect } from "@/components/measure-select";
-import { resolveMeasure, pickInitialMeasureSelection } from "@/lib/measure-options";
+import {
+  resolveMeasure,
+  pickInitialMeasureSelection,
+  formatGramEquivalent,
+} from "@/lib/measure-options";
+import { gramsPerUnitForFood } from "@/lib/unit-conversion";
 import type { ServingSize, UnitWeights } from "@/lib/food-database-mock";
 import type { AddItemPayload } from "@/lib/mealplans-api";
 
@@ -68,6 +73,7 @@ export function EditPlanItemDialog({
       item.measureDescription,
       item.measureCount,
       item.rawQuantity,
+      item.rawUnit,
     );
     setOption(initial.option);
     setCount(initial.count);
@@ -113,13 +119,29 @@ export function EditPlanItemDialog({
         <div className="px-5 py-4 space-y-3">
           <Label className="text-xs uppercase tracking-wide text-muted-foreground">Amount</Label>
           {item.itemType === "food" ? (
-            <MeasureSelect
-              realMeasures={item.realMeasures}
-              option={option}
-              count={count}
-              onOptionChange={setOption}
-              onCountChange={setCount}
-            />
+            <div className="flex items-center gap-2">
+              <MeasureSelect
+                realMeasures={item.realMeasures}
+                option={option}
+                count={count}
+                onOptionChange={setOption}
+                onCountChange={setCount}
+              />
+              {/* Gram equivalent (prompt-69) — resolved through the exact same two steps
+                  handleSave() above submits with, so what's previewed here is the weight that
+                  actually gets saved. */}
+              {(() => {
+                const c = typeof count === "number" ? count : 0;
+                const resolved = resolveMeasure(item.realMeasures, option, c);
+                const grams =
+                  resolved.quantity *
+                  gramsPerUnitForFood(item.commonServings, item.unitWeights, resolved.unit);
+                const eq = formatGramEquivalent(option, count, grams);
+                return eq ? (
+                  <span className="text-xs text-muted-foreground tabular-nums shrink-0">{eq}</span>
+                ) : null;
+              })()}
+            </div>
           ) : (
             <div className="flex items-center gap-1.5">
               <Input

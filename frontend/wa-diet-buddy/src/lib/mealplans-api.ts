@@ -13,6 +13,7 @@ import {
   type Micros,
 } from "./meal-plans-mock";
 import { commonServingOverride } from "./unit-conversion";
+import { formatSavedMeasureAmount, formatSavedGenericUnitAmount } from "./measure-options";
 
 // ── API types ──
 
@@ -193,7 +194,10 @@ function buildItemView(i: APIPlanItem) {
     name: i.name,
     amount:
       i.type === "food"
-        ? i.measureLabel || `${i.quantity} ${i.unit || "g"}`
+        ? formatSavedMeasureAmount(i) ||
+          formatSavedGenericUnitAmount(i, food) ||
+          i.measureLabel ||
+          `${i.quantity} ${i.unit || "g"}`
         : `${i.servings} serving${i.servings !== 1 ? "s" : ""}`,
     macros: {
       kcal: i.calories || 0,

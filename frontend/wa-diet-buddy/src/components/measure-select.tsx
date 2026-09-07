@@ -32,9 +32,12 @@ export function MeasureSelect({
   quantityClassName?: string;
   unitClassName?: string;
 }) {
-  const options = measureOptionLabels(realMeasures);
-  // A stale option (e.g. leftover from before a food swap changed which measures are valid)
-  // falls back to "g" rather than rendering a blank/invalid Select value.
+  // The currently-selected option is always included (prompt-79) so an item stored in a unit
+  // this food doesn't list — e.g. a plain "tbsp" on a food that has real portions — is still
+  // shown as what it actually is instead of silently reading "Grams (g)".
+  const options = measureOptionLabels(realMeasures, option);
+  // Kept as a guard for a genuinely empty/unset option; with the current unit now always in
+  // `options`, a real selection can no longer fall through to "g".
   const selectValue = options.includes(option) ? option : "g";
 
   return (

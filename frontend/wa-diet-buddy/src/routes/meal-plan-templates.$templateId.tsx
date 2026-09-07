@@ -25,6 +25,7 @@ import { EditTemplateDialog } from "@/components/edit-template-dialog";
 // Reused as-is from real Meal Plans (prompt-48/49) — it takes an onSave callback rather than
 // calling any plan-specific endpoint itself, so templates can point it at their own PATCH route.
 import { EditPlanItemDialog, type EditableItem } from "@/components/edit-plan-item-dialog";
+import { formatSavedMeasureAmount, formatSavedGenericUnitAmount } from "@/lib/measure-options";
 import { DAYS, SLOT_META, dayMacros, mealMacros, type DayKey, type MealSlot, type DayPlan } from "@/lib/meal-plans-mock";
 import type { AddItemPayload } from "@/lib/mealplans-api";
 import {
@@ -78,7 +79,10 @@ function buildTemplateDays(items: TemplateItem[]): DayPlan[] {
             name: i.name,
             amount:
               i.type === "food"
-                ? i.measureLabel || `${i.quantity} ${i.unit || "g"}`
+                ? formatSavedMeasureAmount(i) ||
+                  formatSavedGenericUnitAmount(i, food) ||
+                  i.measureLabel ||
+                  `${i.quantity} ${i.unit || "g"}`
                 : `${i.servings} serving${i.servings !== 1 ? "s" : ""}`,
             // Templates don't track fiber (out of scope for prompt-53, which is real Meal
             // Plans only) — 0 here is just satisfying the shared Macros type, not a real total.

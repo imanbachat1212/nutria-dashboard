@@ -264,9 +264,12 @@ function toFoodItem(f: APIFood): FoodItem {
       protein: f.protein,
       carbs: f.carbs,
       fat: f.fat,
-      fiber: f.fiber ?? 0,
-      sugar: f.sugar ?? 0,
-      sodium: f.sodium ?? 0,
+      // `?? null`, never `?? 0` (prompt-73): coercing here silently turned "USDA never measured
+      // this" into a confident "0" before any component could tell the two apart — the drawer's
+      // sugar/sodium tiles have always had the right null check, it just never fired.
+      fiber: f.fiber ?? null,
+      sugar: f.sugar ?? null,
+      sodium: f.sodium ?? null,
     },
     micros: toMicronutrients(f),
     // Real per-food portions (e.g. "1 pitted date") take priority over the dietitian's own

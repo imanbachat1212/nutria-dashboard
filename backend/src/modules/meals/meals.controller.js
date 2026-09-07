@@ -16,6 +16,11 @@ export const getOne = asyncHandler(async (req, res) => {
   res.json({ data: meal });
 });
 
+export const duplicate = asyncHandler(async (req, res) => {
+  const meal = await mealsService.duplicateMeal(req.params.id, req.validated.body, req.user);
+  res.status(201).json({ data: meal });
+});
+
 export const update = asyncHandler(async (req, res) => {
   const meal = await mealsService.updateMeal(req.params.id, req.validated.body);
   res.json({ data: meal });

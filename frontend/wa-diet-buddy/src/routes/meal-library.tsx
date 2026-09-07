@@ -23,6 +23,7 @@ import {
   MoreHorizontal,
   Pencil,
   Trash2,
+  Copy,
 } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
@@ -57,7 +58,7 @@ import {
   type RecipeCategory,
   type DietTag,
 } from "@/lib/meal-library-mock";
-import { fetchMeals, deleteMeal } from "@/lib/meals-api";
+import { fetchMeals, deleteMeal, duplicateMeal } from "@/lib/meals-api";
 import { fetchDietaryPreferences } from "@/lib/settings-api";
 import { NewRecipeDialog } from "@/components/new-recipe-dialog";
 
@@ -117,6 +118,21 @@ function MealLibraryPage() {
       queryClient.invalidateQueries({ queryKey: ["meals"] });
       setDeleteTarget(null);
       setSelected(null);
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  // Post-action behaviour copied from meal-plans.tsx's handleDuplicateCreated: refresh the list
+  // and select the copy, staying on this page rather than navigating anywhere. The drawer is
+  // already open on the source, so swapping `selected` to the copy leaves the dietitian looking
+  // at the new recipe — the same "you're now on the duplicate" outcome setSelectedId gives for
+  // plans, in this page's own idiom.
+  const duplicateMutation = useMutation({
+    mutationFn: (id: string) => duplicateMeal(id),
+    onSuccess: (copy) => {
+      toast.success(`Created "${copy.name}"`);
+      queryClient.invalidateQueries({ queryKey: ["meals"] });
+      setSelected(copy);
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -262,6 +278,8 @@ function MealLibraryPage() {
         onClose={() => setSelected(null)}
         onEdit={openEditRecipe}
         onDeleteRequest={setDeleteTarget}
+        onDuplicate={(r) => duplicateMutation.mutate(r.id)}
+        duplicating={duplicateMutation.isPending}
       />
       <NewRecipeDialog
         open={newOpen}
@@ -445,11 +463,15 @@ function RecipeDrawer({
   onClose,
   onEdit,
   onDeleteRequest,
+  onDuplicate,
+  duplicating,
 }: {
   recipe: Recipe | null;
   onClose: () => void;
   onEdit: (recipe: Recipe) => void;
   onDeleteRequest: (recipe: Recipe) => void;
+  onDuplicate: (recipe: Recipe) => void;
+  duplicating: boolean;
 }) {
   const [activeIndex, setActiveIndex] = useState(0);
   useEffect(() => {
@@ -508,6 +530,16 @@ function RecipeDrawer({
                     <DropdownMenuItem onSelect={() => onEdit(recipe)}>
                       <Pencil className="h-3.5 w-3.5" />
                       Edit recipe
+                    </DropdownMenuItem>
+                    {/* Between edit and delete (prompt-77) — a non-destructive action grouped
+                        with the other non-destructive one, above the red divider-by-colour that
+                        delete already forms. */}
+                    <DropdownMenuItem
+                      disabled={duplicating}
+                      onSelect={() => onDuplicate(recipe)}
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                      {duplicating ? "Duplicating…" : "Duplicate recipe"}
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       className="text-rose-600"

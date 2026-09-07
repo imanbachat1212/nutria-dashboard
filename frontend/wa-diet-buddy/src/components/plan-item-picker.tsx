@@ -21,7 +21,7 @@ import type { AddItemPayload } from "@/lib/mealplans-api";
 import { SLOT_META, type MealSlot } from "@/lib/meal-plans-mock";
 import type { ServingSize, UnitWeights } from "@/lib/food-database-mock";
 import { gramsPerUnitForFood } from "@/lib/unit-conversion";
-import { resolveMeasure } from "@/lib/measure-options";
+import { resolveMeasure, formatGramEquivalent } from "@/lib/measure-options";
 import { MeasureSelect } from "@/components/measure-select";
 
 interface PlanItemPickerProps {
@@ -438,11 +438,19 @@ export function PlanItemPicker({
                 // (prompt-51: they previously could, since this row didn't exist at all and
                 // nothing guaranteed a future one would derive from the same function).
                 const itemMacros = scaleMacros(item);
+                // Gram equivalent (prompt-69) of a non-gram measure, from the same foodGrams()
+                // scaleMacros() just used above — leading the existing macro line rather than
+                // adding a third line, so the staging list's row height is unchanged.
+                const gramEq =
+                  item.type === "food"
+                    ? formatGramEquivalent(item.unit, item.amount, foodGrams(item))
+                    : null;
                 return (
                 <div key={key} className="flex items-center gap-2">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm truncate" title={item.name}>{item.name}</p>
                     <p className="text-[10px] text-muted-foreground tabular-nums">
+                      {gramEq && <>{gramEq} · </>}
                       {itemMacros.kcal} kcal · P{itemMacros.protein} C{itemMacros.carbs} F
                       {itemMacros.fat}
                     </p>

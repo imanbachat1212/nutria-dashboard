@@ -120,6 +120,15 @@ export const updateMealSchema = z.object({
   }),
 });
 
+// Mirrors duplicatePlanSchema in mealplans.validation.js — name is optional; omitting it lets
+// the service append " (copy)" rather than the client having to compose that string itself.
+export const duplicateMealSchema = z.object({
+  params: z.object({ id: z.string().min(1) }),
+  body: z.object({
+    name: z.string().min(1).optional(),
+  }),
+});
+
 export const listMealsSchema = z.object({
   query: z.object({
     page: z.coerce.number().int().positive().default(1),
