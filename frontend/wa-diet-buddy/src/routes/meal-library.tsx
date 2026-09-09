@@ -635,7 +635,7 @@ function RecipeDrawer({
                   label: r.label,
                   unit: r.unit,
                   value: r.value,
-                  dv: { pct: r.pct, level: r.level },
+                  dv: { pct: r.pct, level: r.level, pctExact: r.pctExact },
                 }))}
               />
 

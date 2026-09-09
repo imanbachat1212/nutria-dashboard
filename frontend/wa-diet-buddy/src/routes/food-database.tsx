@@ -85,9 +85,12 @@ import {
   type FoodSource,
   type Micronutrients,
 } from "@/lib/food-database-mock";
+import { MicronutrientPanel, formatDvPct } from "@/components/micronutrient-panel";
+import { foodClaimServing, foodMicronutrientRows, hasIuRow } from "@/lib/food-micronutrients";
 import {
   fetchFoods,
   fetchFoodStats,
+  fetchDailyValues,
   updateFood,
   deleteFood,
   addFavoriteFood,
@@ -1410,12 +1413,30 @@ function FoodDrawer({ food, onClose }: { food: FoodItem | null; onClose: () => v
   const qc = useQueryClient();
   const [toggling, setToggling] = useState(false);
   const [favoriting, setFavoriting] = useState(false);
+  // The FDA table itself, served by the backend so nutrientClaims.js stays its single
+  // definition (prompt-83). Static reference data — fetched once, shared with Meal Plans
+  // through the same query key, never refetched.
+  const { data: dvRef } = useQuery({
+    queryKey: ["foods", "daily-values"],
+    queryFn: fetchDailyValues,
+    staleTime: Infinity,
+  });
   if (!food) return null;
   const meta = CATEGORY_META[food.category];
   const src = SOURCE_META[food.source];
   const srcLabel = sourceLabel(food.source, food.usdaDataType);
   const omega3 = epaDhaMgPerServing(food);
   const m = food.macros;
+  const dvPanel = {
+    serving: foodClaimServing(food),
+    rows: foodMicronutrientRows(food, dvRef),
+  };
+  // Percentage shown on a stored claim badge, formatted the same way its panel row is.
+  const claimPct = (c: { nutrient: string; pct?: number }) => {
+    const row = dvPanel.rows.find((r) => r.nutrient === c.nutrient);
+    if (row?.dv) return formatDvPct(row.dv);
+    return c.pct ?? null;
+  };
 
   return (
     <Sheet open={!!food} onOpenChange={(o) => !o && onClose()}>
@@ -1480,8 +1501,13 @@ function FoodDrawer({ food, onClose }: { food: FoodItem | null; onClose: () => v
                     >
                       {CLAIM_LEVEL_META[c.level].label} of{" "}
                       {NUTRIENT_CLAIM_LABEL[c.nutrient] ?? c.nutrient}
-                      {c.pct != null && (
-                        <span className="ml-1 opacity-70">~{c.pct}% DV</span>
+                      {/* The badge's own list and tier stay exactly as the server stored them;
+                          only the percentage's precision is borrowed from the panel row below,
+                          so a "Good Source" badge can't read "~20% DV" while its row reads
+                          "19.6% DV" (prompt-88). Falls back to the stored integer whenever the
+                          row isn't there — no portions, or the DV table still loading. */}
+                      {claimPct(c) != null && (
+                        <span className="ml-1 opacity-70">~{claimPct(c)}% DV</span>
                       )}
                     </Badge>
                   ))}
@@ -1548,6 +1574,46 @@ function FoodDrawer({ food, onClose }: { food: FoodItem | null; onClose: () => v
               <MicroStat label="Sugar" value={m.sugar == null ? "No Data" : `${m.sugar} g`} />
               <MicroStat label="Sodium" value={m.sodium == null ? "No Data" : `${m.sodium} mg`} />
             </div>
+          </section>
+
+          {/* Per-nutrient %DV (prompt-87), through the SAME shared panel Meal Library's recipe
+              drawer and Meal Plans' day/slot sheet render — same priority ordering, same
+              High/Good vocabulary, one component. Until now the drawer showed %DV only inside
+              the claim badges above, i.e. only for the nutrients that crossed a threshold; the
+              other ~20 were a bare value with nothing to judge it against.
+
+              Basis is the food's own first stored portion, exactly what the claim badges are
+              computed against — so a nutrient's row and its badge state the same percentage.
+              Callout badges are off here: the strip at the top of this sheet is already that
+              list, and it comes from the server's stored claims. */}
+          <section>
+            {dvPanel.serving ? (
+              <MicronutrientPanel
+                rows={dvPanel.rows}
+                title="Micronutrients — % Daily Value"
+                caption={`per ${dvPanel.serving.label} (${dvPanel.serving.grams} g)`}
+                showClaims
+                showCallouts={false}
+                nullText="No Data"
+              />
+            ) : (
+              <>
+                <h3 className="mb-2 text-sm font-semibold">Micronutrients — % Daily Value</h3>
+                <p className="text-xs text-muted-foreground">
+                  No %DV for this food: it has no stored portion, so there's no serving to
+                  measure a Daily Value against. That's the same reason it carries no nutrient
+                  claims — a percentage would have to invent a serving size to exist. Per-100 g
+                  values are below.
+                </p>
+              </>
+            )}
+            {hasIuRow(dvPanel.rows) && (
+              <p className="mt-1.5 text-[10px] leading-snug text-muted-foreground">
+                Rows marked IU are stored in the unit USDA reported. The Daily Value is defined
+                in mcg and the IU→mcg factor depends on the specific vitamer, so no %DV is shown
+                rather than a converted guess — matching how these records are left untagged.
+              </p>
+            )}
           </section>
 
           {/* Micronutrients — full profile, collapsed by default. Does not touch the macro
@@ -1734,7 +1800,10 @@ function MicronutrientSection({ food }: { food: MicronutrientSectionFood }) {
 
   return (
     <section>
-      <h3 className="mb-2 text-sm font-semibold">Micronutrients</h3>
+      {/* "per 100 g" spelled out in the heading (prompt-87): the %DV panel above states the
+          same nutrients per the food's own serving, so without the basis on both, one nutrient
+          appearing twice with two different numbers reads as a contradiction. */}
+      <h3 className="mb-2 text-sm font-semibold">Micronutrients — per 100 g</h3>
 
       <div className="mb-2 grid grid-cols-3 gap-2 text-xs">
         <MicroStat label="Net carbs" value={netCarbs == null ? "No Data" : `${netCarbs} g`} />

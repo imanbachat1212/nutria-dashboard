@@ -2,7 +2,7 @@ import Meal from "./meal.model.js";
 import { ApiError } from "../../lib/ApiError.js";
 import { deleteImage } from "../../lib/storage.js";
 import { computeRecipeMacros, MICRO_FIELDS, microTotalKey } from "../../lib/calc/recipeMacros.js";
-import { classifyPerServing } from "../foods/lib/nutrientClaims.js";
+import { classifyPerServing, DAILY_VALUES } from "../foods/lib/nutrientClaims.js";
 
 // Recipes saved before the single-photo → photos[] migration still have a raw `photo` field
 // in Mongo (schema no longer declares it, but .lean() reads are unaffected by that — the field
@@ -38,7 +38,17 @@ function withMicronutrients(meal) {
     if (total == null) continue;
     perServing[field] = total / servings;
   }
-  return { ...meal, micronutrients: classifyPerServing(perServing) };
+  // classifyPerServing owns the tier and the rounded percentage, exactly as before. `pctExact`
+  // is added alongside for display only (prompt-88): the panel needs one more digit of
+  // precision to avoid printing a whole number that states a tier this nutrient doesn't hold
+  // (19.71% DV of selenium rendering as "20% DV" next to a Good Source badge, on greek yogurt
+  // pancake among others). Computed from the same unrounded per-serving map classifyPerServing
+  // itself divides, so the two can't drift; nothing here is stored, classified or re-tiered.
+  const rows = classifyPerServing(perServing).map((row) => ({
+    ...row,
+    pctExact: (perServing[row.nutrient] / DAILY_VALUES[row.nutrient].dv) * 100,
+  }));
+  return { ...meal, micronutrients: rows };
 }
 
 export async function createMeal(data, actor) {

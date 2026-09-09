@@ -64,6 +64,8 @@ export interface Recipe {
     value: number;
     pct: number;
     level: "high" | "good" | null;
+    // Unrounded ratio, display precision only (prompt-88) — see formatDvPct.
+    pctExact?: number;
   }[];
   ingredients: Ingredient[];
   steps: string[];

@@ -15,6 +15,8 @@ export interface RecipeMicronutrient {
   value: number;
   pct: number;
   level: "high" | "good" | null;
+  // The unrounded ratio, for display precision only (prompt-88) — see formatDvPct.
+  pctExact?: number;
 }
 
 export interface PhotoItem {

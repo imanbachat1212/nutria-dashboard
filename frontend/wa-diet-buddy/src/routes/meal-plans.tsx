@@ -78,7 +78,24 @@ import { toast } from "sonner";
 import { NewPlanDialog } from "@/components/new-plan-dialog";
 import { DuplicatePlanDialog } from "@/components/duplicate-plan-dialog";
 import { SaveAsTemplateDialog } from "@/components/save-as-template-dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { PlanItemPicker } from "@/components/plan-item-picker";
+import {
+  allItemIds,
+  createdItemIds,
+  itemsDestroyedByDayCopy,
+  runCopyUndo,
+  type CopyUndoRecord,
+} from "@/lib/copy-undo";
 import { MicronutrientPanel, type MicronutrientRow } from "@/components/micronutrient-panel";
 import { fetchDailyValues } from "@/lib/foods-api";
 import { EditPlanItemDialog, type EditableItem } from "@/components/edit-plan-item-dialog";
@@ -124,6 +141,13 @@ function MealPlansPage() {
   const [copyDayOpen, setCopyDayOpen] = useState(false);
   const [copyTargetDays, setCopyTargetDays] = useState<number[]>([]);
   const [copying, setCopying] = useState(false);
+  // Set when "Copy day" would overwrite days that already have meals (prompt-86). Carries the
+  // target day INDEXES as well as their labels: opening this confirm closes the Popover behind
+  // it, and that Popover's onOpenChange clears copyTargetDays — so the confirm must act on its
+  // own captured copy rather than on state that has been reset out from under it.
+  const [copyOverwriteWarning, setCopyOverwriteWarning] = useState<
+    { labels: string[]; targets: number[] } | null
+  >(null);
   const [microsOpen, setMicrosOpen] = useState(false);
   // null => the whole day; a meal id => that slot only (prompt-83).
   const [microsSlotId, setMicrosSlotId] = useState<string | null>(null);
@@ -214,7 +238,16 @@ function MealPlansPage() {
       unit: f.unit,
       value,
       dri: target != null && target > 0 ? { target, pct: Math.round((value / target) * 100) } : null,
-      dv: dvEntry ? { pct: Math.round((value / dvEntry.dv) * 100), level: null } : null,
+      // pctExact is display-only (prompt-88): it lets the shared panel show "9.8%" rather than
+      // a "10%" that reads as a Good Source threshold this day never crossed. No day or slot
+      // carries a claim level, so nothing here is classified either way.
+      dv: dvEntry
+        ? {
+            pct: Math.round((value / dvEntry.dv) * 100),
+            level: null,
+            pctExact: (value / dvEntry.dv) * 100,
+          }
+        : null,
     }];
   });
 
@@ -291,14 +324,82 @@ function MealPlansPage() {
     );
   }
 
-  async function handleCopyDay() {
-    if (!effectiveId || copyTargetDays.length === 0) return;
+  // One place that turns a completed copy into a toast with an Undo action, so all three copy
+  // paths get identical behaviour and wording (prompt-85). Sonner's `action` is the app's
+  // existing toast affordance; duration is stretched from the default because these are bulk
+  // actions worth a longer look before the window closes.
+  function offerCopyUndo(record: CopyUndoRecord) {
+    toast.success(record.label, {
+      duration: 10000,
+      action: {
+        label: "Undo",
+        onClick: async () => {
+          // Re-read the plan rather than trusting the snapshot: the guard inside runCopyUndo is
+          // only meaningful against the CURRENT state.
+          const fresh = await qc.fetchQuery({
+            queryKey: ["mealplan", record.planId],
+            queryFn: () => fetchMealPlan(record.planId),
+          });
+          const result = await runCopyUndo(record, fresh);
+          qc.invalidateQueries({ queryKey: ["mealplan", record.planId] });
+          if (result.ok) toast.success("Copy undone");
+          else toast.error(result.reason);
+        },
+      },
+    });
+  }
+
+  // How many items a day currently holds. The plan is already loaded client-side for this
+  // dialog, so this is a local read — no extra request to decide whether to warn.
+  function itemCountForDayIndex(idx: number): number {
+    const key = DAYS[idx]?.key;
+    const dp = plan?.days.find((d) => d.day === key);
+    return dp ? dp.meals.reduce((n, m) => n + m.items.length, 0) : 0;
+  }
+
+  // copyDay REPLACES its target days — mealplans.service.js drops every item on them before
+  // copying (prompt-85's finding). Undo exists, but a destructive action shouldn't rely on the
+  // dietitian spotting a toast afterwards, so anything that would actually lose meals gets an
+  // explicit confirm first. Days that are already empty lose nothing and are waved straight
+  // through, so the warning only ever appears when it means something.
+  function requestCopyDay() {
+    const willOverwrite = copyTargetDays
+      .filter((idx) => itemCountForDayIndex(idx) > 0)
+      .map((idx) => DAYS[idx]?.label ?? `day ${idx + 1}`);
+    if (willOverwrite.length > 0) {
+      setCopyOverwriteWarning({ labels: willOverwrite, targets: copyTargetDays });
+      return;
+    }
+    void handleCopyDay(copyTargetDays);
+  }
+
+  async function handleCopyDay(targets: number[]) {
+    if (!effectiveId || targets.length === 0) return;
     setCopying(true);
     try {
-      await copyPlanDay(effectiveId, { fromDay: activeDayIdx, toDays: copyTargetDays });
+      const before = detailPlan;
+      const after = await copyPlanDay(effectiveId, { fromDay: activeDayIdx, toDays: targets });
       qc.invalidateQueries({ queryKey: ["mealplan", effectiveId] });
       setCopyDayOpen(false);
+      setCopyOverwriteWarning(null);
       setCopyTargetDays([]);
+      // copyDay REPLACES the target days, so undo needs both halves: delete what it created and
+      // put back what it wiped. itemsDestroyedByDayCopy returns null if any wiped item can't be
+      // faithfully rebuilt, in which case no Undo is offered rather than a lossy one.
+      const restore = before ? itemsDestroyedByDayCopy(before, targets) : [];
+      const dayLabel = DAYS[activeDayIdx]?.label ?? "day";
+      const targetLabel = `${targets.length} day${targets.length === 1 ? "" : "s"}`;
+      if (before && restore) {
+        offerCopyUndo({
+          planId: effectiveId,
+          label: `Copied ${dayLabel} into ${targetLabel}`,
+          createdIds: createdItemIds(before, after),
+          restore,
+          expectedIds: allItemIds(after),
+        });
+      } else {
+        toast.success(`Copied ${dayLabel} into ${targetLabel}`);
+      }
     } finally {
       setCopying(false);
     }
@@ -329,13 +430,26 @@ function MealPlansPage() {
     if (!effectiveId || !slotAction || copyTargetDaysForSlot.length === 0) return;
     setCopyingSlot(true);
     try {
-      await copyMealSlot(effectiveId, {
+      const before = detailPlan;
+      const after = await copyMealSlot(effectiveId, {
         fromDay: activeDayIdx,
         slot: slotAction.slot,
         toDays: copyTargetDaysForSlot,
       });
       qc.invalidateQueries({ queryKey: ["mealplan", effectiveId] });
+      const slotLabel = SLOT_META[slotAction.slot as MealSlot]?.label ?? slotAction.slot;
+      const nDays = copyTargetDaysForSlot.length;
       closeSlotAction();
+      // Additive copy — undo is purely "remove what it created", nothing to restore.
+      if (before) {
+        offerCopyUndo({
+          planId: effectiveId,
+          label: `Copied ${slotLabel} into ${nDays} day${nDays === 1 ? "" : "s"}`,
+          createdIds: createdItemIds(before, after),
+          restore: [],
+          expectedIds: allItemIds(after),
+        });
+      }
     } finally {
       setCopyingSlot(false);
     }
@@ -437,11 +551,23 @@ function MealPlansPage() {
     // up that slot's own items — true no-op, no API call at all.
     if (fromSlot === toSlot) return;
     try {
-      await copySlotToSlot(effectiveId, { day: activeDayIdx, fromSlot, toSlot });
+      const before = detailPlan;
+      const after = await copySlotToSlot(effectiveId, { day: activeDayIdx, fromSlot, toSlot });
       qc.invalidateQueries({ queryKey: ["mealplan", effectiveId] });
       const fromLabel = SLOT_META[fromSlot as MealSlot]?.label ?? fromSlot;
       const toLabel = SLOT_META[toSlot as MealSlot]?.label ?? toSlot;
-      toast.success(`Copied ${fromLabel} into ${toLabel}`);
+      // Additive copy — undo just removes the appended items.
+      if (before) {
+        offerCopyUndo({
+          planId: effectiveId,
+          label: `Copied ${fromLabel} into ${toLabel}`,
+          createdIds: createdItemIds(before, after),
+          restore: [],
+          expectedIds: allItemIds(after),
+        });
+      } else {
+        toast.success(`Copied ${fromLabel} into ${toLabel}`);
+      }
     } catch {
       toast.error(`Couldn't copy into ${SLOT_META[toSlot as MealSlot]?.label ?? toSlot} — try again`);
     }
@@ -840,7 +966,16 @@ function MealPlansPage() {
                                   onCheckedChange={() => toggleCopyTarget(idx)}
                                   className="h-3.5 w-3.5"
                                 />
-                                {d.label}
+                                <span className="flex-1 text-left">{d.label}</span>
+                                {/* What this day currently holds (prompt-86) — surfaced here so
+                                    the overwrite is visible while choosing, not only in the
+                                    confirm that follows. */}
+                                {itemCountForDayIndex(idx) > 0 && (
+                                  <span className="text-[10px] text-amber-600">
+                                    {itemCountForDayIndex(idx)} item
+                                    {itemCountForDayIndex(idx) === 1 ? "" : "s"}
+                                  </span>
+                                )}
                               </button>
                             );
                           })}
@@ -849,7 +984,7 @@ function MealPlansPage() {
                           size="sm"
                           className="w-full h-7 text-xs"
                           disabled={copying || copyTargetDays.length === 0}
-                          onClick={handleCopyDay}
+                          onClick={requestCopyDay}
                         >
                           {copying
                             ? "Copying…"
@@ -1182,6 +1317,41 @@ function MealPlansPage() {
             ) : null}
           </DialogContent>
         </Dialog>
+
+        {/* Overwrite confirm (prompt-86). Same AlertDialog shape the app already uses for
+            destructive actions (meal-library's delete): question-form title, a description
+            saying exactly what is lost, Cancel + a rose destructive action. It names the days
+            rather than saying "some days", because which day is about to be erased is the whole
+            decision. */}
+        <AlertDialog
+          open={copyOverwriteWarning !== null}
+          onOpenChange={(o) => !o && setCopyOverwriteWarning(null)}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                Replace {copyOverwriteWarning?.labels.length === 1 ? "" : "meals on "}
+                {copyOverwriteWarning?.labels.join(", ")}?
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {copyOverwriteWarning?.labels.length === 1
+                  ? `${copyOverwriteWarning.labels[0]} already has meals. Copying ${DAYS[activeDayIdx]?.label} over it deletes everything currently on that day and replaces it with a copy.`
+                  : `These days already have meals. Copying ${DAYS[activeDayIdx]?.label} over them deletes everything currently on those days and replaces it with a copy.`}{" "}
+                You can undo this from the toast straight afterwards.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={copying}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-rose-600 text-white hover:bg-rose-700"
+                disabled={copying}
+                onClick={() => copyOverwriteWarning && void handleCopyDay(copyOverwriteWarning.targets)}
+              >
+                {copying ? "Copying…" : "Replace and copy"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         <Sheet open={microsOpen} onOpenChange={setMicrosOpen}>
           <SheetContent className="w-full sm:max-w-md overflow-y-auto">
