@@ -56,6 +56,7 @@ import {
   dayMacros,
   mealMacros,
   dayMicros,
+  mealMicros,
   type MealPlan,
   type DayKey,
   type MealSlot,
@@ -78,6 +79,8 @@ import { NewPlanDialog } from "@/components/new-plan-dialog";
 import { DuplicatePlanDialog } from "@/components/duplicate-plan-dialog";
 import { SaveAsTemplateDialog } from "@/components/save-as-template-dialog";
 import { PlanItemPicker } from "@/components/plan-item-picker";
+import { MicronutrientPanel, type MicronutrientRow } from "@/components/micronutrient-panel";
+import { fetchDailyValues } from "@/lib/foods-api";
 import { EditPlanItemDialog, type EditableItem } from "@/components/edit-plan-item-dialog";
 
 export const Route = createFileRoute("/meal-plans")({
@@ -122,6 +125,8 @@ function MealPlansPage() {
   const [copyTargetDays, setCopyTargetDays] = useState<number[]>([]);
   const [copying, setCopying] = useState(false);
   const [microsOpen, setMicrosOpen] = useState(false);
+  // null => the whole day; a meal id => that slot only (prompt-83).
+  const [microsSlotId, setMicrosSlotId] = useState<string | null>(null);
   const [slotAction, setSlotAction] = useState<{
     mealId: string;
     slot: string;
@@ -181,7 +186,37 @@ function MealPlansPage() {
 
   const totals = day ? dayMacros(day) : { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 };
   const targets = plan?.targets ?? { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 };
-  const microTotals = day ? dayMicros(day) : {};
+  // Static reference data — fetched once, never refetched. Served by the backend so the FDA
+  // table has no second copy in frontend source (prompt-83).
+  const { data: dvRef } = useQuery({
+    queryKey: ["foods", "daily-values"],
+    queryFn: fetchDailyValues,
+    staleTime: Infinity,
+  });
+
+  const microsSlot = microsSlotId ? day?.meals.find((m) => m.id === microsSlotId) ?? null : null;
+  // Day totals and a slot's totals come from the SAME per-item numbers: dayMicros is literally
+  // sumMicros over each slot's mealMicros (meal-plans-mock.ts), so "day == sum of its slots" is
+  // structural here, not a coincidence to be re-checked. No new calculation path (prompt-83).
+  const microTotals = microsSlot ? mealMicros(microsSlot) : day ? dayMicros(day) : {};
+
+  // Rows for the shared panel: the client's own DRI target drives the bar, the FDA Daily Value
+  // rides alongside as generic context. Nutrients nothing reported are dropped rather than
+  // shown as a measured zero.
+  const microRows: MicronutrientRow[] = DRI_FIELD_GROUPS.flatMap((g) => g.fields).flatMap((f) => {
+    const value = microTotals[f.key] ?? null;
+    if (value == null) return [];
+    const target = plan?.driTargets?.[f.key] ?? null;
+    const dvEntry = dvRef?.dailyValues?.[f.key];
+    return [{
+      nutrient: f.key,
+      label: f.label,
+      unit: f.unit,
+      value,
+      dri: target != null && target > 0 ? { target, pct: Math.round((value / target) * 100) } : null,
+      dv: dvEntry ? { pct: Math.round((value / dvEntry.dv) * 100), level: null } : null,
+    }];
+  });
 
   async function handleRemoveItem(itemId: string) {
     if (!effectiveId) return;
@@ -690,7 +725,10 @@ function MealPlansPage() {
                         variant="outline"
                         size="sm"
                         className="h-7 text-xs"
-                        onClick={() => setMicrosOpen(true)}
+                        onClick={() => {
+                          setMicrosSlotId(null);
+                          setMicrosOpen(true);
+                        }}
                       >
                         <Pill className="h-3.5 w-3.5" />
                         Micronutrients
@@ -905,6 +943,18 @@ function MealPlansPage() {
                                     >
                                       <Pencil className="h-3.5 w-3.5" />
                                       Edit time
+                                    </DropdownMenuItem>
+                                    {/* Same sheet the day-level button opens, scoped to this
+                                        slot (prompt-83) — added to the kebab this slot already
+                                        has rather than inventing a new affordance. */}
+                                    <DropdownMenuItem
+                                      onSelect={() => {
+                                        setMicrosSlotId(meal.id);
+                                        setMicrosOpen(true);
+                                      }}
+                                    >
+                                      <Pill className="h-3.5 w-3.5" />
+                                      Micronutrients
                                     </DropdownMenuItem>
                                   </DropdownMenuContent>
                                 </DropdownMenu>
@@ -1138,34 +1188,54 @@ function MealPlansPage() {
             <SheetHeader>
               <SheetTitle>
                 Micronutrients — {DAYS.find((d) => d.key === activeDay)?.label}
+                {microsSlot ? ` · ${microsSlot.title}` : ""}
               </SheetTitle>
             </SheetHeader>
             <div className="px-4 pb-6">
-              {!plan?.driTargets ? (
-                <p className="text-sm text-muted-foreground">
-                  Set client's age, sex, and activity level to see DRI targets.
+              {/* Day <-> slot switcher. The day total and each slot's total are the same
+                  numbers grouped differently, so this is a view toggle, not a refetch. */}
+              <div className="mb-3 flex flex-wrap gap-1.5">
+                <button
+                  onClick={() => setMicrosSlotId(null)}
+                  className={cn(
+                    "rounded-md border px-2 py-1 text-[11px] transition-colors",
+                    microsSlotId === null
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border bg-background hover:bg-muted",
+                  )}
+                >
+                  Whole day
+                </button>
+                {day?.meals.map((m) => (
+                  <button
+                    key={m.id}
+                    onClick={() => setMicrosSlotId(m.id)}
+                    className={cn(
+                      "rounded-md border px-2 py-1 text-[11px] transition-colors",
+                      microsSlotId === m.id
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-border bg-background hover:bg-muted",
+                    )}
+                  >
+                    {m.title}
+                  </button>
+                ))}
+              </div>
+
+              <MicronutrientPanel
+                rows={microRows}
+                caption={microsSlot ? `${microsSlot.title} · ${microsSlot.items.length} item${microsSlot.items.length === 1 ? "" : "s"}` : "whole day"}
+                emptyText={
+                  microsSlot
+                    ? "No item in this meal reports micronutrient data."
+                    : "No item in this day reports micronutrient data."
+                }
+              />
+              {!plan?.driTargets && (
+                <p className="mt-3 text-xs text-muted-foreground">
+                  Set the client's age, sex and activity level to see their personal DRI targets
+                  alongside these amounts.
                 </p>
-              ) : (
-                <div className="space-y-5">
-                  {DRI_FIELD_GROUPS.map((group) => (
-                    <div key={group.id} className="space-y-2.5">
-                      <h4 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                        {group.label}
-                      </h4>
-                      <div className="space-y-2.5">
-                        {group.fields.map((f) => (
-                          <MicroRow
-                            key={f.key}
-                            label={f.label}
-                            unit={f.unit}
-                            value={microTotals[f.key] ?? null}
-                            target={plan.driTargets?.[f.key] ?? null}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
               )}
             </div>
           </SheetContent>

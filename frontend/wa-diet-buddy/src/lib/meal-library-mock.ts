@@ -55,6 +55,16 @@ export interface Recipe {
   cookMin: number;
   servings: number;
   macros: RecipeMacros;
+  // Per-serving micronutrients with %DV and FDA High/Good Source level (prompt-82), computed by
+  // the server. Empty on a recipe whose ingredients report no micronutrient data at all.
+  micronutrients?: {
+    nutrient: string;
+    label: string;
+    unit: string;
+    value: number;
+    pct: number;
+    level: "high" | "good" | null;
+  }[];
   ingredients: Ingredient[];
   steps: string[];
   allergens: Allergen[];

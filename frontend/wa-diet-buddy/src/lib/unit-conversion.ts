@@ -77,16 +77,51 @@ const UNIT_TO_FOOD_FIELD: Partial<Record<string, keyof UnitWeightsLike>> = {
 // per-food measure's own label; resolveMeasure() in measure-options.ts always normalizes those
 // to unit="g" before they'd ever reach here, so an unrecognized string just falls through to
 // the flat constants exactly like `oz` already does.
-export function gramsPerUnitForFood(
+// A real USDA-measured portion of this food used as a gram weight for `unit` (prompt-80).
+// Mirrors portionOverride in backend/src/lib/calc/recipeMacros.js exactly — same labelToUnit
+// rule, same "must describe exactly one of that unit" leading-"1" restriction, same
+// skip-on-ambiguity. The two MUST agree: this side previews and labels what that side stores.
+//
+// Frontend portions arrive as {label, grams} (mapped from the API's {description, grams}), so
+// the description is `label` here; the content is identical.
+function portionOverride(portions: ServingSizeLike[] | undefined, unit: string): number | null {
+  if (!portions?.length) return null;
+  const matches = portions.filter(
+    (p) => p?.label && /^1\s/.test(p.label) && labelToUnit(p.label) === unit,
+  );
+  if (!matches.length) return null;
+  const grams = [...new Set(matches.map((p) => p.grams))];
+  return grams.length === 1 ? grams[0] : null;
+}
+
+// The food's own real gram weight for `unit`, or null when only the flat constant would apply.
+// Callers asking "is this a measured weight or a generic guess?" — the saved-row gram text
+// (prompt-75) and the amber Approximate indicator — must use this rather than re-deriving the
+// precedence, or they drift out of step with the conversion itself.
+export function realGramsPerUnit(
   commonServings: ServingSizeLike[] | undefined,
   unitWeights: UnitWeightsLike | undefined,
   unit: string,
-): number {
+  portions: ServingSizeLike[] | undefined,
+): number | null {
   const commonOverride = commonServingOverride(commonServings, unit);
   if (commonOverride != null) return commonOverride;
 
   const field = UNIT_TO_FOOD_FIELD[unit];
   const override = field ? unitWeights?.[field] : null;
   if (override != null) return override;
-  return UNIT_TO_GRAMS[unit] ?? 1;
+
+  return portionOverride(portions, unit);
+}
+
+export function gramsPerUnitForFood(
+  commonServings: ServingSizeLike[] | undefined,
+  unitWeights: UnitWeightsLike | undefined,
+  unit: string,
+  // Required (prompt-80), not optional: a call site that silently omitted it would quietly fall
+  // back to the flat constant and disagree with the backend about what a "cup" of this food
+  // weighs. Pass `undefined` explicitly when a surface genuinely has no portions data.
+  portions: ServingSizeLike[] | undefined,
+): number {
+  return realGramsPerUnit(commonServings, unitWeights, unit, portions) ?? (UNIT_TO_GRAMS[unit] ?? 1);
 }

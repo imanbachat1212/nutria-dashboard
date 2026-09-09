@@ -51,6 +51,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
+import { MicronutrientPanel } from "@/components/micronutrient-panel";
 import {
   CATEGORY_META,
   ALLERGEN_LABEL,
@@ -625,6 +626,19 @@ function RecipeDrawer({
                 </div>
               </Card>
 
+              <MicronutrientPanel
+                title="Micronutrients"
+                caption="per serving · % Daily Value"
+                showClaims
+                rows={(recipe.micronutrients ?? []).map((r) => ({
+                  nutrient: r.nutrient,
+                  label: r.label,
+                  unit: r.unit,
+                  value: r.value,
+                  dv: { pct: r.pct, level: r.level },
+                }))}
+              />
+
               {/* Tags */}
               <div className="space-y-2">
                 <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
@@ -713,6 +727,7 @@ function RecipeDrawer({
     </Sheet>
   );
 }
+
 
 function MacroStat({
   label,

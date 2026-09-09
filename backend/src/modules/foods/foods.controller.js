@@ -1,4 +1,5 @@
 import { asyncHandler } from "../../lib/asyncHandler.js";
+import { DAILY_VALUES, HIGH_MIN_PCT, GOOD_MIN_PCT } from "./lib/nutrientClaims.js";
 import * as foodsService from "./foods.service.js";
 
 export const create = asyncHandler(async (req, res) => {
@@ -82,4 +83,11 @@ export const usdaImported = asyncHandler(async (req, res) => {
     .filter((n) => Number.isInteger(n) && n > 0);
   const importedFdcIds = await foodsService.getImportedUsdaFdcIds(fdcIds);
   res.json({ data: { fdcIds: importedFdcIds } });
+});
+
+// The FDA Daily Values and the 21 CFR 101.54 thresholds, served rather than duplicated
+// (prompt-83). nutrientClaims.js remains the single definition of these numbers for foods,
+// recipes and now meal plans alike.
+export const dailyValues = asyncHandler(async (_req, res) => {
+  res.json({ data: { dailyValues: DAILY_VALUES, highMinPct: HIGH_MIN_PCT, goodMinPct: GOOD_MIN_PCT } });
 });

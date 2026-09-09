@@ -3,10 +3,16 @@ import {
   Select,
   SelectContent,
   SelectItem,
+  SelectGroup,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { measureOptionLabels, type RealMeasure } from "@/lib/measure-options";
+import {
+  measureOptionLabels,
+  measureOptionGroups,
+  type RealMeasure,
+} from "@/lib/measure-options";
 
 // One shared measure picker for Meal Library's ingredient picker and Meal Plan's item picker
 // (prompt-45) — dropdown options come from the selected food's real, food-specific portions
@@ -36,6 +42,7 @@ export function MeasureSelect({
   // this food doesn't list — e.g. a plain "tbsp" on a food that has real portions — is still
   // shown as what it actually is instead of silently reading "Grams (g)".
   const options = measureOptionLabels(realMeasures, option);
+  const groups = measureOptionGroups(realMeasures, option);
   // Kept as a guard for a genuinely empty/unset option; with the current unit now always in
   // `options`, a real selection can no longer fall through to "g".
   const selectValue = options.includes(option) ? option : "g";
@@ -59,11 +66,29 @@ export function MeasureSelect({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          {options.map((o) => (
-            <SelectItem key={o} value={o} className="max-w-72">
-              <span className="truncate">{o === "g" ? "Grams (g)" : o}</span>
-            </SelectItem>
-          ))}
+          {/* Grouped (prompt-84) so the food's own measured portions stay visually distinct from
+              the standard units now listed alongside them. A food with no portions yields a
+              single group, which renders without a heading exactly as it always did. */}
+          {groups.map((g, gi) =>
+            groups.length === 1 ? (
+              g.options.map((o) => (
+                <SelectItem key={o} value={o} className="max-w-72">
+                  <span className="truncate">{o === "g" ? "Grams (g)" : o}</span>
+                </SelectItem>
+              ))
+            ) : (
+              <SelectGroup key={g.label}>
+                <SelectLabel className={gi > 0 ? "mt-1 border-t pt-2" : undefined}>
+                  {g.label}
+                </SelectLabel>
+                {g.options.map((o) => (
+                  <SelectItem key={o} value={o} className="max-w-72">
+                    <span className="truncate">{o === "g" ? "Grams (g)" : o}</span>
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            ),
+          )}
         </SelectContent>
       </Select>
     </div>

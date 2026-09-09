@@ -135,7 +135,12 @@ export function EditPlanItemDialog({
                 const resolved = resolveMeasure(item.realMeasures, option, c);
                 const grams =
                   resolved.quantity *
-                  gramsPerUnitForFood(item.commonServings, item.unitWeights, resolved.unit);
+                  gramsPerUnitForFood(
+                    item.commonServings,
+                    item.unitWeights,
+                    resolved.unit,
+                    item.realMeasures,
+                  );
                 const eq = formatGramEquivalent(option, count, grams);
                 return eq ? (
                   <span className="text-xs text-muted-foreground tabular-nums shrink-0">{eq}</span>

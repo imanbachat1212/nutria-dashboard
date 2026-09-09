@@ -1,7 +1,8 @@
 import Meal from "./meal.model.js";
 import { ApiError } from "../../lib/ApiError.js";
 import { deleteImage } from "../../lib/storage.js";
-import { computeRecipeMacros } from "../../lib/calc/recipeMacros.js";
+import { computeRecipeMacros, MICRO_FIELDS, microTotalKey } from "../../lib/calc/recipeMacros.js";
+import { classifyPerServing } from "../foods/lib/nutrientClaims.js";
 
 // Recipes saved before the single-photo → photos[] migration still have a raw `photo` field
 // in Mongo (schema no longer declares it, but .lean() reads are unaffected by that — the field
@@ -12,6 +13,32 @@ function normalizePhotos(meal) {
   if (meal.photos?.length) return meal;
   if (meal.photo) return { ...meal, photos: [meal.photo] };
   return meal;
+}
+
+// Per-serving micronutrient panel for a recipe (prompt-82), computed on read rather than
+// stored. A recipe's micros are entirely a function of its ingredients and serving count, both
+// of which already live on the document — persisting a derived copy would just create something
+// that can go stale when computeRecipeMacros recomputes totals on the next save.
+//
+// The division by `servings` is the same one prompt-68 established for this recipe's macros:
+// Meal.totalX is the WHOLE recipe as prepared, and everything the dietitian sees is per serving.
+//
+// fiber is included alongside the 21 MICRO_FIELDS that have a Daily Value — it has one (28 g)
+// and recipes track it, just as `totalFiber` rather than as one of the DRI micro fields.
+// sodium is tracked but deliberately absent from DAILY_VALUES (see nutrientClaims.js: a
+// "high source of sodium" badge would read as a recommendation), so it simply never matches.
+function withMicronutrients(meal) {
+  if (!meal) return meal;
+  const servings = meal.servings || 1;
+  const perServing = { fiber: (meal.totalFiber ?? 0) / servings };
+  for (const field of MICRO_FIELDS) {
+    const total = meal[microTotalKey(field)];
+    // null means "no ingredient reported this nutrient" — dividing it would invent a measured
+    // zero, the exact null-vs-zero conflation prompt-73 removed elsewhere.
+    if (total == null) continue;
+    perServing[field] = total / servings;
+  }
+  return { ...meal, micronutrients: classifyPerServing(perServing) };
 }
 
 export async function createMeal(data, actor) {
@@ -44,14 +71,17 @@ export async function listMeals({ page, limit, search, category }) {
       // set populatePlan/getTemplateById use: no portions, no macros — nothing the drawer
       // doesn't render. Mongoose collapses every ingredient ref across the page into one
       // extra $in query, so this costs a single round trip regardless of page size.
+      // portions added (prompt-80): a food with no gramsPerX of its own can still have a real
+      // USDA "1 cup" / "1 tbsp" portion, which is now the next fallback in gramsPerUnitForFood
+      // — without it here the drawer would resolve these rows differently from the server.
       .populate(
         "ingredients.food",
-        "name gramsPerCup gramsPerTbsp gramsPerTsp gramsPerPiece gramsPerMl commonServings",
+        "name gramsPerCup gramsPerTbsp gramsPerTsp gramsPerPiece gramsPerMl commonServings portions",
       )
       .lean(),
     Meal.countDocuments(filter),
   ]);
-  return { meals: meals.map(normalizePhotos), total, page, limit };
+  return { meals: meals.map((m) => withMicronutrients(normalizePhotos(m))), total, page, limit };
 }
 
 export async function getMealById(id) {
@@ -66,7 +96,7 @@ export async function getMealById(id) {
     )
     .lean();
   if (!meal) throw new ApiError(404, "Meal not found");
-  return normalizePhotos(meal);
+  return withMicronutrients(normalizePhotos(meal));
 }
 
 // Recipe copy (prompt-77) — deliberately the same shape as duplicatePlan in
@@ -110,12 +140,13 @@ export async function duplicateMeal(id, { name } = {}, actor) {
   // renders this response directly, and an unpopulated ingredients.food would make the copy's
   // rows briefly lose the gram equivalents (prompt-75) that the source's rows show, until the
   // next list refetch. Same projection listMeals uses.
-  return Meal.findById(copy._id)
+  const populated = await Meal.findById(copy._id)
     .populate(
       "ingredients.food",
-      "name gramsPerCup gramsPerTbsp gramsPerTsp gramsPerPiece gramsPerMl commonServings",
+      "name gramsPerCup gramsPerTbsp gramsPerTsp gramsPerPiece gramsPerMl commonServings portions",
     )
     .lean();
+  return withMicronutrients(populated);
 }
 
 export async function updateMeal(id, data) {
@@ -125,7 +156,7 @@ export async function updateMeal(id, data) {
   }
   const meal = await Meal.findByIdAndUpdate(id, data, { new: true }).lean();
   if (!meal) throw new ApiError(404, "Meal not found");
-  return normalizePhotos(meal);
+  return withMicronutrients(normalizePhotos(meal));
 }
 
 export async function deleteMeal(id) {

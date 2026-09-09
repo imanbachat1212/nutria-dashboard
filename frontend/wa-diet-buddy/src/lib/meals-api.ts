@@ -7,6 +7,16 @@ import {
   type SavedItemFood,
 } from "./measure-options";
 
+// One row of the recipe micronutrient panel, exactly as the server computes it.
+export interface RecipeMicronutrient {
+  nutrient: string;
+  label: string;
+  unit: string;
+  value: number;
+  pct: number;
+  level: "high" | "good" | null;
+}
+
 export interface PhotoItem {
   url: string;
   key: string;
@@ -42,6 +52,10 @@ interface APIMeal {
     measureCount?: number | null;
   }[];
   steps: string[];
+  // Per-serving micronutrient panel (prompt-82) — computed server-side in meals.service.js so
+  // the FDA Daily Value table has exactly one home (nutrientClaims.js), shared with the Food
+  // Database's claim badges. Absent on any response predating that decorator.
+  micronutrients?: RecipeMicronutrient[];
   totalCalories: number;
   totalProtein: number;
   totalCarbs: number;
@@ -107,6 +121,7 @@ function toRecipe(m: APIMeal): Recipe {
     cookMin: m.cookTime || 0,
     servings: m.servings || 1,
     macros: perServing(m),
+    micronutrients: m.micronutrients ?? [],
     ingredients: (m.ingredients || []).map((i) => ({
       name: i.name,
       amount:

@@ -45,6 +45,16 @@ router.get(
   ctrl.stats
 );
 
+// FDA Daily Value reference table (prompt-83). Static reference data, not a food — exposed so
+// the Meal Plans micronutrient panel can show %DV alongside each client's personal DRI target
+// without a second copy of the table living in frontend source. Same "must come before /:id"
+// rule as the routes above.
+router.get(
+  "/daily-values",
+  requirePermission("foods.read"),
+  ctrl.dailyValues
+);
+
 router.get(
   "/usda-search",
   requirePermission("foods.read"),

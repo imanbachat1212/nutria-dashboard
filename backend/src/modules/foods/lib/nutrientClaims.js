@@ -95,6 +95,43 @@ export function classifyPct(pct) {
   return null;
 }
 
+// %DV + High/Good Source for an ALREADY-PER-SERVING nutrient map (prompt-82) — a recipe's
+// per-serving totals, where computeNutrientClaims below can't be used.
+//
+// What is shared with the food path, and what deliberately isn't:
+//   - SHARED: DAILY_VALUES, HIGH_MIN_PCT/GOOD_MIN_PCT and classifyPct — the FDA table and the
+//     threshold comparison. There is exactly one copy of those numbers in this codebase and
+//     both foods and recipes read it.
+//   - NOT shared: how a "serving" is arrived at. computeNutrientClaims derives it from
+//     pickServingGrams(food) — the food's first stored USDA portion — and scales per-100g
+//     values through it. A recipe has no gram portion; its serving is totalX / servings, an
+//     absolute amount that needs no scaling at all. That step is genuinely food-record-specific,
+//     which is why this takes the finished per-serving values instead of a document.
+//
+// Returns one row per claimable nutrient the caller supplied a value for, in DAILY_VALUES order,
+// each carrying enough to render a full panel: the value, its unit, %DV, and the claim level
+// (null below 10% DV — the regulation defines nothing there, so neither does this).
+//
+// vitaminA/vitaminD in IU rather than mcg are skipped by the caller, not here — this function
+// has no food record to read a source-unit tag from.
+export function classifyPerServing(perServingValues) {
+  const rows = [];
+  for (const [nutrient, { dv, unit, label }] of Object.entries(DAILY_VALUES)) {
+    const value = perServingValues?.[nutrient];
+    if (value == null) continue;
+    const pct = (value / dv) * 100;
+    rows.push({
+      nutrient,
+      label,
+      unit,
+      value: Math.round(value * 100) / 100,
+      pct: Math.round(pct),
+      level: classifyPct(pct),
+    });
+  }
+  return rows;
+}
+
 // food -> [{ nutrient, level, pct }] for every nutrient qualifying as High/Good Source.
 // Returns [] when the food has no usable serving basis or no qualifying nutrient.
 export function computeNutrientClaims(food) {

@@ -76,7 +76,10 @@ function selectionKey(type: "food" | "recipe", id: string) {
 // generic-unit resolution always runs on a value it already understands either way.
 function foodGrams(item: SelectedItem): number {
   const resolved = resolveMeasure(item.realMeasures, item.unit, item.amount);
-  return resolved.quantity * gramsPerUnitForFood(item.commonServings, item.unitWeights, resolved.unit);
+  return (
+    resolved.quantity *
+    gramsPerUnitForFood(item.commonServings, item.unitWeights, resolved.unit, item.realMeasures)
+  );
 }
 
 function scaleMacros(item: SelectedItem): ItemMacros {

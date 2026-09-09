@@ -3,7 +3,7 @@
 // Pure/no-React so both the live macro preview and the final submit mapping can call the exact
 // same resolution logic without depending on component state.
 
-import { commonServingOverride, gramsPerUnitForFood } from "./unit-conversion";
+import { commonServingOverride, gramsPerUnitForFood, realGramsPerUnit } from "./unit-conversion";
 
 export interface RealMeasure {
   label: string;
@@ -14,22 +14,60 @@ export interface RealMeasure {
 export const GENERIC_UNITS = ["g", "ml", "cup", "tbsp", "tsp", "oz", "piece"] as const;
 export type GenericUnit = (typeof GENERIC_UNITS)[number];
 
-// "g" is always a valid selection (exact manual entry, works for every food) whether or not
-// real measures exist — everything else is either the food's own real measures, or the generic
-// list, never both (prompt-45: "real portions first, generic list only when a food has none").
-// `currentUnit` (prompt-79) is the unit the item being edited is ACTUALLY stored in. It has to
-// be in the list or the dropdown cannot represent the item it is editing: a food that has real
-// portions offers only ["g", ...its portions], so an item stored as a plain "tbsp" — which 34 of
-// this database's 44 non-gram rows are — had no selectable option at all and silently rendered
-// as "Grams (g)". Appending it keeps the item's own unit selectable and truthfully displayed
-// until the dietitian deliberately picks something else.
+// The dropdown offers BOTH a food's own real measures AND the full standard unit list
+// (prompt-84), never one at the expense of the other.
+//
+// Before this, a food that had real USDA portions offered only ["g", ...those portions], which
+// silently removed ml/cup/tbsp/tsp/oz/piece from 823 of this database's 1,313 foods — every
+// single food with portions lost all six. The real portions are more accurate and stay first,
+// but they are not a superset: "1 cup"/"1 tablespoon" on olive oil says nothing about tsp, oz
+// or piece, and the dietitian still needs those.
+//
+// The two kinds resolve through genuinely different paths and are both legitimate, so a real
+// "1 tablespoon" is deliberately NOT treated as a duplicate of the generic "tbsp":
+//   - a real measure resolves in resolveMeasure() to an exact gram total (unit="g") carrying a
+//     measureLabel, and
+//   - a generic unit is stored as a count + unit and resolved later by gramsPerUnitForFood,
+//     whose precedence (prompt-80) is unchanged by this.
+// Only an EXACT string collision is deduplicated — a portion literally described as "cup" would
+// otherwise appear twice. No such portion exists in the data today; the guard is for the day one
+// does.
+//
+// `currentUnit` (prompt-79) is still honoured: whatever unit an item is actually STORED with is
+// always present, even if it is neither a real measure nor a standard unit, so the dropdown can
+// never fail to represent the item it is editing.
 export function measureOptionLabels(
   realMeasures: RealMeasure[] | undefined,
   currentUnit?: string | null,
 ): string[] {
-  const base = realMeasures?.length ? ["g", ...realMeasures.map((m) => m.label)] : [...GENERIC_UNITS];
-  if (currentUnit && !base.includes(currentUnit)) return [...base, currentUnit];
-  return base;
+  const merged = [
+    ...(realMeasures?.map((m) => m.label) ?? []),
+    ...GENERIC_UNITS,
+    ...(currentUnit ? [currentUnit] : []),
+  ];
+  return [...new Set(merged)];
+}
+
+// The same options, grouped for rendering, so a fuller list doesn't read as a jumble of the
+// food's own measures mixed in with the generic ones. Groups with no options are omitted, so a
+// food with no portions yields a single group and the UI looks exactly as it did before.
+export function measureOptionGroups(
+  realMeasures: RealMeasure[] | undefined,
+  currentUnit?: string | null,
+): { label: string; options: string[] }[] {
+  const real = [...new Set(realMeasures?.map((m) => m.label) ?? [])];
+  const realSet = new Set(real);
+  const standard = GENERIC_UNITS.filter((u) => !realSet.has(u));
+  // An item stored in something neither list covers (prompt-79's guarantee) rides with the
+  // standard units rather than being presented as one of this food's measured portions.
+  const extra =
+    currentUnit && !realSet.has(currentUnit) && !standard.includes(currentUnit as GenericUnit)
+      ? [currentUnit]
+      : [];
+  return [
+    { label: "This food's measures", options: real },
+    { label: "Standard units", options: [...standard, ...extra] },
+  ].filter((g) => g.options.length > 0);
 }
 
 // "1 date, pitted" + 3 -> "3 date, pitted"; most FNDDS/SR-Legacy descriptions start with "1 ",
@@ -175,6 +213,11 @@ function unitWeightFor(food: SavedItemFood, unit: keyof typeof DENSITY_UNIT_FIEL
 
 export interface SavedItemFood {
   commonServings?: { label: string; grams: number }[];
+  // The food's real USDA portions (prompt-80), used as a gram-weight source when it has no
+  // gramsPerX of its own. Typed in the RAW api shape ({description, grams}) because that is
+  // what every populate on these surfaces actually returns; it's normalised to the
+  // {label, grams} shape the resolver takes just below, at the one place it's read.
+  portions?: { description: string; grams: number }[];
   gramsPerCup?: number | null;
   gramsPerTbsp?: number | null;
   gramsPerTsp?: number | null;
@@ -218,29 +261,26 @@ export function formatSavedGenericUnitAmount(
   const count = item.quantity;
   if (typeof count !== "number" || !(count > 0)) return null;
 
-  // No real per-food weight for this unit -> the resolution below would be the flat constant.
-  if (isDensityUnit(unit)) {
-    if (!food) return null;
-    if (commonServingOverride(food.commonServings, unit) == null && unitWeightFor(food, unit) == null) {
-      return null;
-    }
-  }
+  const unitWeights = food
+    ? {
+        cup: food.gramsPerCup ?? null,
+        tbsp: food.gramsPerTbsp ?? null,
+        tsp: food.gramsPerTsp ?? null,
+        piece: food.gramsPerPiece ?? null,
+        ml: food.gramsPerMl ?? null,
+      }
+    : undefined;
 
-  const grams =
-    count *
-    gramsPerUnitForFood(
-      food?.commonServings,
-      food
-        ? {
-            cup: food.gramsPerCup ?? null,
-            tbsp: food.gramsPerTbsp ?? null,
-            tsp: food.gramsPerTsp ?? null,
-            piece: food.gramsPerPiece ?? null,
-            ml: food.gramsPerMl ?? null,
-          }
-        : undefined,
-      unit,
-    );
+  // A density unit needs a weight that genuinely belongs to THIS food. realGramsPerUnit
+  // (prompt-80) answers that in the same precedence order the conversion uses — commonServings,
+  // then gramsPerX, then a real USDA portion — and returns null when only the flat constant
+  // would apply, which is the case that must stay suppressed. Asking it, rather than re-deriving
+  // the precedence here, is what keeps this in step when that order changes again.
+  const portions = food?.portions?.map((p) => ({ label: p.description, grams: p.grams }));
+  const real = realGramsPerUnit(food?.commonServings, unitWeights, unit, portions);
+  if (isDensityUnit(unit) && real == null) return null;
+
+  const grams = count * (real ?? gramsPerUnitForFood(food?.commonServings, unitWeights, unit, portions));
 
   const equivalent = formatGramEquivalent(unit, count, grams);
   return equivalent ? `${count} ${unit} ${equivalent}` : null;

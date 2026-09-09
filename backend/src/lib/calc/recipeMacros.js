@@ -62,17 +62,51 @@ function commonServingOverride(food, unit) {
   return override;
 }
 
-// Resolves how many grams one `unit` of `food` weighs: a matching Common servings row wins
-// first, then the food's own stored gramsPerX override, then the flat UNIT_TO_GRAMS constant
-// when the food has neither (the common case today, since backfill hasn't run yet).
-export function gramsPerUnitForFood(food, unit) {
+// A real USDA-measured portion of this food used as a gram weight for `unit` (prompt-80) —
+// e.g. pistachios list "1 cup" = 123 g, where the flat constant would claim 240 g.
+//
+// Matching is deliberately conservative, and reuses labelToUnit above rather than inventing a
+// second free-text rule, so a portion description maps to a unit exactly the way a Common
+// servings label already does:
+//   - the description must name the unit as a whole word ("1 cup", "1 cup, firmly packed"), and
+//   - it must describe exactly ONE of that unit — enforced by the leading "1 ". A portion like
+//     "3 oz" or "0.5 tsp" states the weight of a different quantity, and dividing it out would
+//     be inferring a per-unit weight USDA never stated. 2757 of this dataset's 2866 portions
+//     start with "1 ", so the restriction costs very little.
+//   - if two portions map to the same unit with DIFFERENT weights (e.g. "1 cup, sliced" vs
+//     "1 cup, chopped"), there is no non-arbitrary way to choose, so this returns null and the
+//     flat constant applies. Guessing which preparation the dietitian meant is worse than
+//     admitting the food has no single answer.
+function portionOverride(food, unit) {
+  if (!food?.portions?.length) return null;
+  const matches = food.portions.filter(
+    (p) => p?.description && /^1\s/.test(p.description) && labelToUnit(p.description) === unit
+  );
+  if (!matches.length) return null;
+  const grams = [...new Set(matches.map((p) => p.grams))];
+  return grams.length === 1 ? grams[0] : null;
+}
+
+// The food's own real gram weight for `unit`, or null when nothing food-specific is known and
+// only the flat constant would apply. Split out (prompt-80) so callers that need to know
+// "is this a real measured weight or a generic guess?" ask the same question, in the same
+// precedence order, as the conversion itself.
+export function realGramsPerUnit(food, unit) {
   const commonOverride = commonServingOverride(food, unit);
   if (commonOverride != null) return commonOverride;
 
   const fieldName = UNIT_TO_FOOD_FIELD[unit];
   const override = fieldName ? food?.[fieldName] : null;
   if (override != null) return override;
-  return UNIT_TO_GRAMS[unit] ?? 1;
+
+  return portionOverride(food, unit);
+}
+
+// Resolves how many grams one `unit` of `food` weighs: a matching Common servings row wins
+// first, then the food's own stored gramsPerX override, then a real USDA portion of this food
+// (prompt-80), then the flat UNIT_TO_GRAMS constant when the food has none of those.
+export function gramsPerUnitForFood(food, unit) {
+  return realGramsPerUnit(food, unit) ?? (UNIT_TO_GRAMS[unit] ?? 1);
 }
 
 // The 22 Food-model micronutrient fields that have a matching Client.driTargets field (see

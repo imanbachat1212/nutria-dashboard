@@ -12,7 +12,7 @@ import {
   type PlanStatus,
   type Micros,
 } from "./meal-plans-mock";
-import { commonServingOverride } from "./unit-conversion";
+import { realGramsPerUnit } from "./unit-conversion";
 import { formatSavedMeasureAmount, formatSavedGenericUnitAmount } from "./measure-options";
 
 // ── API types ──
@@ -96,8 +96,24 @@ function isApproximateItem(i: APIPlanItem): boolean {
   if (!fieldName) return false;
   const food = i.food && typeof i.food === "object" ? i.food : null;
   if (!food) return true;
-  if (commonServingOverride(food.commonServings, i.unit) != null) return false;
-  return food[fieldName] == null;
+  // realGramsPerUnit (prompt-80) is the single answer to "does this food have a weight of its
+  // own for this unit?" — including a real USDA portion, which is a measured weight and so must
+  // NOT be flagged approximate. Asking it keeps this indicator in step with the conversion and
+  // with the gram text on the same row; re-deriving the precedence here is what let them drift.
+  return (
+    realGramsPerUnit(
+      food.commonServings,
+      {
+        cup: food.gramsPerCup ?? null,
+        tbsp: food.gramsPerTbsp ?? null,
+        tsp: food.gramsPerTsp ?? null,
+        piece: food.gramsPerPiece ?? null,
+        ml: food.gramsPerMl ?? null,
+      },
+      i.unit,
+      food.portions?.map((p) => ({ label: p.description, grams: p.grams })),
+    ) == null
+  );
 }
 
 interface APIPlan {

@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createMeal, updateMeal, getMeal, type PhotoItem } from "@/lib/meals-api";
 import { fetchFoods } from "@/lib/foods-api";
 import type { UnitWeights, ServingSize } from "@/lib/food-database-mock";
-import { commonServingOverride } from "@/lib/unit-conversion";
+import { gramsPerUnitForFood, realGramsPerUnit } from "@/lib/unit-conversion";
 import { resolveMeasure, pickInitialMeasureSelection, formatGramEquivalent } from "@/lib/measure-options";
 import { MeasureSelect } from "@/components/measure-select";
 import { uploadMedia } from "@/lib/api";
@@ -68,24 +68,6 @@ import {
 
 const MAX_PHOTOS = 6;
 
-// `unit` is now a broader string than just these 7 keys — it can also be a real per-food
-// measure's own label (e.g. "1 pitted date, pitted"), which resolveMeasure() below always
-// normalizes to unit="g" before it ever reaches this map, so indexing with an unrecognized
-// string here just falls through to the flat constants exactly as it always has for `oz`.
-const UNIT_TO_GRAMS: Record<string, number> = {
-  g: 1,
-  ml: 1,
-  cup: 240,
-  tbsp: 15,
-  tsp: 5,
-  // Weight ounce, not fluid ounce — confirmed with the client this app's "oz" always means
-  // mass, so it never varies by food, same tier as g. 28.3495 is the exact constant (the
-  // previous 28.35 was just a rounded version of the same weight-oz value, not the wrong
-  // fluid-oz constant).
-  oz: 28.3495,
-  piece: 50,
-};
-
 // cup/tbsp/tsp/piece/ml vary by food density (1 cup of oats != 1 cup of spinach, 1 ml of
 // honey != 1 ml of skim milk) — only g/oz are always exact regardless of which food.
 const UNIT_TO_FOOD_FIELD: Partial<Record<string, keyof UnitWeights>> = {
@@ -96,33 +78,28 @@ const UNIT_TO_FOOD_FIELD: Partial<Record<string, keyof UnitWeights>> = {
   ml: "ml",
 };
 
-// Mirrors gramsPerUnitForFood in backend/src/lib/calc/recipeMacros.js — this dialog's macro
-// preview is only an estimate shown while editing (the backend recomputes the authoritative
-// totals from scratch on save), but it should still resolve unit weights the same way so the
-// preview doesn't drift from what actually gets saved. Always called with resolveMeasure()'s
-// OUTPUT unit (see liveMacros below), never a raw real-measure label directly.
-function gramsPerUnitForFood(
-  commonServings: ServingSize[] | undefined,
-  unitWeights: UnitWeights | undefined,
-  unit: string,
-): number {
-  const commonOverride = commonServingOverride(commonServings, unit);
-  if (commonOverride != null) return commonOverride;
-
-  const field = UNIT_TO_FOOD_FIELD[unit];
-  const override = field ? unitWeights?.[field] : null;
-  if (override != null) return override;
-  return UNIT_TO_GRAMS[unit] ?? 1;
-}
+// This dialog used to keep its own copy of gramsPerUnitForFood. It is now the shared one from
+// lib/unit-conversion.ts (prompt-80): that function grew a real-USDA-portion fallback which must
+// match backend/src/lib/calc/recipeMacros.js exactly, and a third hand-maintained copy of a
+// precedence chain that has to agree across three files is a drift waiting to happen. The
+// preview here is still only an estimate — the backend recomputes the authoritative totals on
+// save — but it now provably resolves units the same way that recompute will.
 
 // g/oz are always exact regardless of which food, so they never need the indicator — only
 // cup/tbsp/tsp/piece/ml vary by food density and can silently fall back to a flat guess. A real
 // per-food measure label (see realMeasures on IngredientDraft below) is never approximate either
 // — it isn't one of UNIT_TO_FOOD_FIELD's keys, so this already returns false for one unchanged.
-function isApproximateUnit(unitWeights: UnitWeights | undefined, unit: string): boolean {
+// A food whose weight now comes from one of its own USDA portions (prompt-80) is a REAL measured
+// weight, not a flat guess, so realGramsPerUnit — not the gramsPerX field alone — decides this.
+function isApproximateUnit(
+  commonServings: ServingSize[] | undefined,
+  unitWeights: UnitWeights | undefined,
+  unit: string,
+  portions: ServingSize[] | undefined,
+): boolean {
   const field = UNIT_TO_FOOD_FIELD[unit];
   if (!field) return false;
-  return (unitWeights?.[field] ?? null) == null;
+  return realGramsPerUnit(commonServings, unitWeights, unit, portions) == null;
 }
 
 interface IngredientMacros {
@@ -171,7 +148,10 @@ interface IngredientDraft {
 function ingredientGrams(ing: IngredientDraft): number {
   const qty = typeof ing.quantity === "number" ? ing.quantity : 0;
   const resolved = resolveMeasure(ing.realMeasures, ing.unit, qty);
-  return resolved.quantity * gramsPerUnitForFood(ing.commonServings, ing.unitWeights, resolved.unit);
+  return (
+    resolved.quantity *
+    gramsPerUnitForFood(ing.commonServings, ing.unitWeights, resolved.unit, ing.realMeasures)
+  );
 }
 
 // One ingredient's contribution at the amount actually entered for it (prompt-78) — the same
@@ -324,8 +304,18 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
     setNotes(editData.notes || "");
   }, [open, isEdit, editData]);
 
+  // Rows that will actually be SAVED — a row with no foodId has no food to reference, so it
+  // can't be persisted as an ingredient. This gates submission and must keep that meaning.
   const validIngredients = ingredients.filter(
     (i) => i.foodId && i.name.trim() && typeof i.quantity === "number" && i.quantity > 0,
+  );
+  // Rows the dietitian has actually FILLED IN, matched or not (prompt-81). The "n/n matched"
+  // ratio has to be against this: it was previously counted against validIngredients, which
+  // already excludes unmatched rows, so an unmatched ingredient was left out of its own
+  // denominator and the ratio read a reassuring "5/5 matched" while one row silently
+  // contributed nothing. A ratio that can never report a problem is worse than no ratio.
+  const filledIngredients = ingredients.filter(
+    (i) => i.name.trim() && typeof i.quantity === "number" && i.quantity > 0,
   );
   const validSteps = steps.filter((s) => s.trim());
 
@@ -363,9 +353,9 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
         fiber: Math.round(fiber / s),
       },
       matched,
-      count: validIngredients.length,
+      count: filledIngredients.length,
     };
-  }, [validIngredients, servings]);
+  }, [validIngredients, filledIngredients, servings]);
 
   const canAdvance = useMemo(() => {
     if (step === 1) return name.trim().length > 1;
@@ -702,7 +692,7 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                             </span>
                           ) : null;
                         })()}
-                        {isApproximateUnit(ing.unitWeights, ing.unit) && (
+                        {isApproximateUnit(ing.commonServings, ing.unitWeights, ing.unit, ing.realMeasures) && (
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
@@ -731,11 +721,33 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                           — a small grey figure per row can't be mistaken for the headline. */}
                       {(() => {
                         const m = ingredientMacros(ing);
-                        return m && m.kcal > 0 ? (
-                          <p className="pl-8 text-[11px] text-muted-foreground tabular-nums">
-                            {formatIngredientMacros(m)}
-                          </p>
-                        ) : null;
+                        // Gate on "is there an amount to scale?", NOT on "is the result > 0"
+                        // (prompt-81). Salt, water and most spices are genuinely 0 kcal, and the
+                        // old `m.kcal > 0` test hid their line entirely — indistinguishable from
+                        // the unmatched-food gap below, and wrong: "0 kcal · P0 C0 F0" is a true
+                        // and useful statement about a matched ingredient.
+                        if (m && ingredientGrams(ing) > 0) {
+                          return (
+                            <p className="pl-8 text-[11px] text-muted-foreground tabular-nums">
+                              {formatIngredientMacros(m)}
+                            </p>
+                          );
+                        }
+                        // No macro line means this row has no food behind it — its text was
+                        // typed but never matched to one in the library (prompt-81). Say so.
+                        // The blank space alone read as "still loading", and the row's only
+                        // other signal is the absence of a subtle green tint, which is easy to
+                        // miss. This ingredient contributes 0 to every total until it's matched.
+                        if (!ing.per100g && ing.name.trim()) {
+                          return (
+                            <p className="pl-8 flex items-center gap-1 text-[11px] text-amber-600">
+                              <AlertTriangle className="h-3 w-3 shrink-0" />
+                              Not matched to a food in your library — adds nothing to this recipe.
+                              Pick a suggestion from the search box.
+                            </p>
+                          );
+                        }
+                        return null;
                       })()}
                       </div>
                     ))}

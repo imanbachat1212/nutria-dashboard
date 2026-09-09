@@ -507,3 +507,23 @@ export interface BulkDeleteResult {
 export async function bulkDeleteFoods(ids: string[]): Promise<BulkDeleteResult> {
   return api.post<BulkDeleteResult>("/api/foods/bulk-delete", { ids });
 }
+
+
+// The FDA Daily Value table, served by the backend (prompt-83) rather than duplicated here —
+// nutrientClaims.js stays the single definition of these numbers for foods, recipes and plans.
+// Static reference data: fetch it once and never refetch.
+export interface DailyValueEntry {
+  dv: number;
+  unit: string;
+  label: string;
+}
+
+export interface DailyValuesResponse {
+  dailyValues: Record<string, DailyValueEntry>;
+  highMinPct: number;
+  goodMinPct: number;
+}
+
+export async function fetchDailyValues(): Promise<DailyValuesResponse> {
+  return api.get<DailyValuesResponse>("/api/foods/daily-values");
+}
