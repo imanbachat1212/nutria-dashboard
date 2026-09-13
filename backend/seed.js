@@ -21,6 +21,12 @@ const PERMISSION_KEYS = [
   "mealplans.create", "mealplans.read", "mealplans.update", "mealplans.delete",
   "mealplantemplates.create", "mealplantemplates.read", "mealplantemplates.update", "mealplantemplates.delete",
   "journal.create", "journal.read", "journal.update", "journal.delete",
+  // Machine-facing (prompt-91): gates POST /api/webhooks/whatsapp/journal only. Held by the
+  // scoped INTAKE_API_KEY, which gets it from middleware/auth.js rather than from a Role — so
+  // the n8n flow works whether or not this list has been re-seeded. Listed here so the
+  // permission registry stays complete and a human role can be granted it if that's ever
+  // wanted; until `npm run seed` runs again, no Role actually holds it.
+  "journal.intake",
   "appointments.create", "appointments.read", "appointments.update", "appointments.delete",
   "leads.create", "leads.read", "leads.update", "leads.delete",
   "intake.create", "intake.read", "intake.update", "intake.delete",

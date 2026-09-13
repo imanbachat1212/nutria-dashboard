@@ -33,6 +33,10 @@ export interface JournalEntry {
   source:          JournalSource;
   date:            string;        // ISO — maps to mock's receivedAt
   rawMessage:      string;
+  // Meal photo on a WhatsApp-sourced entry (prompt-91). null for dashboard entries, which
+  // have never had one. The backend has stored this since the journal model was written; it
+  // simply had no producer until the WhatsApp intake endpoint existed, so nothing read it.
+  photo:           { url: string; width?: number; height?: number } | null;
   items:           JournalItem[];
   totals:          { kcal: number; protein: number; carbs: number; fat: number };
   confidence:      JournalConfidence;
@@ -51,6 +55,7 @@ interface APIEntry {
   mealSlot:    string | null;
   source:      string;
   rawMessage?: string;
+  photo?:      { url: string; key: string; width?: number; height?: number } | null;
   items:       {
     food?:   string | null;
     label:   string;
@@ -91,6 +96,7 @@ function toEntry(raw: APIEntry): JournalEntry {
     source:         (raw.source as JournalSource) || "dashboard",
     date:           raw.date,
     rawMessage:     raw.rawMessage || "",
+    photo:          raw.photo?.url ? { url: raw.photo.url, width: raw.photo.width, height: raw.photo.height } : null,
     items:          (raw.items || []).map((i) => ({
       food:   i.food || null,
       label:  i.label,

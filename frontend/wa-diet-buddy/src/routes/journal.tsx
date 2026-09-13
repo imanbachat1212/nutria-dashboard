@@ -455,11 +455,24 @@ function LogRow({
             </span>
           </div>
 
-          {log.rawMessage && (
-            <p className="mt-1.5 line-clamp-1 text-sm text-muted-foreground italic">
-              "{log.rawMessage}"
-            </p>
-          )}
+          <div className="mt-1.5 flex items-start gap-2">
+            {/* Photo thumbnail (prompt-91) — this page's own description promises "spot-check
+                text and photo WhatsApp meal logs", and a photo log is not reviewable without
+                the photo. Small here, full size in the detail sheet. */}
+            {log.photo && (
+              <img
+                src={log.photo.url}
+                alt=""
+                loading="lazy"
+                className="h-10 w-10 shrink-0 rounded-md border object-cover"
+              />
+            )}
+            {log.rawMessage && (
+              <p className="line-clamp-1 text-sm text-muted-foreground italic">
+                "{log.rawMessage}"
+              </p>
+            )}
+          </div>
 
           {log.items.length > 0 && (
             <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
@@ -649,6 +662,16 @@ function LogDetail({
         <ConfidencePill c={log.confidence} />
         <StatusPill status={log.status} />
       </div>
+
+      {log.photo && (
+        <a href={log.photo.url} target="_blank" rel="noreferrer" className="mt-4 block">
+          <img
+            src={log.photo.url}
+            alt="Meal photo sent by the client"
+            className="max-h-72 w-full rounded-lg border object-contain"
+          />
+        </a>
+      )}
 
       {log.rawMessage && (
         <Card className="mt-4 bg-muted/40 p-3">

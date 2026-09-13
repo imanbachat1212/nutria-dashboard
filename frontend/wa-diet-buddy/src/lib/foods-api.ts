@@ -248,7 +248,12 @@ export function toMicronutrients(f: APIMicronutrients): Micronutrients {
   };
 }
 
-function toFoodItem(f: APIFood): FoodItem {
+// Exported (prompt-89) so the USDA import response — which the backend builds with the very
+// same toPublicFood() the list endpoint uses — can be mapped into a FoodItem without a second
+// mapper. Recipe ingredient search relies on that: a freshly imported food has to arrive in
+// exactly the shape a library search result would have, or the ingredient it fills in would
+// differ depending on how the food was found.
+export function toFoodItem(f: APIFood): FoodItem {
   return {
     id: f._id,
     name: f.name,

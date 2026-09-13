@@ -9,7 +9,12 @@ const required = (key) => {
 export const env = {
   MONGO_URI: required("MONGO_URI"),
   JWT_SECRET: required("JWT_SECRET"),
+  // Unrestricted service key (permissions ["*"]) — kept as-is for existing internal tooling.
   SERVICE_API_KEY: required("SERVICE_API_KEY"),
+  // Scoped service key for the WhatsApp journal intake (prompt-91). Optional: leave it unset
+  // and the intake endpoint simply has no key that can reach it. Never give this one to
+  // anything but the n8n flow — see SERVICE_KEYS in middleware/auth.js for its exact scope.
+  INTAKE_API_KEY: process.env.INTAKE_API_KEY || "",
   USDA_API_KEY: process.env.USDA_API_KEY || "",
   R2_ACCOUNT_ID: process.env.R2_ACCOUNT_ID || "",
   R2_ACCESS_KEY_ID: process.env.R2_ACCESS_KEY_ID || "",

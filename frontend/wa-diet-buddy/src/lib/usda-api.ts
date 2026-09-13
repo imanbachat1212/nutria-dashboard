@@ -1,5 +1,6 @@
 import { api } from "./api";
-import type { Micronutrients } from "./food-database-mock";
+import { toFoodItem, type APIFood } from "./foods-api";
+import type { FoodItem, Micronutrients } from "./food-database-mock";
 
 // Ephemeral USDA FoodData Central result — no _id, not a real Food document until imported.
 // fdcId is the only stable identifier available for these.
@@ -68,8 +69,18 @@ export async function fetchUsdaFoodDetails(fdcId: number): Promise<UsdaFoodDetai
   return api.get<UsdaFoodDetails>(`/api/foods/usda-details/${fdcId}`);
 }
 
-export async function importUsdaFood(fdcId: number): Promise<{ name: string }> {
-  return api.post<{ name: string }>("/api/foods/usda-import", { fdcId });
+// Idempotent by fdcId: foods.service.js's importUsdaFood does `Food.findOne({ fdcId })` first
+// and returns the existing document untouched (201 vs 200 is the only difference), so calling
+// this for a food already in the library can never create a duplicate.
+//
+// Returns the whole created/existing Food, not just its name (prompt-89) — the response has
+// always carried it (the controller sends toPublicFood(), the same builder the list endpoint
+// uses), but the type stopped at `name` because Food Database only ever needed that for a
+// toast. Recipe ingredient search needs the id, macros, portions and unit weights to fill in
+// an ingredient, so the payload is now mapped through toFoodItem exactly as a search result is.
+export async function importUsdaFood(fdcId: number): Promise<FoodItem> {
+  const food = await api.post<APIFood>("/api/foods/usda-import", { fdcId });
+  return toFoodItem(food);
 }
 
 // Bulk existence check — one request for a whole page of search results instead of an

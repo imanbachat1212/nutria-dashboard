@@ -2,6 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createMeal, updateMeal, getMeal, type PhotoItem } from "@/lib/meals-api";
 import { fetchFoods } from "@/lib/foods-api";
+import {
+  searchUsda,
+  importUsdaFood,
+  fetchImportedUsdaFdcIds,
+  USDA_DATA_TYPES,
+  type UsdaDataType,
+  type UsdaSearchResult,
+} from "@/lib/usda-api";
+import { USDA_DATA_TYPE_LABEL } from "@/lib/food-database-mock";
+import { toast } from "sonner";
 import type { UnitWeights, ServingSize } from "@/lib/food-database-mock";
 import { gramsPerUnitForFood, realGramsPerUnit } from "@/lib/unit-conversion";
 import { resolveMeasure, pickInitialMeasureSelection, formatGramEquivalent } from "@/lib/measure-options";
@@ -601,8 +611,8 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                     <div>
                       <div className="text-sm font-semibold">Ingredients</div>
                       <div className="text-xs text-muted-foreground">
-                        For {servings} serving{servings > 1 ? "s" : ""}. Search from your food
-                        database.
+                        For {servings} serving{servings > 1 ? "s" : ""}. Search your library and
+                        USDA FoodData Central — picking a USDA result adds it to your library.
                       </div>
                     </div>
                     <Button
@@ -1230,6 +1240,26 @@ interface FoodSearchResult {
   realMeasures?: ServingSize[];
 }
 
+// Ingredient search covers the library AND live USDA FoodData Central (prompt-89), so one
+// keyboard-navigable list holds two kinds of row that behave differently when picked:
+//   library — already a Food document; picking it fills the ingredient in immediately, exactly
+//             as this dropdown has always worked.
+//   usda    — an ephemeral FDC search hit with no Food document, no portions and no id.
+//             Picking it imports the food FIRST (foods.service.js's importUsdaFood, the same
+//             call Food Database's Add button makes) and fills the ingredient from the created
+//             document — never from the search hit, which carries none of the portion/unit-weight
+//             data an ingredient needs.
+type SearchOption =
+  | { kind: "library"; key: string; food: FoodSearchResult }
+  | { kind: "usda"; key: string; hit: UsdaSearchResult };
+
+// Deliberately small — this is a dropdown, not Food Database's 200-per-page browser. The query
+// key below is namespaced with "ingredient" for that reason: Food Database caches its USDA
+// searches under ["foods","usda-search", q, page, types] with no limit in the key, so sharing
+// that key at a different limit would let a 10-result dropdown response be served to its
+// paginated 200-result list.
+const USDA_DROPDOWN_LIMIT = 10;
+
 function FoodSearchInput({
   value,
   foodId,
@@ -1248,8 +1278,16 @@ function FoodSearchInput({
   ) => void;
   onChange: (val: string) => void;
 }) {
+  const qc = useQueryClient();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<FoodSearchResult[]>([]);
+  // Drives the live USDA query. Set by the SAME debounce timer as the library search below, so
+  // typing an ingredient name fires one library request and one FDC request, not one per
+  // keystroke (prompt-62/63's latency work — the safeguard is the debounce plus React Query's
+  // cache, since neither USDA route carries server-side rate limiting).
+  const [debounced, setDebounced] = useState("");
+  const [dataTypeFilter, setDataTypeFilter] = useState<Set<UsdaDataType>>(new Set());
+  const [importingFdcId, setImportingFdcId] = useState<number | null>(null);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   // Keyboard-navigation highlight — this dropdown is a hand-rolled div list (not cmdk), so
@@ -1258,13 +1296,6 @@ function FoodSearchInput({
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const selectingRef = useRef(false);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
-
-  // A fresh result set (new search, or the list closing) invalidates whatever was highlighted
-  // before — start from "nothing highlighted" rather than carrying over a stale index that may
-  // now point at an unrelated row.
-  useEffect(() => {
-    setActiveIndex(-1);
-  }, [results]);
 
   useEffect(() => {
     if (activeIndex < 0) return;
@@ -1307,13 +1338,78 @@ function FoodSearchInput({
     setQuery(val);
     setOpen(true);
     clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => doSearch(val), 300);
+    timerRef.current = setTimeout(() => {
+      doSearch(val);
+      setDebounced(val.trim());
+    }, 300);
   };
 
-  const pick = (r: FoodSearchResult) => {
-    selectingRef.current = true;
-    onSelect(r.id, r.name, r.macros, r.unitWeights, r.commonServings, r.realMeasures);
-    setQuery(r.name);
+  // ── Live USDA FoodData Central ──────────────────────────────────────────────────────────────
+  // Same endpoints, same params and the same `enabled` gate as Food Database's Search USDA tab;
+  // only the page size and the query-key namespace differ (see USDA_DROPDOWN_LIMIT).
+  const dataTypesKey = [...dataTypeFilter].sort().join(",");
+  const usdaEnabled = debounced.length > 1;
+  const { data: usdaData, isFetching: usdaFetching } = useQuery({
+    queryKey: ["foods", "usda-search", "ingredient", debounced, dataTypesKey],
+    queryFn: () =>
+      searchUsda(debounced, {
+        limit: USDA_DROPDOWN_LIMIT,
+        dataTypes: dataTypeFilter.size > 0 ? [...dataTypeFilter] : undefined,
+      }),
+    enabled: usdaEnabled,
+  });
+
+  // Anything already imported is dropped from the USDA section — it's already in the library
+  // section above, from its own Food document. Same bulk existence check Food Database uses for
+  // its "Added" state: one request per result set, never one per row.
+  const usdaResults = useMemo(() => usdaData?.results ?? [], [usdaData]);
+  const resultFdcIdsKey = usdaResults.map((r) => r.fdcId).join(",");
+  const { data: importedFdcIds } = useQuery({
+    queryKey: ["foods", "usda-imported", resultFdcIdsKey],
+    queryFn: () => fetchImportedUsdaFdcIds(usdaResults.map((r) => r.fdcId)),
+    enabled: usdaResults.length > 0,
+  });
+  const importedSet = useMemo(() => new Set(importedFdcIds ?? []), [importedFdcIds]);
+  // The imported check is a SECOND request, keyed on the fdcIds the search just returned, so
+  // there is a window where the hits are known but which of them are already in the library
+  // isn't. Rendering during that window showed a food twice — once from the library section,
+  // once from USDA — until the check landed a moment later and it vanished. Confirmed live on
+  // "Pistachio nuts, unsalted" (fdcId 2707530, already imported).
+  //
+  // So the USDA section waits for the answer instead of guessing. Food Database can afford the
+  // opposite trade (it renders rows immediately and flips a button to "Added"), because there a
+  // stale row is a button label; here it's a duplicate entry in a picker the dietitian is about
+  // to choose from. The check is one indexed local query — no FDC round trip — so the wait is
+  // short next to the search that precedes it.
+  const importedKnown = usdaResults.length === 0 || importedFdcIds !== undefined;
+  // Memoized, not a bare .filter(): `options` below feeds the effect that resets the keyboard
+  // highlight, so a fresh array identity on every render would clear the highlight mid-keypress.
+  const usdaHits = useMemo(
+    () => (importedKnown ? usdaResults.filter((r) => !importedSet.has(r.fdcId)) : []),
+    [usdaResults, importedSet, importedKnown],
+  );
+
+  // One flat list so ArrowDown/ArrowUp/Enter keep working across both sections — the rendering
+  // below groups it back into headed sections, but navigation never sees the split.
+  const options: SearchOption[] = useMemo(
+    () => [
+      ...results.map((f) => ({ kind: "library" as const, key: `lib:${f.id}`, food: f })),
+      ...usdaHits.map((h) => ({ kind: "usda" as const, key: `usda:${h.fdcId}`, hit: h })),
+    ],
+    [results, usdaHits],
+  );
+
+  // A fresh result set (new search, or the list closing) invalidates whatever was highlighted
+  // before — start from "nothing highlighted" rather than carrying over a stale index that may
+  // now point at an unrelated row. Keyed on the merged list, so USDA results arriving after the
+  // library's (two independent requests) also reset it rather than leaving the highlight on a
+  // row that has just shifted position.
+  useEffect(() => {
+    setActiveIndex(-1);
+  }, [options]);
+
+  const finishPick = (name: string) => {
+    setQuery(name);
     setOpen(false);
     setResults([]);
     setTimeout(() => {
@@ -1321,23 +1417,66 @@ function FoodSearchInput({
     }, 100);
   };
 
-  const showResults = open && (results.length > 0 || (query.length >= 2 && !loading));
+  const pickLibrary = (r: FoodSearchResult) => {
+    selectingRef.current = true;
+    onSelect(r.id, r.name, r.macros, r.unitWeights, r.commonServings, r.realMeasures);
+    finishPick(r.name);
+  };
+
+  // Picking a live USDA hit imports it first. Everything the ingredient needs — id, portions,
+  // unit weights, per-100 g macros — comes from the created Food document, so an ingredient
+  // added this way is indistinguishable from one picked out of the library (and never lands in
+  // the unresolved foodId: "" state prompt-81 had to warn about).
+  const pickUsda = async (hit: UsdaSearchResult) => {
+    if (importingFdcId != null) return;
+    selectingRef.current = true;
+    setImportingFdcId(hit.fdcId);
+    try {
+      const food = await importUsdaFood(hit.fdcId);
+      onSelect(
+        food.id,
+        food.name,
+        // Same explicit fiber fallback the library branch makes — this is a calculation input.
+        { ...food.macros, fiber: food.macros.fiber ?? 0 },
+        food.unitWeights,
+        food.servings,
+        food.portions,
+      );
+      // My Library, its stats and the "already imported" checks all key off "foods".
+      qc.invalidateQueries({ queryKey: ["foods"] });
+      toast.success(`${food.name} added to your library`);
+      finishPick(food.name);
+    } catch (err) {
+      toast.error((err as Error).message || "Couldn't add that food to your library");
+      selectingRef.current = false;
+    } finally {
+      setImportingFdcId(null);
+    }
+  };
+
+  const pick = (o: SearchOption) => {
+    if (o.kind === "library") pickLibrary(o.food);
+    else void pickUsda(o.hit);
+  };
+
+  const showResults =
+    open && (options.length > 0 || (query.length >= 2 && !loading && !usdaFetching));
 
   // ArrowDown/ArrowUp/Enter — this list has no cmdk/Command root to inherit navigation from
   // (see the module-level comment on FoodSearchInput), so it's implemented directly against the
   // same `results` array the list itself renders from.
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (!showResults || results.length === 0) return;
+    if (!showResults || options.length === 0) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setActiveIndex((i) => Math.min(i + 1, results.length - 1));
+      setActiveIndex((i) => Math.min(i + 1, options.length - 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setActiveIndex((i) => Math.max(i - 1, 0));
     } else if (e.key === "Enter") {
-      if (activeIndex >= 0 && results[activeIndex]) {
+      if (activeIndex >= 0 && options[activeIndex]) {
         e.preventDefault();
-        pick(results[activeIndex]);
+        pick(options[activeIndex]);
       }
     } else if (e.key === "Escape") {
       // Stop propagation so Escape dismisses just this dropdown, not the whole Radix Dialog
@@ -1382,7 +1521,7 @@ function FoodSearchInput({
         sideOffset={4}
         onOpenAutoFocus={(e) => e.preventDefault()}
         onCloseAutoFocus={(e) => e.preventDefault()}
-        className="p-0 max-h-56 overflow-y-auto"
+        className="p-0 max-h-80 overflow-y-auto"
         style={{ width: "max(var(--radix-popover-trigger-width), 420px)" }}
         // Confirmed root cause of "dragging the scrollbar closes the dropdown": each result row
         // already calls preventDefault() on mousedown (below) so clicking one doesn't blur the
@@ -1405,45 +1544,191 @@ function FoodSearchInput({
           e.currentTarget.scrollTop += e.deltaY;
         }}
       >
-        {results.length > 0 ? (
-          results.map((r, i) => (
-            <div
-              key={r.id}
-              ref={(el) => {
-                itemRefs.current[i] = el;
-              }}
-              role="button"
-              title={r.name}
-              className={cn(
-                "w-full text-left px-3 py-2.5 text-sm hover:bg-muted cursor-pointer flex items-center justify-between border-b last:border-0",
-                i === activeIndex && "bg-muted",
-              )}
-              onMouseEnter={() => setActiveIndex(i)}
+        {/* Data-type filter, same four values and the same semantics as Food Database's Source
+            chips: none selected = no filter = search every type, and the choice is forwarded to
+            FDC's own dataType param rather than filtering client-side. Sticky so it stays
+            reachable while scrolling a long result list. */}
+        <div className="sticky top-0 z-10 flex flex-wrap items-center gap-1 border-b bg-background px-2 py-1.5">
+          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            USDA source
+          </span>
+          {USDA_DATA_TYPES.map((type) => {
+            const active = dataTypeFilter.has(type);
+            return (
+              <Button
+                key={type}
+                type="button"
+                size="sm"
+                variant={active ? "default" : "outline"}
+                className="h-5 rounded-full px-2 text-[10px]"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setDataTypeFilter((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(type)) next.delete(type);
+                    else next.add(type);
+                    return next;
+                  });
+                }}
+              >
+                {type}
+              </Button>
+            );
+          })}
+          {dataTypeFilter.size > 0 && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-5 px-1.5 text-[10px] text-muted-foreground"
               onMouseDown={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                pick(r);
+                setDataTypeFilter(new Set());
               }}
             >
-              <div className="min-w-0 flex-1">
-                <div className="font-medium truncate">{r.name}</div>
-                <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                  {r.arabicName && <span>{r.arabicName}</span>}
-                  <span>
-                    {r.macros.kcal} kcal · P{r.macros.protein} C{r.macros.carbs} F{r.macros.fat}
-                  </span>
+              Clear
+            </Button>
+          )}
+        </div>
+
+        {options.length > 0 || !importedKnown ? (
+          options.map((o, i) => {
+            // Section headers are derived from the flat list rather than rendered as their own
+            // array entries, so they can never be landed on by ArrowDown or counted as options.
+            const prev = options[i - 1];
+            const header =
+              !prev || prev.kind !== o.kind ? (
+                <div
+                  key={`h:${o.kind}`}
+                  className="flex items-center justify-between gap-2 bg-muted/50 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
+                >
+                  <span>{o.kind === "library" ? "My library" : "USDA FoodData Central"}</span>
+                  {o.kind === "usda" && (
+                    <span className="font-normal normal-case tracking-normal">
+                      not in your library — picking one adds it
+                    </span>
+                  )}
                 </div>
+              ) : null;
+
+            const row =
+              o.kind === "library" ? (
+                <div
+                  key={o.key}
+                  ref={(el) => {
+                    itemRefs.current[i] = el;
+                  }}
+                  role="button"
+                  title={o.food.name}
+                  className={cn(
+                    "w-full text-left px-3 py-2.5 text-sm hover:bg-muted cursor-pointer flex items-center justify-between border-b last:border-0",
+                    i === activeIndex && "bg-muted",
+                  )}
+                  onMouseEnter={() => setActiveIndex(i)}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    pick(o);
+                  }}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium truncate">{o.food.name}</div>
+                    <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                      {o.food.arabicName && <span>{o.food.arabicName}</span>}
+                      <span>
+                        {o.food.macros.kcal} kcal · P{o.food.macros.protein} C
+                        {o.food.macros.carbs} F{o.food.macros.fat}
+                      </span>
+                    </div>
+                  </div>
+                  <Badge variant="outline" className="text-[9px] capitalize shrink-0 ml-2">
+                    {o.food.category}
+                  </Badge>
+                </div>
+              ) : (
+                <div
+                  key={o.key}
+                  ref={(el) => {
+                    itemRefs.current[i] = el;
+                  }}
+                  role="button"
+                  title={o.hit.name}
+                  className={cn(
+                    "w-full text-left px-3 py-2.5 text-sm hover:bg-muted cursor-pointer flex items-center justify-between border-b last:border-0",
+                    i === activeIndex && "bg-muted",
+                    importingFdcId != null && "opacity-60",
+                  )}
+                  onMouseEnter={() => setActiveIndex(i)}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    pick(o);
+                  }}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium truncate">{o.hit.name}</div>
+                    <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                      {o.hit.brand && <span className="truncate">{o.hit.brand}</span>}
+                      <span>
+                        {o.hit.macros.calories} kcal · P{o.hit.macros.protein} C
+                        {o.hit.macros.carbs} F{o.hit.macros.fat}
+                      </span>
+                    </div>
+                  </div>
+                  {importingFdcId === o.hit.fdcId ? (
+                    <span className="ml-2 flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" /> Adding…
+                    </span>
+                  ) : (
+                    <Badge
+                      variant="outline"
+                      className="ml-2 shrink-0 border-sky-300 text-[9px] text-sky-700"
+                    >
+                      {USDA_DATA_TYPE_LABEL[o.hit.dataType ?? ""] ?? o.hit.dataType ?? "USDA"}
+                    </Badge>
+                  )}
+                </div>
+              );
+
+            return header ? (
+              <div key={o.key}>
+                {header}
+                {row}
               </div>
-              <Badge variant="outline" className="text-[9px] capitalize shrink-0 ml-2">
-                {r.category}
-              </Badge>
-            </div>
-          ))
-        ) : (
-          <div className="p-3 text-xs text-muted-foreground text-center">
-            No foods found for "{query}"
+            ) : (
+              row
+            );
+          })
+        ) : null}
+
+        {/* The library and USDA are two independent requests and FDC is much the slower of the
+            two, so library rows routinely render while USDA is still in flight. Without a line
+            here the list looks finished when it isn't, and a dietitian would reasonably conclude
+            her search found nothing beyond the library. Covers both stages: the FDC search
+            itself, and the library cross-check that follows it (see importedKnown above). */}
+        {showResults && options.length > 0 && (usdaFetching || !importedKnown) && (
+          <div className="flex items-center justify-center gap-2 border-t px-3 py-2 text-[11px] text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            {usdaFetching
+              ? "Searching USDA FoodData Central…"
+              : "Checking which USDA results you already have…"}
           </div>
         )}
+
+        {options.length === 0 &&
+          importedKnown &&
+          (usdaFetching || loading ? (
+            <div className="flex items-center justify-center gap-2 p-3 text-xs text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" /> Searching your library and USDA…
+            </div>
+          ) : (
+            <div className="p-3 text-xs text-muted-foreground text-center">
+              No foods found for "{query}"
+              {dataTypeFilter.size > 0 && " with the selected USDA sources"}
+            </div>
+          ))}
       </PopoverContent>
     </Popover>
   );

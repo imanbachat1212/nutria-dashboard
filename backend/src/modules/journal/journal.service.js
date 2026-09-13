@@ -1,6 +1,7 @@
 import JournalEntry from "./journal-entry.model.js";
 import Food from "../foods/food.model.js";
 import { ApiError } from "../../lib/ApiError.js";
+import { deleteImage } from "../../lib/storage.js";
 
 // ── Macro helpers ──────────────────────────────────────────────────────────
 
@@ -151,4 +152,21 @@ export async function updateEntry(id, data, actor) {
 export async function deleteEntry(id) {
   const entry = await JournalEntry.findByIdAndDelete(id);
   if (!entry) throw new ApiError(404, "Journal entry not found");
+  // Same shape as deleteClient/deleteMeal/deleteFood: the document goes first, then the stored
+  // file is removed best-effort, never awaited. A storage outage must not stop a dietitian
+  // deleting an entry, and re-running the delete wouldn't help — the document is already gone,
+  // so there'd be nothing left to retry from.
+  //
+  // No legacy case to handle here (unlike deleteMeal, which reads .lean() to catch a
+  // pre-migration single `photo` field): `photo` has always been a declared path on this
+  // schema, and nothing populated it until the WhatsApp intake endpoint shipped. Verified
+  // against the database — 0 of the existing journal entries carry a photo.
+  if (entry.photo?.key) {
+    deleteImage(entry.photo.key).catch((err) => {
+      // Logged rather than silently swallowed (the other three call sites use a bare
+      // `.catch(() => {})`). A failure here leaks a file that nothing references any more, and
+      // without the key in the logs there is no way to find it again to clean it up by hand.
+      console.error(`Failed to delete journal photo ${entry.photo.key}:`, err.message);
+    });
+  }
 }

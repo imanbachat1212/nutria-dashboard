@@ -3,13 +3,38 @@ import { env } from "../config/env.js";
 import { ApiError } from "../lib/ApiError.js";
 import User from "../modules/users/user.model.js";
 
+// Service keys, most-privileged first. Each one authenticates as a machine identity with a
+// FIXED permission list — the key itself decides the scope, so an outside tool can only ever do
+// what the key it was given allows (prompt-91).
+//
+// SERVICE_API_KEY keeps its historical ["*"] so nothing that already uses it breaks. That key
+// can do anything to anything and should stay internal. INTAKE_API_KEY exists precisely so the
+// n8n WhatsApp flow never needs it: it carries one permission, "journal.intake", which gates
+// exactly one route (POST /api/webhooks/whatsapp/journal) and nothing else in the app.
+//
+// Deliberately NOT "journal.create": that permission also opens POST /api/journal, where a
+// caller chooses its own `source` and `status` and could insert pre-approved entries. The
+// intake key should only be able to put things INTO the review queue, never past it.
+function serviceKeyIdentity(apiKey) {
+  // Guard on the configured value being non-empty, not just on equality — INTAKE_API_KEY
+  // defaults to "", and an unset key must not be matchable by an empty header.
+  if (env.SERVICE_API_KEY && apiKey === env.SERVICE_API_KEY) {
+    return { _id: null, role: "automation", permissions: ["*"] };
+  }
+  if (env.INTAKE_API_KEY && apiKey === env.INTAKE_API_KEY) {
+    return { _id: null, role: "automation-intake", permissions: ["journal.intake"] };
+  }
+  return null;
+}
+
 export function authenticate(req, res, next) {
   const apiKey = req.headers["x-api-key"];
   if (apiKey) {
-    if (apiKey !== env.SERVICE_API_KEY) {
+    const identity = serviceKeyIdentity(apiKey);
+    if (!identity) {
       throw new ApiError(401, "Invalid API key");
     }
-    req.user = { _id: null, role: "automation", permissions: ["*"] };
+    req.user = identity;
     return next();
   }
 
