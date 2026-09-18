@@ -41,7 +41,10 @@ async function enrichItems(items) {
   });
 }
 
-function computeTotals(items) {
+// Exported (prompt-94) so the automation client-context endpoint totals a day out of the exact
+// per-entry numbers the Journal Review page already displays, instead of a second summation
+// that could drift from them.
+export function computeTotals(items) {
   const t = { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 };
   for (const item of items) {
     if (!item.macros) continue;

@@ -18,6 +18,20 @@ export const whatsappJournalSchema = z.object({
       phone: z.string().min(1),
       message: z.string().optional(),
       photoUrl: z.string().url().optional(),
+      // Presence of this object is what makes the entry an exercise log rather than a meal
+      // (prompt-95) — n8n already classifies intent, so the shape of the payload carries the
+      // decision instead of a separate `kind` flag n8n could set inconsistently with the
+      // fields it sends. A payload without it behaves exactly as it did before.
+      exercise: z
+        .object({
+          type: z.string().min(1),
+          minutes: z.number().positive().max(1440).optional().nullable(),
+          intensity: z.enum(["light", "moderate", "vigorous"]).optional().nullable(),
+          // The AI's estimate. Capped at a figure no real single session reaches, so a
+          // misplaced decimal can't land a five-digit burn in the client's chart.
+          burnedCalories: z.number().min(0).max(10000).optional().nullable(),
+        })
+        .optional(),
       // When the message was sent, if n8n knows it; defaults to now. Accepts any string Date
       // can parse (ISO is what n8n emits).
       date: z.string().optional(),
@@ -44,7 +58,7 @@ export const whatsappJournalSchema = z.object({
         )
         .optional(),
     })
-    .refine((b) => (b.message && b.message.trim().length > 0) || b.photoUrl, {
-      message: "Provide message, photoUrl, or both",
+    .refine((b) => (b.message && b.message.trim().length > 0) || b.photoUrl || b.exercise, {
+      message: "Provide message, photoUrl, or exercise",
     }),
 });

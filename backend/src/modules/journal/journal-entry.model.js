@@ -17,6 +17,30 @@ const itemSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// One reported activity session, for kind === "exercise" (prompt-95). Null on every meal entry.
+//
+// Its own sub-document rather than free text in `note`, because burnedCalories has to stay
+// queryable: the open question of whether exercise offsets a client's daily target is a
+// clinical decision the dietitian hasn't made yet, and a number buried in prose can't be
+// switched on later without re-parsing sentences.
+//
+// Every field except `type` is nullable on purpose. These arrive from an AI estimate over a
+// WhatsApp message — "3melt gym lyom" gives a type and nothing else — and a fabricated 45
+// minutes would look exactly like a measured one once it's in the chart.
+const exerciseSchema = new mongoose.Schema(
+  {
+    // Free text, not an enum: the vocabulary is whatever a client writes (gym, padel, walking,
+    // "zumba class"), and rejecting an unrecognised activity would drop the log entirely.
+    type: { type: String, required: true, trim: true },
+    minutes: { type: Number, default: null },
+    intensity: { type: String, enum: ["light", "moderate", "vigorous", null], default: null },
+    // AI-estimated from activity/duration/intensity and the client's weight, on the n8n side.
+    // Deliberately NOT subtracted from anything — see automation.service.js's exerciseToday.
+    burnedCalories: { type: Number, default: null },
+  },
+  { _id: false },
+);
+
 const journalEntrySchema = new mongoose.Schema(
   {
     client: {
@@ -44,6 +68,11 @@ const journalEntrySchema = new mongoose.Schema(
     },
 
     items: { type: [itemSchema], default: [] },
+
+    // Populated only when kind === "exercise"; null for meals. An exercise entry carries no
+    // items and no mealSlot, which is why everything that totals food filters on kind rather
+    // than relying on items happening to be empty.
+    exercise: { type: exerciseSchema, default: null },
 
     // null for dashboard entries (no AI estimate); set by automation pipeline
     confidence: {

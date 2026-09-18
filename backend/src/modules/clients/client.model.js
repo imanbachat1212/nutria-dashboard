@@ -102,6 +102,15 @@ const clientSchema = new mongoose.Schema(
       foodsToAvoid: [{ type: String }],
     },
 
+    // Whether the WhatsApp AI replies to this client on its own (prompt-96). Default true:
+    // every existing client keeps today's behaviour, where the AI answers everyone.
+    //
+    // This backend only STORES and REPORTS the flag — it is surfaced in
+    // /api/automation/client-context so n8n can read it per inbound message. Enforcement (n8n
+    // skipping the AI call when false) is a workflow change on the n8n side, deliberately not
+    // here: the backend has no part in the WhatsApp conversation loop.
+    aiAutopilot: { type: Boolean, default: true },
+
     targets: { type: targetsSchema, default: null },
     driTargets: { type: driTargetsSchema, default: null },
 

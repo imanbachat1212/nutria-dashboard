@@ -21,6 +21,13 @@ export const env = {
   R2_SECRET_ACCESS_KEY: process.env.R2_SECRET_ACCESS_KEY || "",
   R2_BUCKET_NAME: process.env.R2_BUCKET_NAME || "",
   R2_PUBLIC_URL: process.env.R2_PUBLIC_URL || "",
+  // Outbound WhatsApp (prompt-96). The backend never talks to Meta — it POSTs
+  // { phone, message } to this n8n webhook and n8n does the sending. Unset means the Messages
+  // page can read threads but sending returns a clear 503 rather than failing obscurely.
+  N8N_OUTBOUND_WEBHOOK_URL: process.env.N8N_OUTBOUND_WEBHOOK_URL || "",
+  // Shared secret sent as X-Nutria-Secret on that call, so a leaked webhook URL alone can't
+  // trigger real messages to real clients.
+  N8N_OUTBOUND_SECRET: process.env.N8N_OUTBOUND_SECRET || "",
   CHROME_PATH: process.env.CHROME_PATH || "",
   CORS_ORIGINS: process.env.CORS_ORIGINS || "",
   PORT: parseInt(process.env.PORT || "4000", 10),

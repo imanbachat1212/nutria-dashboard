@@ -22,7 +22,23 @@ function serviceKeyIdentity(apiKey) {
     return { _id: null, role: "automation", permissions: ["*"] };
   }
   if (env.INTAKE_API_KEY && apiKey === env.INTAKE_API_KEY) {
-    return { _id: null, role: "automation-intake", permissions: ["journal.intake"] };
+    return {
+      _id: null,
+      role: "automation-intake",
+      // Two narrow permissions, not one broad one (prompt-94). journal.intake is the write
+      // scope: file an inbound WhatsApp message as a pending entry. automation.context.read is
+      // the read scope: this client's targets, what they've eaten today, today's plan, and a
+      // food lookup — everything the coach needs to answer "how much do I have left?".
+      //
+      // Kept separate so either half can be revoked without the other, and neither is a
+      // general-purpose permission: "foods.read" was rejected for the food lookup because it
+      // would also open the USDA proxy routes (which spend the practice's FDC quota) and a full
+      // dump of the library; "journal.create" was rejected earlier for the same kind of reason.
+      // automation.messages.write (prompt-96) logs inbound/outbound messages to the inbox —
+      // separate again, because a key that can file a meal should not implicitly be able to
+      // write into the dietitian's conversation history.
+      permissions: ["journal.intake", "automation.context.read", "automation.messages.write"],
+    };
   }
   return null;
 }

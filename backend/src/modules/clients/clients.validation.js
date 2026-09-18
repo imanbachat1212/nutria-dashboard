@@ -99,6 +99,11 @@ export const updateClientSchema = z.object({
     targets: targetsSchema,
     driTargets: driTargetsSchema,
     assignedTo: z.string().nullable().optional(),
+    // WhatsApp AI autopilot (prompt-96). Added to the EXISTING update endpoint rather than a
+    // dedicated toggle route: it is one boolean on the client, PATCH /api/clients/:id already
+    // carries clients.update and is already audited with before/after, and a separate route
+    // would be a second way to change one field.
+    aiAutopilot: z.boolean().optional(),
   }),
 });
 

@@ -37,6 +37,9 @@ export interface JournalEntry {
   // have never had one. The backend has stored this since the journal model was written; it
   // simply had no producer until the WhatsApp intake endpoint existed, so nothing read it.
   photo:           { url: string; width?: number; height?: number } | null;
+  // Activity on an exercise entry (prompt-95); null on every meal. Kept entirely out of
+  // `totals`, which stays food-only — an exercise entry has no items to total.
+  exercise:        { type: string; minutes: number | null; intensity: string | null; burnedCalories: number | null } | null;
   items:           JournalItem[];
   totals:          { kcal: number; protein: number; carbs: number; fat: number };
   confidence:      JournalConfidence;
@@ -56,6 +59,7 @@ interface APIEntry {
   source:      string;
   rawMessage?: string;
   photo?:      { url: string; key: string; width?: number; height?: number } | null;
+  exercise?:   { type: string; minutes?: number | null; intensity?: string | null; burnedCalories?: number | null } | null;
   items:       {
     food?:   string | null;
     label:   string;
@@ -97,6 +101,14 @@ function toEntry(raw: APIEntry): JournalEntry {
     date:           raw.date,
     rawMessage:     raw.rawMessage || "",
     photo:          raw.photo?.url ? { url: raw.photo.url, width: raw.photo.width, height: raw.photo.height } : null,
+    exercise:       raw.exercise?.type
+      ? {
+          type: raw.exercise.type,
+          minutes: raw.exercise.minutes ?? null,
+          intensity: raw.exercise.intensity ?? null,
+          burnedCalories: raw.exercise.burnedCalories ?? null,
+        }
+      : null,
     items:          (raw.items || []).map((i) => ({
       food:   i.food || null,
       label:  i.label,

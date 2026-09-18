@@ -474,6 +474,14 @@ function LogRow({
             )}
           </div>
 
+          {/* The activity itself, in the same position a meal's items occupy — this is the
+              line that tells Sura what she's reviewing. */}
+          {log.kind === "exercise" && log.exercise && (
+            <div className="mt-2 text-xs">
+              <span className="font-medium capitalize text-foreground/80">{log.exercise.type}</span>
+            </div>
+          )}
+
           {log.items.length > 0 && (
             <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
               {log.items.slice(0, 4).map((it, idx) => (
@@ -517,6 +525,30 @@ function LogRow({
               <span>P {log.totals.protein}</span>
               <span>C {log.totals.carbs}</span>
               <span>F {log.totals.fat}</span>
+            </div>
+          </div>
+        )}
+
+        {/* Activity (prompt-95). Sky, not the orange used for eaten calories, and labelled
+            "burned" — the two numbers must never be mistakable for one another at a glance,
+            since nothing in this app subtracts one from the other. */}
+        {log.kind === "exercise" && log.exercise && (
+          <div className="text-right shrink-0">
+            {log.exercise.burnedCalories != null ? (
+              <>
+                <div className="flex items-center justify-end gap-1 font-display text-xl font-semibold tracking-tight text-sky-700">
+                  <Dumbbell className="h-4 w-4 text-sky-600" />
+                  {log.exercise.burnedCalories}
+                </div>
+                <div className="text-[10px] uppercase text-muted-foreground">kcal burned</div>
+              </>
+            ) : (
+              <div className="text-[10px] uppercase text-muted-foreground">no estimate</div>
+            )}
+            <div className="mt-1 text-[10px] capitalize text-muted-foreground">
+              {[log.exercise.minutes != null ? `${log.exercise.minutes} min` : null, log.exercise.intensity]
+                .filter(Boolean)
+                .join(" · ")}
             </div>
           </div>
         )}
@@ -695,6 +727,47 @@ function LogDetail({
             {log.note && <li className="mt-1 text-amber-800">— {log.note}</li>}
           </ul>
         </div>
+      )}
+
+      {/* Activity detail (prompt-95) — occupies the place the Items editor holds for a meal.
+          Read-only: correcting an AI burn estimate needs its own input, which this version
+          doesn't have; Sura can still approve or reject the session. */}
+      {log.kind === "exercise" && log.exercise && (
+        <>
+          <Separator className="my-5" />
+          <h3 className="mb-2 text-sm font-semibold">Activity</h3>
+          <Card className="p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <div className="flex h-9 w-9 items-center justify-center rounded-md bg-sky-50 text-sky-600">
+                  <Dumbbell className="h-4 w-4" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium capitalize">{log.exercise.type}</p>
+                  <p className="text-xs capitalize text-muted-foreground">
+                    {[
+                      log.exercise.minutes != null ? `${log.exercise.minutes} min` : null,
+                      log.exercise.intensity,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ") || "No duration reported"}
+                  </p>
+                </div>
+              </div>
+              <div className="text-right">
+                <p className="font-display text-xl font-semibold tracking-tight text-sky-700">
+                  {log.exercise.burnedCalories ?? "—"}
+                </p>
+                <p className="text-[10px] uppercase text-muted-foreground">kcal burned</p>
+              </div>
+            </div>
+            <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
+              Estimated from the activity, duration and the client's weight. Not subtracted from
+              their daily target — approving this records the session, it doesn't give back
+              calories.
+            </p>
+          </Card>
+        </>
       )}
 
       {log.kind === "meal" && (

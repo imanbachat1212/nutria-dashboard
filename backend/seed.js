@@ -36,6 +36,12 @@ const PERMISSION_KEYS = [
   "reports.create", "reports.read",
   "billing.create", "billing.read", "billing.update", "billing.delete",
   "automation.create", "automation.read", "automation.update", "automation.delete",
+  // Machine-facing (prompt-94), same arrangement as journal.intake: gates the WhatsApp coach's
+  // read routes (/api/automation/client-context, /api/automation/food-lookup) and is held by
+  // the scoped INTAKE_API_KEY via middleware/auth.js, not by any Role.
+  "automation.context.read",
+  // Machine-facing (prompt-96): gates POST /api/automation/messages, held by INTAKE_API_KEY.
+  "automation.messages.write",
   "settings.read", "settings.update",
   "cms.create", "cms.read", "cms.update", "cms.delete",
   "audit.read",

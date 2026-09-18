@@ -102,6 +102,16 @@ export async function createJournalEntryFromWhatsApp(data, actor) {
   // label for each. A payload carrying a photo is a photo log even when text came with it.
   const source = data.photoUrl ? "whatsapp-photo" : "whatsapp-text";
 
+  // An `exercise` object in the payload is what makes this an activity log (prompt-95). n8n
+  // already classifies intent before it calls here, so the payload's shape carries the decision
+  // — there's no separate `kind` flag that could contradict the fields actually sent.
+  //
+  // This is the ONLY inbound write path, deliberately. A second endpoint for activity would
+  // need its own copy of phone normalisation, client matching, the 404 shape and the source
+  // field, and the day those copies disagree is the day a gym session is filed against the
+  // wrong client.
+  const isExercise = !!data.exercise;
+
   // Straight through journal.service.js's own createEntry — the single entry-creation path.
   // It is what forces status "pending" for any non-dashboard source and what preserves
   // confidence/flags, so intake inherits that behaviour instead of restating it.
@@ -109,14 +119,27 @@ export async function createJournalEntryFromWhatsApp(data, actor) {
     {
       client: client._id,
       date: data.date ? new Date(data.date) : new Date(),
-      kind: "meal",
-      mealSlot: data.mealSlot ?? null,
+      kind: isExercise ? "exercise" : "meal",
+      // Both stay empty for an activity even if a payload carried them: a gym session has no
+      // meal slot and no food items, and an exercise entry that smuggled items through would
+      // be food as far as every total in the app is concerned.
+      mealSlot: isExercise ? null : (data.mealSlot ?? null),
+      items: isExercise ? [] : (data.items ?? []),
+      exercise: isExercise
+        ? {
+            type: data.exercise.type,
+            minutes: data.exercise.minutes ?? null,
+            intensity: data.exercise.intensity ?? null,
+            burnedCalories: data.exercise.burnedCalories ?? null,
+          }
+        : null,
       source,
       // "[photo]" mirrors the convention documented on the model's rawMessage field, so a
       // photo-only log still reads as something in the review list rather than a blank row.
-      rawMessage: data.message?.trim() || "[photo]",
+      // "[activity]" is the same idea for an exercise payload sent without any text — the meal
+      // path can't reach it, since a meal with neither message nor photo fails validation.
+      rawMessage: data.message?.trim() || (data.photoUrl ? "[photo]" : "[activity]"),
       photo,
-      items: data.items ?? [],
       confidence: data.confidence ?? null,
       flags: data.flags ?? [],
     },

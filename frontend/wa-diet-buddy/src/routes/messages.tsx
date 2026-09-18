@@ -1,5 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
   Search,
   Phone,
@@ -10,9 +12,8 @@ import {
   Send,
   Sparkles,
   UserCircle2,
-  Pin,
-  CheckCheck,
   Check,
+  Clock,
   Image as ImageIcon,
   FileText,
   AlertCircle,
@@ -34,12 +35,24 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import {
-  CONVERSATIONS,
+  fetchConversations,
+  fetchThread,
+  fetchMessagesStatus,
+  sendMessage,
+  setAiAutopilot,
   formatClock,
   formatDay,
+  relativeAgo,
   type ChatMessage,
-  type Conversation,
-} from "@/lib/messages-mock";
+  type ConversationSummary,
+  type Thread,
+} from "@/lib/messages-api";
+
+// Live data refresh (prompt-96). Polling, not websockets: nothing in this stack carries a
+// socket today, n8n writes messages over plain HTTP, and a dietitian reading a thread tolerates
+// a few seconds of lag. refetchOnWindowFocus does most of the real work — she alt-tabs back
+// from WhatsApp far more often than she sits watching an idle inbox.
+const POLL_MS = 15_000;
 
 export const Route = createFileRoute("/messages")({
   head: () => ({
@@ -59,33 +72,51 @@ type FilterKey = "all" | "clients" | "leads" | "unread" | "review";
 function MessagesPage() {
   const [filter, setFilter] = useState<FilterKey>("all");
   const [search, setSearch] = useState("");
-  const [activeId, setActiveId] = useState<string>(CONVERSATIONS[0].id);
+  const [activeId, setActiveId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [showContext, setShowContext] = useState(true);
 
-  const conversations = useMemo(() => {
-    return CONVERSATIONS.filter((c) => {
-      if (filter === "clients" && c.kind !== "client") return false;
-      if (filter === "leads" && c.kind !== "lead") return false;
-      if (filter === "unread" && c.unread === 0) return false;
-      if (filter === "review" && !c.awaitingDietitian) return false;
-      if (search && !c.name.toLowerCase().includes(search.toLowerCase())) return false;
-      return true;
-    }).sort((a, b) => {
-      if (a.pinned && !b.pinned) return -1;
-      if (!a.pinned && b.pinned) return 1;
-      return b.lastAtIso.localeCompare(a.lastAtIso);
-    });
-  }, [filter, search]);
+  const { data: all = [], isLoading } = useQuery({
+    queryKey: ["messages", "conversations"],
+    queryFn: fetchConversations,
+    refetchInterval: POLL_MS,
+    refetchOnWindowFocus: true,
+  });
 
-  const active = CONVERSATIONS.find((c) => c.id === activeId) ?? CONVERSATIONS[0];
+  const { data: status } = useQuery({
+    queryKey: ["messages", "status"],
+    queryFn: fetchMessagesStatus,
+    refetchInterval: POLL_MS,
+  });
+
+  // Select the newest thread once the list arrives, and recover if the selected one disappears.
+  useEffect(() => {
+    if (!all.length) return;
+    if (!activeId || !all.some((c) => c.id === activeId)) setActiveId(all[0].id);
+  }, [all, activeId]);
+
+  const conversations = useMemo(() => {
+    return all
+      .filter((c) => {
+        if (filter === "clients" && c.kind !== "client") return false;
+        if (filter === "leads" && c.kind !== "lead") return false;
+        if (filter === "unread" && c.unread === 0) return false;
+        if (filter === "review" && !c.awaitingDietitian) return false;
+        if (search && !c.name.toLowerCase().includes(search.toLowerCase())) return false;
+        return true;
+      })
+      // `pinned` is gone: nothing sets it (see messages-api.ts). Newest-first only.
+      .sort((a, b) => b.lastAtIso.localeCompare(a.lastAtIso));
+  }, [all, filter, search]);
+
+  const active = all.find((c) => c.id === activeId) ?? null;
 
   const totals = useMemo(() => {
-    const unread = CONVERSATIONS.reduce((s, c) => s + c.unread, 0);
-    const review = CONVERSATIONS.filter((c) => c.awaitingDietitian).length;
-    const leads = CONVERSATIONS.filter((c) => c.kind === "lead").length;
+    const unread = all.reduce((s, c) => s + c.unread, 0);
+    const review = all.filter((c) => c.awaitingDietitian).length;
+    const leads = all.filter((c) => c.kind === "lead").length;
     return { unread, review, leads };
-  }, []);
+  }, [all]);
 
   return (
     <div className="flex h-[calc(100vh-7rem)] flex-col">
@@ -95,9 +126,29 @@ function MessagesPage() {
         description="One inbox for every WhatsApp thread — clients and leads. The AI handles routine replies; you step in when flagged."
         actions={
           <>
-            <Badge variant="outline" className="gap-1.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-success" />
-              n8n connected
+            {/* Was a hardcoded "n8n connected" string. Now reports whether a message has
+                actually moved recently — a weak signal, deliberately, and labelled as one.
+                It can say "no", which is the whole point of replacing it. */}
+            <Badge
+              variant="outline"
+              className="gap-1.5"
+              title={
+                status?.lastMessageAt
+                  ? `Last message ${relativeAgo(status.lastMessageAt)} ago`
+                  : "No messages logged yet"
+              }
+            >
+              <span
+                className={cn(
+                  "h-1.5 w-1.5 rounded-full",
+                  status?.recentlyActive ? "bg-success" : "bg-muted-foreground",
+                )}
+              />
+              {status?.recentlyActive
+                ? `Active ${relativeAgo(status.lastMessageAt!)} ago`
+                : status?.lastMessageAt
+                  ? `Quiet ${relativeAgo(status.lastMessageAt)}`
+                  : "No messages yet"}
             </Badge>
             <Button variant="outline" size="sm">
               <Filter className="h-4 w-4" />
@@ -165,10 +216,9 @@ function MessagesPage() {
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-1.5 min-w-0">
-                            {c.pinned && <Pin className="h-3 w-3 text-muted-foreground shrink-0" />}
                             <span className="truncate text-sm font-medium">{c.name}</span>
                           </div>
-                          <span className="text-[11px] text-muted-foreground shrink-0">{c.lastAt}</span>
+                          <span className="text-[11px] text-muted-foreground shrink-0">{relativeAgo(c.lastAtIso)}</span>
                         </div>
                         <div className="mt-0.5 flex items-center justify-between gap-2">
                           <p className="truncate text-xs text-muted-foreground">{c.lastSnippet}</p>
@@ -204,7 +254,7 @@ function MessagesPage() {
               ))}
               {conversations.length === 0 && (
                 <li className="p-8 text-center text-sm text-muted-foreground">
-                  No conversations match.
+                  {isLoading ? "Loading conversations…" : "No conversations yet."}
                 </li>
               )}
             </ul>
@@ -212,43 +262,96 @@ function MessagesPage() {
         </div>
 
         {/* Thread pane */}
-        <ConversationThread
-          conversation={active}
-          draft={draft}
-          onDraft={setDraft}
-          onToggleContext={() => setShowContext((s) => !s)}
-        />
+        {active ? (
+          <ConversationThread
+            summary={active}
+            draft={draft}
+            onDraft={setDraft}
+            onToggleContext={() => setShowContext((s) => !s)}
+          />
+        ) : (
+          <div className="flex min-h-0 items-center justify-center rounded-xl border border-border bg-card text-sm text-muted-foreground shadow-soft">
+            {isLoading ? "Loading…" : "No conversation selected."}
+          </div>
+        )}
 
         {/* Context pane */}
-        {showContext && <ContextPanel conversation={active} />}
+        {showContext && active && <ContextPanel conversation={active} />}
       </div>
     </div>
   );
 }
 
 function ConversationThread({
-  conversation,
+  summary,
   draft,
   onDraft,
   onToggleContext,
 }: {
-  conversation: Conversation;
+  summary: ConversationSummary;
   draft: string;
   onDraft: (v: string) => void;
   onToggleContext: () => void;
 }) {
-  const [autopilot, setAutopilot] = useState(conversation.aiAutopilot);
+  const qc = useQueryClient();
+
+  const { data: thread } = useQuery({
+    queryKey: ["messages", "thread", summary.id],
+    queryFn: () => fetchThread(summary.id),
+    refetchInterval: POLL_MS,
+    refetchOnWindowFocus: true,
+  });
+
+  // The list already knows the flag, so the toggle renders correctly before the thread loads.
+  const conversation: Thread | ConversationSummary = thread ?? summary;
+  const autopilot = thread?.aiAutopilot ?? summary.aiAutopilot;
+
+  // Persisted, not local state — the mock's toggle reset on reload. Optimistic so the switch
+  // moves under the finger; both queries are invalidated after so the server value wins.
+  const autopilotMutation = useMutation({
+    mutationFn: (next: boolean) => setAiAutopilot(summary.id, next),
+    onMutate: async (next: boolean) => {
+      await qc.cancelQueries({ queryKey: ["messages", "thread", summary.id] });
+      const prev = qc.getQueryData<Thread>(["messages", "thread", summary.id]);
+      if (prev) qc.setQueryData(["messages", "thread", summary.id], { ...prev, aiAutopilot: next });
+      return { prev };
+    },
+    onError: (err: Error, _next, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["messages", "thread", summary.id], ctx.prev);
+      toast.error(err.message || "Couldn't change AI autopilot");
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["messages"] });
+      // The flag lives on the Client, so anything showing client data is now stale too.
+      qc.invalidateQueries({ queryKey: ["clients"] });
+    },
+  });
+
+  const sendMutation = useMutation({
+    mutationFn: (body: string) => sendMessage(summary.id, body),
+    onSuccess: (res) => {
+      onDraft("");
+      qc.invalidateQueries({ queryKey: ["messages"] });
+      // The message is stored either way; only delivery can fail. Saying so beats a silent
+      // success on a message the client never received.
+      if (res.delivered) toast.success("Sent");
+      else toast.error(`Saved, but not delivered — ${res.error ?? "n8n unreachable"}`);
+    },
+    onError: (err: Error) => toast.error(err.message || "Couldn't send"),
+  });
+
+  const messages = thread?.messages ?? [];
 
   // Group by day
   const grouped = useMemo(() => {
     const map = new Map<string, ChatMessage[]>();
-    for (const m of conversation.messages) {
+    for (const m of messages) {
       const day = formatDay(m.at);
       if (!map.has(day)) map.set(day, []);
       map.get(day)!.push(m);
     }
     return Array.from(map.entries());
-  }, [conversation]);
+  }, [messages]);
 
   return (
     <div className="flex min-h-0 flex-col rounded-xl border border-border bg-card shadow-soft">
@@ -279,7 +382,11 @@ function ConversationThread({
           <div className="mr-2 flex items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-1.5">
             <Sparkles className={cn("h-3.5 w-3.5", autopilot ? "text-primary" : "text-muted-foreground")} />
             <span className="text-xs font-medium">AI autopilot</span>
-            <Switch checked={autopilot} onCheckedChange={setAutopilot} />
+            <Switch
+              checked={autopilot}
+              disabled={autopilotMutation.isPending}
+              onCheckedChange={(v) => autopilotMutation.mutate(v)}
+            />
           </div>
           <Button variant="ghost" size="icon" title="Call">
             <Phone className="h-4 w-4" />
@@ -299,6 +406,11 @@ function ConversationThread({
       {/* Messages */}
       <ScrollArea className="flex-1 bg-muted/20">
         <div className="space-y-6 p-6">
+          {grouped.length === 0 && (
+            <p className="py-10 text-center text-sm text-muted-foreground">
+              {thread ? "No messages in this conversation yet." : "Loading messages…"}
+            </p>
+          )}
           {grouped.map(([day, msgs]) => (
             <div key={day} className="space-y-3">
               <div className="flex items-center justify-center">
@@ -319,7 +431,7 @@ function ConversationThread({
         {!autopilot && (
           <div className="flex items-center gap-2 rounded-md bg-warning/10 border border-warning/30 px-3 py-1.5 text-xs text-warning">
             <AlertCircle className="h-3.5 w-3.5" />
-            AI autopilot paused — you're replying manually as Dr. Layla.
+            AI autopilot paused — replies to this client are yours to send.
           </div>
         )}
         <div className="flex items-end gap-2">
@@ -329,6 +441,12 @@ function ConversationThread({
           <Textarea
             value={draft}
             onChange={(e) => onDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && draft.trim() && !sendMutation.isPending) {
+                e.preventDefault();
+                sendMutation.mutate(draft.trim());
+              }
+            }}
             placeholder={autopilot ? "Override AI with a manual message…" : "Type a message…"}
             className="min-h-11 max-h-32 resize-none"
             rows={1}
@@ -336,7 +454,12 @@ function ConversationThread({
           <Button variant="ghost" size="icon" className="shrink-0">
             <Mic className="h-4 w-4" />
           </Button>
-          <Button size="icon" className="shrink-0" disabled={!draft.trim()}>
+          <Button
+            size="icon"
+            className="shrink-0"
+            disabled={!draft.trim() || sendMutation.isPending}
+            onClick={() => sendMutation.mutate(draft.trim())}
+          >
             <Send className="h-4 w-4" />
           </Button>
         </div>
@@ -386,7 +509,9 @@ function MessageBubble({ message }: { message: ChatMessage }) {
               ? "bg-primary/10 text-foreground border border-primary/20 rounded-br-sm"
               : "bg-primary text-primary-foreground rounded-br-sm"
             : "bg-card border border-border rounded-bl-sm",
-          message.flagged && "ring-2 ring-warning/50",
+          // A failed send is the one message state worth ringing. The mock's per-message
+          // `flagged` had no producer and isn't built (see messages-api.ts).
+          message.status === "failed" && "ring-2 ring-destructive/50",
         )}
       >
         {isOut && (
@@ -431,7 +556,9 @@ function MessageBubble({ message }: { message: ChatMessage }) {
                 />
               ))}
             </div>
-            <span className="text-[11px] opacity-80">0:{String(message.voiceSeconds ?? 0).padStart(2, "0")}</span>
+            {/* Duration omitted: n8n doesn't send it, and a fabricated 0:00 is worse than
+                nothing. attachmentLabel carries what is actually known. */}
+            <span className="text-[11px] opacity-80">{message.attachmentLabel ?? "Voice note"}</span>
           </div>
         )}
 
@@ -453,16 +580,27 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 
         <div className={cn("mt-1 flex items-center gap-1 text-[10px] opacity-70", isOut ? "justify-end" : "justify-start")}>
           <span>{formatClock(message.at)}</span>
-          {isOut && message.status === "read" && <CheckCheck className="h-3 w-3" />}
-          {isOut && message.status === "delivered" && <CheckCheck className="h-3 w-3 opacity-50" />}
+          {/* Real delivery states only. "delivered"/"read" would need WhatsApp receipts
+              flowing back through n8n, which don't exist — double ticks that always showed
+              would be a lie about whether a client saw the message. */}
           {isOut && message.status === "sent" && <Check className="h-3 w-3" />}
+          {isOut && message.status === "queued" && <Clock className="h-3 w-3 opacity-60" />}
+          {/* The outbound bubble is a solid dark fill, so `text-destructive` on it is dark-on-dark
+              and unreadable. Inherit the bubble's own foreground and carry the warning with the
+              ring around the bubble plus full opacity instead of colour alone. */}
+          {isOut && message.status === "failed" && (
+            <span className="inline-flex items-center gap-0.5 font-medium opacity-100">
+              <AlertCircle className="h-3 w-3" />
+              Not delivered
+            </span>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function ContextPanel({ conversation }: { conversation: Conversation }) {
+function ContextPanel({ conversation }: { conversation: ConversationSummary }) {
   const isLead = conversation.kind === "lead";
   return (
     <div className="hidden xl:flex min-h-0 flex-col rounded-xl border border-border bg-card shadow-soft">

@@ -17,6 +17,17 @@ const itemSchema = z.object({
     .nullable(),
 });
 
+// Activity on an exercise entry (prompt-95). Optional everywhere: meals never carry it, and
+// the dashboard's own entry dialog doesn't collect it yet — it's here so an estimate that
+// arrived from WhatsApp can be corrected through the normal update path rather than needing a
+// second endpoint.
+const exerciseSchema = z.object({
+  type: z.string().min(1),
+  minutes: z.number().positive().max(1440).optional().nullable(),
+  intensity: z.enum(["light", "moderate", "vigorous"]).optional().nullable(),
+  burnedCalories: z.number().min(0).max(10000).optional().nullable(),
+});
+
 export const createEntrySchema = z.object({
   body: z.object({
     client:     z.string().min(1),
@@ -25,6 +36,7 @@ export const createEntrySchema = z.object({
     mealSlot:   z.enum(["breakfast", "snack-am", "lunch", "snack-pm", "dinner"]).optional().nullable(),
     source:     z.enum(["dashboard", "whatsapp-text", "whatsapp-photo"]).default("dashboard"),
     items:      z.array(itemSchema).default([]),
+    exercise:   exerciseSchema.optional().nullable(),
     confidence: z.enum(["low", "medium", "high"]).optional().nullable(),
     status:     z.enum(["pending", "approved", "edited", "rejected"]).optional(),
     flags:      z.array(z.string()).default([]),
@@ -41,6 +53,7 @@ export const updateEntrySchema = z.object({
     mealSlot:   z.enum(["breakfast", "snack-am", "lunch", "snack-pm", "dinner"]).optional().nullable(),
     source:     z.enum(["dashboard", "whatsapp-text", "whatsapp-photo"]).optional(),
     items:      z.array(itemSchema).optional(),
+    exercise:   exerciseSchema.optional().nullable(),
     confidence: z.enum(["low", "medium", "high"]).optional().nullable(),
     status:     z.enum(["pending", "approved", "edited", "rejected"]).optional(),
     flags:      z.array(z.string()).optional(),
