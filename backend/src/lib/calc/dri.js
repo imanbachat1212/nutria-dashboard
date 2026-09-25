@@ -48,32 +48,38 @@ const VITAMIN_DRI = {
   },
 };
 
+// Copper is stored here in MILLIGRAMS, unlike the NAM source tables, which list it in mcg
+// (700/890/900/1000/1300). Every other element in this table is already mg, and Food.copper
+// — and so every consumed/summed copper figure in the app — is mg too (see DAILY_VALUES.copper
+// = 0.9 mg in foods/lib/nutrientClaims.js). Leaving the raw mcg numbers here made the DRI
+// comparison 1000x too large: 1.82 mg read as 0% of 900 while the same value was 202% of DV.
+// Do not "restore" these to the source-table magnitude. Selenium IS mcg on both sides, correctly.
 const MINERAL_DRI = {
   male: {
-    "9-13": { calcium: 1300, iron: 8, magnesium: 240, phosphorus: 1250, potassium: 2500, sodium: 1200, zinc: 8, copper: 700, manganese: 1.9, selenium: 40 },
-    "14-18": { calcium: 1300, iron: 11, magnesium: 410, phosphorus: 1250, potassium: 3000, sodium: 1500, zinc: 11, copper: 890, manganese: 2.2, selenium: 55 },
-    "19-30": { calcium: 1000, iron: 8, magnesium: 400, phosphorus: 700, potassium: 3400, sodium: 1500, zinc: 11, copper: 900, manganese: 2.3, selenium: 55 },
-    "31-50": { calcium: 1000, iron: 8, magnesium: 420, phosphorus: 700, potassium: 3400, sodium: 1500, zinc: 11, copper: 900, manganese: 2.3, selenium: 55 },
-    "51-70": { calcium: 1000, iron: 8, magnesium: 420, phosphorus: 700, potassium: 3400, sodium: 1500, zinc: 11, copper: 900, manganese: 2.3, selenium: 55 },
-    "70+": { calcium: 1200, iron: 8, magnesium: 420, phosphorus: 700, potassium: 3400, sodium: 1500, zinc: 11, copper: 900, manganese: 2.3, selenium: 55 },
+    "9-13": { calcium: 1300, iron: 8, magnesium: 240, phosphorus: 1250, potassium: 2500, sodium: 1200, zinc: 8, copper: 0.7, manganese: 1.9, selenium: 40 },
+    "14-18": { calcium: 1300, iron: 11, magnesium: 410, phosphorus: 1250, potassium: 3000, sodium: 1500, zinc: 11, copper: 0.89, manganese: 2.2, selenium: 55 },
+    "19-30": { calcium: 1000, iron: 8, magnesium: 400, phosphorus: 700, potassium: 3400, sodium: 1500, zinc: 11, copper: 0.9, manganese: 2.3, selenium: 55 },
+    "31-50": { calcium: 1000, iron: 8, magnesium: 420, phosphorus: 700, potassium: 3400, sodium: 1500, zinc: 11, copper: 0.9, manganese: 2.3, selenium: 55 },
+    "51-70": { calcium: 1000, iron: 8, magnesium: 420, phosphorus: 700, potassium: 3400, sodium: 1500, zinc: 11, copper: 0.9, manganese: 2.3, selenium: 55 },
+    "70+": { calcium: 1200, iron: 8, magnesium: 420, phosphorus: 700, potassium: 3400, sodium: 1500, zinc: 11, copper: 0.9, manganese: 2.3, selenium: 55 },
   },
   female: {
-    "9-13": { calcium: 1300, iron: 8, magnesium: 240, phosphorus: 1250, potassium: 2300, sodium: 1200, zinc: 8, copper: 700, manganese: 1.6, selenium: 40 },
-    "14-18": { calcium: 1300, iron: 15, magnesium: 360, phosphorus: 1250, potassium: 2300, sodium: 1500, zinc: 9, copper: 890, manganese: 1.6, selenium: 55 },
-    "19-30": { calcium: 1000, iron: 18, magnesium: 310, phosphorus: 700, potassium: 2600, sodium: 1500, zinc: 8, copper: 900, manganese: 1.8, selenium: 55 },
-    "31-50": { calcium: 1000, iron: 18, magnesium: 320, phosphorus: 700, potassium: 2600, sodium: 1500, zinc: 8, copper: 900, manganese: 1.8, selenium: 55 },
-    "51-70": { calcium: 1200, iron: 8, magnesium: 320, phosphorus: 700, potassium: 2600, sodium: 1500, zinc: 8, copper: 900, manganese: 1.8, selenium: 55 },
-    "70+": { calcium: 1200, iron: 8, magnesium: 320, phosphorus: 700, potassium: 2600, sodium: 1500, zinc: 8, copper: 900, manganese: 1.8, selenium: 55 },
+    "9-13": { calcium: 1300, iron: 8, magnesium: 240, phosphorus: 1250, potassium: 2300, sodium: 1200, zinc: 8, copper: 0.7, manganese: 1.6, selenium: 40 },
+    "14-18": { calcium: 1300, iron: 15, magnesium: 360, phosphorus: 1250, potassium: 2300, sodium: 1500, zinc: 9, copper: 0.89, manganese: 1.6, selenium: 55 },
+    "19-30": { calcium: 1000, iron: 18, magnesium: 310, phosphorus: 700, potassium: 2600, sodium: 1500, zinc: 8, copper: 0.9, manganese: 1.8, selenium: 55 },
+    "31-50": { calcium: 1000, iron: 18, magnesium: 320, phosphorus: 700, potassium: 2600, sodium: 1500, zinc: 8, copper: 0.9, manganese: 1.8, selenium: 55 },
+    "51-70": { calcium: 1200, iron: 8, magnesium: 320, phosphorus: 700, potassium: 2600, sodium: 1500, zinc: 8, copper: 0.9, manganese: 1.8, selenium: 55 },
+    "70+": { calcium: 1200, iron: 8, magnesium: 320, phosphorus: 700, potassium: 2600, sodium: 1500, zinc: 8, copper: 0.9, manganese: 1.8, selenium: 55 },
   },
   pregnant: {
-    "14-18": { calcium: 1300, iron: 27, magnesium: 400, phosphorus: 1250, potassium: 2600, sodium: 1500, zinc: 12, copper: 1000, manganese: 2.0, selenium: 60 },
-    "19-30": { calcium: 1000, iron: 27, magnesium: 350, phosphorus: 700, potassium: 2900, sodium: 1500, zinc: 11, copper: 1000, manganese: 2.0, selenium: 60 },
-    "31-50": { calcium: 1000, iron: 27, magnesium: 360, phosphorus: 700, potassium: 2900, sodium: 1500, zinc: 11, copper: 1000, manganese: 2.0, selenium: 60 },
+    "14-18": { calcium: 1300, iron: 27, magnesium: 400, phosphorus: 1250, potassium: 2600, sodium: 1500, zinc: 12, copper: 1.0, manganese: 2.0, selenium: 60 },
+    "19-30": { calcium: 1000, iron: 27, magnesium: 350, phosphorus: 700, potassium: 2900, sodium: 1500, zinc: 11, copper: 1.0, manganese: 2.0, selenium: 60 },
+    "31-50": { calcium: 1000, iron: 27, magnesium: 360, phosphorus: 700, potassium: 2900, sodium: 1500, zinc: 11, copper: 1.0, manganese: 2.0, selenium: 60 },
   },
   lactating: {
-    "14-18": { calcium: 1300, iron: 10, magnesium: 360, phosphorus: 1250, potassium: 2500, sodium: 1500, zinc: 13, copper: 1300, manganese: 2.6, selenium: 70 },
-    "19-30": { calcium: 1000, iron: 9, magnesium: 310, phosphorus: 700, potassium: 2800, sodium: 1500, zinc: 12, copper: 1300, manganese: 2.6, selenium: 70 },
-    "31-50": { calcium: 1000, iron: 9, magnesium: 320, phosphorus: 700, potassium: 2800, sodium: 1500, zinc: 12, copper: 1300, manganese: 2.6, selenium: 70 },
+    "14-18": { calcium: 1300, iron: 10, magnesium: 360, phosphorus: 1250, potassium: 2500, sodium: 1500, zinc: 13, copper: 1.3, manganese: 2.6, selenium: 70 },
+    "19-30": { calcium: 1000, iron: 9, magnesium: 310, phosphorus: 700, potassium: 2800, sodium: 1500, zinc: 12, copper: 1.3, manganese: 2.6, selenium: 70 },
+    "31-50": { calcium: 1000, iron: 9, magnesium: 320, phosphorus: 700, potassium: 2800, sodium: 1500, zinc: 12, copper: 1.3, manganese: 2.6, selenium: 70 },
   },
 };
 

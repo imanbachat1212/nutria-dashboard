@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createFood,
   updateFood,
@@ -69,6 +69,7 @@ import {
   type NumericMicroKey,
 } from "@/lib/food-database-mock";
 import { labelToUnit, type CommonServingUnit } from "@/lib/unit-conversion";
+import { fetchAllergies } from "@/lib/settings-api";
 
 interface NewFoodDialogProps {
   open: boolean;
@@ -77,8 +78,6 @@ interface NewFoodDialogProps {
   // updateFood instead of createFood — see the `isEdit` derived flag below.
   editFoodId?: string | null;
 }
-
-const ALLERGENS = ["gluten", "dairy", "nuts", "eggs", "soy", "shellfish", "sesame"] as const;
 
 // Pulls every non-null numeric micronutrient off a raw fetched food into the same sparse
 // { key: value } shape the Micronutrients step's local state already uses — a key's absence
@@ -258,6 +257,15 @@ function isMeaningfulDraftState(d: NewFoodDraft): boolean {
 
 export function NewFoodDialog({ open, onOpenChange, editFoodId }: NewFoodDialogProps) {
   const queryClient = useQueryClient();
+  // The ONE canonical allergen list (prompt-105), the same Settings-managed list the New Client
+  // dialog's Allergies picker uses — same query key, so the two share a cache entry. Previously
+  // a hardcoded lowercase 7-value array that had no relationship to what a client's allergies
+  // could say, which meant a tag could be impossible to ever match (see allergy-matching.ts).
+  // Whatever a dietitian adds in Settings → Allergies is immediately taggable here.
+  const { data: allergyOptions = [] } = useQuery({
+    queryKey: ["settings", "allergies"],
+    queryFn: fetchAllergies,
+  });
   const isEdit = !!editFoodId;
   const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
@@ -1131,14 +1139,17 @@ export function NewFoodDialog({ open, onOpenChange, editFoodId }: NewFoodDialogP
               <section>
                 <h3 className="mb-2 text-sm font-semibold">Allergens</h3>
                 <div className="flex flex-wrap gap-1.5">
-                  {ALLERGENS.map((a) => {
+                  {allergyOptions.length === 0 && (
+                    <p className="text-xs text-muted-foreground">Loading allergens…</p>
+                  )}
+                  {allergyOptions.map((a) => {
                     const active = allergens.includes(a);
                     return (
                       <button
                         key={a}
                         onClick={() => toggleAllergen(a)}
                         className={cn(
-                          "rounded-full border px-3 py-1 text-xs font-medium capitalize transition-colors",
+                          "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
                           active
                             ? "border-amber-300 bg-amber-100 text-amber-800"
                             : "border-input bg-background hover:bg-accent",

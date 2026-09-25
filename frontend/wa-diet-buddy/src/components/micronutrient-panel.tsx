@@ -2,6 +2,7 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import { CLAIM_LEVEL_META } from "@/lib/food-database-mock";
+import { ContributionHover, type ContributionEntry } from "@/components/nutrient-contributions";
 
 // One micronutrient panel, shared by Meal Library's recipe drawer (prompt-82) and Meal Plans'
 // day/slot sheet (prompt-83), so the nutrient list, the priority ordering and the row layout
@@ -34,6 +35,11 @@ export interface MicronutrientRow {
   // in classification — the tier is always `level`, computed upstream on the exact value.
   dv?: { pct: number; level: "high" | "good" | null; pctExact?: number } | null;
   dri?: { target: number; pct: number } | null;
+  // Where this nutrient came from (prompt-98), highest share first. Supplied by the caller —
+  // Meal Library passes the recipe's per-ingredient breakdown, Meal Plans passes the per-item
+  // one — so both surfaces get row hovering from this one place. Omitted (or empty) simply
+  // means no hover, which is how Food Database's atomic rows stay unaffected.
+  contributions?: ContributionEntry[];
   // Short qualifier badge beside the value, e.g. "IU" for a vitamin A/D record stored in the
   // unit USDA reported rather than the one the DV is defined in (prompt-87). Such a row
   // deliberately carries a value but no `dv` — IU->mcg depends on the vitamer, so there is no
@@ -186,10 +192,19 @@ export function MicronutrientPanel({
                 {r.value == null ? (
                   <span className="text-muted-foreground">{nullText}</span>
                 ) : (
-                  <span className="font-medium">
-                    {r.value}
-                    {r.dri ? ` / ${r.dri.target}` : ""} {shortUnit(r.unit)}
-                  </span>
+                  // The value is what the hover explains, so it carries the affordance. With no
+                  // contributions supplied this renders the span alone, exactly as before.
+                  <ContributionHover
+                    contributions={r.contributions}
+                    field={r.nutrient}
+                    label={r.label}
+                    align="end"
+                  >
+                    <span className="font-medium">
+                      {r.value}
+                      {r.dri ? ` / ${r.dri.target}` : ""} {shortUnit(r.unit)}
+                    </span>
+                  </ContributionHover>
                 )}
                 {r.note && (
                   <Badge

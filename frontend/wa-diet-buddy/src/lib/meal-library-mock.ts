@@ -14,22 +14,42 @@ export type RecipeCuisine =
   | "asian"
   | "italian";
 
-export type Allergen =
-  | "gluten"
-  | "dairy"
-  | "nuts"
-  | "eggs"
-  | "soy"
-  | "shellfish"
-  | "sesame";
-
 // Diet tags are free-form display strings sourced from the shared dietaryPreferences Setting
 // (Settings → Services), not a fixed enum — dietitians can add/rename tags there.
 export type DietTag = string;
 
 export interface Ingredient {
+  // "section" is a titled divider between ingredients (prompt-97) — same flat array, so
+  // display order is just array order. Optional: a recipe saved before sections existed has
+  // no `type` on its rows, and every one of those is an ingredient.
+  type?: "ingredient" | "section";
   name: string;
+  // Always "" for a section row — a heading has no amount.
   amount: string;
+  // This ingredient's weight in ONE SERVING, grams (prompt-114) — `amount` above is the
+  // whole-recipe display string. undefined, never 0, when there is no weight this recipe's
+  // data actually supports: a section row, an ingredient with no recorded quantity ("salt to
+  // taste"), or a generic-unit row whose food has no real per-unit weight (see
+  // gramsPerServingForSavedItem's fail-safe). "Unknown" and "zero" are different answers.
+  gramsPerServing?: number;
+}
+
+// One contributor behind a nutrient number (prompt-98) — "Olive oil supplied 62.2% of this
+// recipe's calories". Percentage only, by design: the absolute amount is already visible on the
+// ingredient row itself, and a share is what answers "which one should I change".
+export interface NutrientContribution {
+  name: string;
+  pct: number;
+}
+
+// Per-macro contributor lists, keyed by the BACKEND's field names (calories, not kcal) so a
+// lookup by nutrient key works the same for macros and micronutrients.
+export interface MacroContributions {
+  calories: NutrientContribution[];
+  protein: NutrientContribution[];
+  carbs: NutrientContribution[];
+  fat: NutrientContribution[];
+  fiber: NutrientContribution[];
 }
 
 export interface RecipeMacros {
@@ -66,10 +86,30 @@ export interface Recipe {
     level: "high" | "good" | null;
     // Unrounded ratio, display precision only (prompt-88) — see formatDvPct.
     pctExact?: number;
+    // Which ingredients this nutrient came from (prompt-98), highest share first. Only present
+    // on the single-recipe reads — listMeals deliberately skips the extra per-recipe Food
+    // lookup, since a card never shows a breakdown.
+    contributions?: NutrientContribution[];
   }[];
+  // Same, for the five macro tiles. Same availability caveat as micronutrients.contributions.
+  macroContributions?: MacroContributions;
+  // The "Other" group per serving, in mg (oxalate prompt-99, phytate prompt-100). Their own
+  // top-level fields rather than extra entries in `macros`: neither has an FDA Daily Value, a
+  // DRI or a claim tier, so they belong to none of the systems the macro tiles and the
+  // micronutrient panel represent — they're raw amounts a dietitian may want to keep low.
+  //
+  // null means no ingredient in the recipe reports that nutrient, which is NOT the same as
+  // zero and must not pass a "low X" filter. Independent per nutrient.
+  oxalatePerServing?: number | null;
+  phytatePerServing?: number | null;
   ingredients: Ingredient[];
   steps: string[];
-  allergens: Allergen[];
+  // Plain strings, not a closed union (prompt-105): allergen tags are now chosen from the
+  // Settings-managed allergy list — the same one a client's own allergies come from — which a
+  // dietitian can extend at any time without a code change or migration. Mirrors the reasoning
+  // already written on food.model.js's `allergens` field, and is what lets
+  // lib/allergy-matching.ts compare the two sides as literal strings.
+  allergens: string[];
   diets: DietTag[];
   rating: number; // 0-5
   usedInPlans: number;
@@ -87,16 +127,6 @@ export const CATEGORY_META: Record<RecipeCategory, { label: string; emoji: strin
   snack: { label: "Snack", emoji: "🥜" },
   dessert: { label: "Dessert", emoji: "🍰" },
   drink: { label: "Drink", emoji: "🥤" },
-};
-
-export const ALLERGEN_LABEL: Record<Allergen, string> = {
-  gluten: "Gluten",
-  dairy: "Dairy",
-  nuts: "Nuts",
-  eggs: "Eggs",
-  soy: "Soy",
-  shellfish: "Shellfish",
-  sesame: "Sesame",
 };
 
 export const RECIPES: Recipe[] = [

@@ -62,14 +62,57 @@ function subtract(target, consumed) {
   );
 }
 
+// A slot's effective time: the plan's own override, else the built-in default, else null for a
+// slot that has neither — an item sitting in a slot that was never registered in slotTimes.
+// Mirrors slotDisplayTime() in the frontend's mealplans-api.ts, so the coach and the dashboard
+// can't disagree about when a slot happens.
+function slotDisplayTime(slot, slotTimes) {
+  return slotTimes[slot] ?? DEFAULT_SLOT_TIMES[slot] ?? null;
+}
+
+// Orders slots the way the dashboard does (prompt-113): ascending by effective time, built-ins
+// and custom slots interleaved rather than the built-ins first and everything else swept to the
+// end. Same rule as buildDays()/planSlots() in the frontend's mealplans-api.ts, expressed for
+// this file's shape. Ties and untimed slots fall back to the caller's own order via an explicit
+// index, so the result never depends on Array.prototype.sort's stability or on Map insertion
+// order.
+function sortSlotsByTime(slots, slotTimes) {
+  return slots
+    .map((slot, idx) => ({ slot, idx, time: slotDisplayTime(slot, slotTimes) }))
+    .sort((a, b) => {
+      // Both are zero-padded 24h "HH:mm" (the PATCH /slot-time regex rejects anything else, and
+      // DEFAULT_SLOT_TIMES are literals of the same shape), so a plain compare is chronological.
+      if (a.time && b.time) {
+        if (a.time < b.time) return -1;
+        if (a.time > b.time) return 1;
+        return a.idx - b.idx;
+      }
+      if (a.time) return -1;
+      if (b.time) return 1;
+      return a.idx - b.idx;
+    })
+    .map((entry) => entry.slot);
+}
+
 // Which slot the client is in right now, by local wall clock: the latest slot whose start time
 // has passed. Before breakfast that's null rather than a guess — "you're in dinner" at 6am
 // would be worse than saying nothing.
+//
+// Candidates are every slot the plan actually has (prompt-113) — the 5 built-ins, which always
+// have a time, UNION whatever custom slots the dietitian registered in slotTimes. A custom
+// "Pre-workout" at 07:00 is as much the meal happening now as breakfast is, and used to be
+// unnameable here.
+//
+// Sorting first also fixes a latent bug in iterating SLOT_ORDER directly: it walked the
+// built-ins in DECLARATION order and kept the last match, which is only chronological while
+// nobody overrides a time. Retime breakfast to 23:00 and at 23:30 the old loop returned dinner,
+// because dinner came later in the list — not because it was later in the day.
 function currentSlot(nowHHMM, slotTimes) {
+  const candidates = [...new Set([...SLOT_ORDER, ...Object.keys(slotTimes)])];
   let found = null;
-  for (const slot of SLOT_ORDER) {
-    const time = slotTimes[slot] ?? DEFAULT_SLOT_TIMES[slot];
-    if (time <= nowHHMM) found = slot;
+  for (const slot of sortSlotsByTime(candidates, slotTimes)) {
+    const time = slotDisplayTime(slot, slotTimes);
+    if (time != null && time <= nowHHMM) found = slot;
   }
   return found;
 }
@@ -106,15 +149,15 @@ function planSlotsForDay(plan, dayIndex) {
     if (!bySlot.has(item.slot)) bySlot.set(item.slot, []);
     bySlot.get(item.slot).push(item);
   }
-  return [...bySlot.entries()]
-    .sort((a, b) => {
-      const ai = SLOT_ORDER.indexOf(a[0]);
-      const bi = SLOT_ORDER.indexOf(b[0]);
-      return (ai === -1 ? SLOT_ORDER.length : ai) - (bi === -1 ? SLOT_ORDER.length : bi);
-    })
+  // Chronological, custom slots interleaved (prompt-113) — was SLOT_ORDER.indexOf(), which
+  // swept every custom slot to the end regardless of its time. The set of slots returned is
+  // unchanged: still exactly the ones holding food on this day, since bySlot is built from
+  // items. Only their order changes.
+  return sortSlotsByTime([...bySlot.keys()], slotTimes)
+    .map((slot) => [slot, bySlot.get(slot)])
     .map(([slot, items]) => ({
       slot,
-      time: slotTimes[slot] ?? DEFAULT_SLOT_TIMES[slot] ?? null,
+      time: slotDisplayTime(slot, slotTimes),
       // measureLabel is the dietitian's own wording ("3 pitted dates") where she picked a real
       // measure; otherwise the resolved quantity+unit. Both are display strings the AI can read
       // back verbatim without recomputing anything.

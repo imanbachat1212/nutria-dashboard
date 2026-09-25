@@ -3,10 +3,27 @@ import * as ScrollAreaPrimitive from "@radix-ui/react-scroll-area";
 
 import { cn } from "@/lib/utils";
 
+// `...props` and the forwarded `ref` both land on Radix's Root, which is NOT the element that
+// scrolls — the Viewport inside it is. That matters for exactly one kind of prop: an onScroll
+// passed to <ScrollArea> attaches to Root and never fires, because scroll events do not bubble.
+// (Pointer events like onDragOver are unaffected — those do bubble up from the Viewport, which
+// is why meal-plans.tsx's drag auto-scroll works as written.)
+//
+// onViewportScroll is the way through. Deliberately a separate, optional prop rather than
+// redirecting `...props` to the Viewport: every existing consumer passes className/ref/
+// onDragOver expecting Root, and moving the spread would silently relocate all of them. Nothing
+// here changes for a caller that doesn't pass it.
+//
+// A caller needing the scrolling element itself (rather than just its events) can still reach
+// it the way meal-plans.tsx does — querySelector("[data-radix-scroll-area-viewport]") on the
+// forwarded Root ref. A viewportRef prop would be the tidier answer if a second consumer ever
+// wants that; one wasn't added here because nothing needs it yet.
 const ScrollArea = React.forwardRef<
   React.ElementRef<typeof ScrollAreaPrimitive.Root>,
-  React.ComponentPropsWithoutRef<typeof ScrollAreaPrimitive.Root>
->(({ className, children, ...props }, ref) => (
+  React.ComponentPropsWithoutRef<typeof ScrollAreaPrimitive.Root> & {
+    onViewportScroll?: React.UIEventHandler<HTMLDivElement>;
+  }
+>(({ className, children, onViewportScroll, ...props }, ref) => (
   <ScrollAreaPrimitive.Root
     ref={ref}
     className={cn("relative overflow-hidden", className)}
@@ -18,7 +35,10 @@ const ScrollArea = React.forwardRef<
         against, no matter what width classes its own row/ancestors carry. Forcing that
         Radix-owned wrapper back to `display: block` makes it fill this Viewport's real width
         instead, which is what every consumer of ScrollArea actually wants. */}
-    <ScrollAreaPrimitive.Viewport className="h-full w-full rounded-[inherit] [&>div]:block!">
+    <ScrollAreaPrimitive.Viewport
+      className="h-full w-full rounded-[inherit] [&>div]:block!"
+      onScroll={onViewportScroll}
+    >
       {children}
     </ScrollAreaPrimitive.Viewport>
     <ScrollBar />

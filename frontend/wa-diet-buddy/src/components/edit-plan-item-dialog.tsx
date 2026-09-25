@@ -20,6 +20,8 @@ import {
 import { gramsPerUnitForFood } from "@/lib/unit-conversion";
 import type { ServingSize, UnitWeights } from "@/lib/food-database-mock";
 import type { AddItemPayload } from "@/lib/mealplans-api";
+import { AllergyConflictBadge } from "@/components/allergy-conflict-badge";
+import { getAllergyConflicts } from "@/lib/allergy-matching";
 
 // The item being edited — a subset of FoodItem's prompt-48 fields (meal-plans-mock.ts), enough
 // to pre-fill this dialog without a second fetch.
@@ -37,6 +39,9 @@ export interface EditableItem {
   realMeasures?: ServingSize[];
   unitWeights?: UnitWeights;
   commonServings?: ServingSize[];
+  // Curated allergen tags for this item's food/recipe (prompt-104) — carried so the same
+  // conflict warning the picker showed when adding is still visible when editing.
+  allergens?: string[];
 }
 
 // In-place edit for an already-added meal plan (or template) item's amount (prompt-48) — reuses
@@ -48,10 +53,13 @@ export function EditPlanItemDialog({
   item,
   onOpenChange,
   onSave,
+  clientAllergies = [],
 }: {
   item: EditableItem | null;
   onOpenChange: (open: boolean) => void;
   onSave: (data: Partial<AddItemPayload>) => Promise<void>;
+  // See PlanItemPicker's prop of the same name — advisory only, empty means no warnings.
+  clientAllergies?: string[];
 }) {
   const [option, setOption] = useState("g");
   const [count, setCount] = useState<number | "">(0);
@@ -117,6 +125,11 @@ export function EditPlanItemDialog({
           <DialogTitle className="text-base truncate">Edit "{item.name}"</DialogTitle>
         </DialogHeader>
         <div className="px-5 py-4 space-y-3">
+          {/* Advisory (prompt-104). Shown on edit as well as on add, because an item can be
+              placed before a client's allergy is recorded — or the allergy added afterwards —
+              and this dialog is the one place the dietitian returns to an existing item.
+              Never disables saving. */}
+          <AllergyConflictBadge conflicts={getAllergyConflicts(clientAllergies, item.allergens)} />
           <Label className="text-xs uppercase tracking-wide text-muted-foreground">Amount</Label>
           {item.itemType === "food" ? (
             <div className="flex items-center gap-2">

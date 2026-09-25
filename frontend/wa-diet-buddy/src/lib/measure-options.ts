@@ -286,6 +286,59 @@ export function formatSavedGenericUnitAmount(
   return equivalent ? `${count} ${unit} ${equivalent}` : null;
 }
 
+// The per-serving gram weight of a saved recipe row, as a NUMBER (prompt-114) — for callers
+// that need to compute with it rather than print formatSavedGenericUnitAmount's display string.
+//
+// Deliberately NOT `quantity / servings`. `quantity` is only a gram amount when the dietitian
+// picked a named measure ("3 pitted dates") — resolveMeasure normalises those to unit="g"
+// before storing. A generic-unit row stores a COUNT ("0.25 cup"), whose weight depends on the
+// food, which is exactly why computeRecipeMacros resolves it through gramsPerUnitForFood
+// instead of reading quantity directly. Treating a count as grams would understate a cup of
+// flour by ~120x.
+//
+// Returns null on the SAME fail-safe as formatSavedGenericUnitAmount above: a density unit with
+// no real per-food weight would resolve only through the flat constant (cup = 240 g for every
+// food alike), and showing "60 g" for a quarter-cup of oats — really ~20 g — states a weight
+// this food's data does not support. Callers must render nothing for null, never 0.
+export function gramsPerServingForSavedItem(
+  item: {
+    type?: "ingredient" | "section";
+    measureLabel?: string | null;
+    quantity?: number | null;
+    unit?: string | null;
+  },
+  food: SavedItemFood | null | undefined,
+  servings: number,
+): number | null {
+  if (item.type === "section") return null; // a heading has no weight
+  const qty = item.quantity;
+  if (typeof qty !== "number" || !(qty > 0)) return null; // "salt to taste" has no quantity
+  const divisor = servings > 0 ? servings : 1;
+
+  // Covers plain-gram rows AND every measureLabel row, since those are always stored as unit="g"
+  // with quantity already resolved to grams (see formatSavedMeasureAmount's own guard).
+  const unit = item.unit || "g";
+  if (unit === "g") return qty / divisor;
+
+  const unitWeights = food
+    ? {
+        cup: food.gramsPerCup ?? null,
+        tbsp: food.gramsPerTbsp ?? null,
+        tsp: food.gramsPerTsp ?? null,
+        piece: food.gramsPerPiece ?? null,
+        ml: food.gramsPerMl ?? null,
+      }
+    : undefined;
+  const portions = food?.portions?.map((p) => ({ label: p.description, grams: p.grams }));
+
+  const real = realGramsPerUnit(food?.commonServings, unitWeights, unit, portions);
+  if (isDensityUnit(unit) && real == null) return null;
+
+  const grams =
+    qty * (real ?? gramsPerUnitForFood(food?.commonServings, unitWeights, unit, portions));
+  return grams / divisor;
+}
+
 // Reverse direction of the above — given a stored item's measureDescription/measureCount (or
 // their absence) and the food's CURRENT real measures, decides what an edit UI should show
 // pre-selected: the exact real measure if its description still matches one of the food's

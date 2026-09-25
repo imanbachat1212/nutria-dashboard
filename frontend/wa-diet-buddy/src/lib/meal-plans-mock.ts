@@ -98,11 +98,19 @@ export interface FoodItem {
   realMeasures?: ServingSize[];
   unitWeights?: UnitWeights;
   commonServings?: ServingSize[];
+  // Curated allergen tags for this item's underlying food or recipe (prompt-104), used to warn
+  // when they intersect the client's recorded allergies — see lib/allergy-matching.ts. Undefined
+  // on mock demo data and on any response predating populatePlan's projection change.
+  allergens?: string[];
 }
 
 export interface MealEntry {
   id: string;
-  slot: MealSlot;
+  // A plain string, not the MealSlot union (prompt-111): `slot` is a free-form String
+  // server-side (meal-plan.model.js), and a plan can carry custom slots beyond the 5 defaults.
+  // MealSlot is still the vocabulary for the 5 built-ins — SLOT_META is keyed by it, and every
+  // lookup of it here is already written as SLOT_META[slot as MealSlot]?.x ?? fallback.
+  slot: string;
   title: string;
   time: string; // "08:00"
   items: FoodItem[];
@@ -215,6 +223,66 @@ export function sumMicros(items: { micros?: Micros }[]): Micros {
     result[field] = seen[field] ? Math.round(totals[field] * 100) / 100 : null;
   }
   return result;
+}
+
+// ---------- Nutrient contributions (prompt-98) ----------
+
+// "Which item did this number come from" for a slot's or a day's items — the meal-plan
+// counterpart of the backend's per-ingredient contributionsFor (lib/calc/nutrientContributions.js),
+// and deliberately the same rules: merge by name, drop null/zero, one decimal, highest first.
+//
+// `field` is the BACKEND's nutrient key so one key works across both levels of the hover —
+// "calories", which maps onto the UI's Macros.kcal here.
+const MACRO_KEY_BY_FIELD: Record<string, keyof Macros> = {
+  calories: "kcal",
+  protein: "protein",
+  carbs: "carbs",
+  fat: "fat",
+  fiber: "fiber",
+};
+
+export interface ItemContribution {
+  name: string;
+  pct: number;
+  // Set only for a recipe-type item, so the hover can open it one level deeper into that
+  // recipe's own ingredients. A food item has none — it's already the whole contributor.
+  mealId?: string | null;
+}
+
+export function itemContributions(items: FoodItem[], field: string): ItemContribution[] {
+  const macroKey = MACRO_KEY_BY_FIELD[field];
+  const merged = new Map<string, { value: number; mealId: string | null; conflict: boolean }>();
+
+  for (const item of items) {
+    const value = macroKey ? item.macros?.[macroKey] : item.micros?.[field];
+    // null = this item reports no data for the nutrient; 0 = it reports none of it. Neither is
+    // a contributor.
+    if (value == null || value === 0) continue;
+    const id = item.mealId ?? null;
+    const prev = merged.get(item.name);
+    merged.set(item.name, {
+      value: (prev?.value ?? 0) + value,
+      mealId: prev ? prev.mealId : id,
+      // Two items sharing a name but not a recipe (or one a recipe and one a food) can't drill
+      // into a single answer, so the merged row drills into neither rather than picking one.
+      conflict: prev ? prev.conflict || prev.mealId !== id : false,
+    });
+  }
+  if (!merged.size) return [];
+
+  // Exact sum of the contributors, not the separately-rounded slot/day total — see the note on
+  // contributionsFor's `total` parameter: dividing by a rounded figure makes the shares stop
+  // adding to 100, badly so on small totals.
+  const denominator = [...merged.values()].reduce((a, b) => a + b.value, 0);
+  if (!(denominator > 0)) return [];
+
+  return [...merged.entries()]
+    .map(([name, { value, mealId, conflict }]) => ({
+      name,
+      pct: Math.round((value / denominator) * 1000) / 10,
+      mealId: conflict ? null : mealId,
+    }))
+    .sort((a, b) => b.pct - a.pct);
 }
 
 export function mealMicros(m: MealEntry): Micros {

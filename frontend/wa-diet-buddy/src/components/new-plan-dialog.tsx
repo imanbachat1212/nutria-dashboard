@@ -9,7 +9,6 @@ import {
   Wheat,
   Droplet,
   Target,
-  CalendarDays,
   Layers,
   Search,
 } from "lucide-react";
@@ -70,7 +69,7 @@ const GOAL_META: Record<
   },
 };
 
-const STEPS = ["Client", "Goal & duration", "Macro targets", "Starter", "Review"] as const;
+const STEPS = ["Client", "Macro targets", "Starter", "Review"] as const;
 
 interface NewPlanDialogProps {
   open: boolean;
@@ -80,12 +79,7 @@ interface NewPlanDialogProps {
   initialClient?: ClientRecord;
 }
 
-export function NewPlanDialog({
-  open,
-  onOpenChange,
-  onCreate,
-  initialClient,
-}: NewPlanDialogProps) {
+export function NewPlanDialog({ open, onOpenChange, onCreate, initialClient }: NewPlanDialogProps) {
   const [step, setStep] = useState(0);
   const [search, setSearch] = useState("");
   const [clientId, setClientId] = useState<string | null>(null);
@@ -143,22 +137,23 @@ export function NewPlanDialog({
     return allClients.find((c: ClientRecord) => c.id === clientId);
   }, [clientId, allClients, initialClient]);
 
-  // Pre-seed the picker with the client this dialog was opened for, and skip straight
-  // to goal/duration — the user is already on that client's page.
+  // Pre-seed the picker with the client this dialog was opened for, deriving goal from the
+  // client's own record (already captured at client creation — no need to ask again here),
+  // and skip straight to macro targets — the user is already on that client's page.
   useEffect(() => {
     if (!open || !initialClient) return;
     setClientId(initialClient.id);
-    setPlanName(`${GOAL_META[goal].label} · ${initialClient.name.split(" ")[0]}`);
+    const g = initialClient.goal.type;
+    setGoal(g);
+    setPlanName(`${GOAL_META[g].label} · ${initialClient.name.split(" ")[0]}`);
     const k = Math.max(
       1200,
-      Math.round(
-        (initialClient.bmr * initialClient.activityFactor + GOAL_META[goal].kcalDelta) / 10,
-      ) * 10,
+      Math.round((initialClient.bmr * initialClient.activityFactor + GOAL_META[g].kcalDelta) / 10) *
+        10,
     );
-    applySuggestedMacros(k, goal);
+    applySuggestedMacros(k, g);
     setStep(1);
-    // Only re-seed when the dialog is (re)opened for this client, not on every goal change.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Only re-seed when the dialog is (re)opened for this client.
   }, [open, initialClient]);
 
   const suggestedKcal = useMemo(() => {
@@ -176,11 +171,10 @@ export function NewPlanDialog({
 
   const canNext = useMemo(() => {
     if (step === 0) return !!clientId && planName.trim().length > 0;
-    if (step === 1) return weeks > 0;
-    if (step === 2) return macrosBalanced;
-    if (step === 3) return starter === "blank" || (starter === "template" && !!templateId);
+    if (step === 1) return macrosBalanced;
+    if (step === 2) return starter === "blank" || (starter === "template" && !!templateId);
     return true;
-  }, [step, clientId, planName, weeks, macrosBalanced, starter, templateId]);
+  }, [step, clientId, planName, macrosBalanced, starter, templateId]);
 
   function reset() {
     setStep(0);
@@ -230,21 +224,21 @@ export function NewPlanDialog({
     }
   }
 
-  // Auto-fill plan name + macros when client picked
+  // Auto-fill goal + plan name + macros when client picked — goal is derived from the
+  // client's own record (captured at client creation), not a separate picker in this wizard.
   function pickClient(id: string) {
     setClientId(id);
     const c = allClients.find((x: ClientRecord) => x.id === id);
     if (c) {
+      const g = c.goal.type;
+      setGoal(g);
       if (!planName) {
-        setPlanName(`${GOAL_META[goal].label} · ${c.name.split(" ")[0]}`);
+        setPlanName(`${GOAL_META[g].label} · ${c.name.split(" ")[0]}`);
       }
       const k =
         kcalOverride ??
-        Math.max(
-          1200,
-          Math.round((c.bmr * c.activityFactor + GOAL_META[goal].kcalDelta) / 10) * 10,
-        );
-      applySuggestedMacros(k, goal);
+        Math.max(1200, Math.round((c.bmr * c.activityFactor + GOAL_META[g].kcalDelta) / 10) * 10);
+      applySuggestedMacros(k, g);
     }
   }
 
@@ -273,7 +267,18 @@ export function NewPlanDialog({
         if (!o) setTimeout(reset, 200);
       }}
     >
-      <DialogContent className="max-w-3xl p-0 gap-0 overflow-hidden">
+      <DialogContent
+        className="max-w-3xl p-0 gap-0 overflow-hidden"
+        // This is a 4-step form (client, macro targets, starter, review) — goal & duration
+        // used to be their own step but are now derived from the client's record / a silent
+        // default, per the dietitian's request not to re-ask info already captured elsewhere.
+        // Radix's default behavior closes the dialog on any click outside it, which silently
+        // threw away everything a dietitian had filled in from one stray click on the page
+        // behind it. Escape is left alone (a key press is a deliberate close, not an accidental
+        // one) and the corner X / Back button both still work — this only stops the
+        // click-anywhere-outside path.
+        onPointerDownOutside={(e) => e.preventDefault()}
+      >
         <DialogHeader className="px-6 pt-5 pb-3 border-b">
           <div className="flex items-center justify-between gap-4">
             <div>
@@ -358,7 +363,11 @@ export function NewPlanDialog({
                             </div>
                           </div>
                           <Badge variant="outline" className="text-[10px]">
-                            {c.serviceType.map((s) => ({ diet: "Diet", gym: "Gym", classes: "Classes" }[s] ?? s)).join(" + ") || "—"}
+                            {c.serviceType
+                              .map(
+                                (s) => ({ diet: "Diet", gym: "Gym", classes: "Classes" })[s] ?? s,
+                              )
+                              .join(" + ") || "—"}
                           </Badge>
                           {selected && <Check className="h-4 w-4 text-primary" />}
                         </button>
@@ -376,97 +385,6 @@ export function NewPlanDialog({
           )}
 
           {step === 1 && (
-            <div className="space-y-5">
-              <div>
-                <Label className="text-xs uppercase tracking-wide text-muted-foreground">
-                  Goal
-                </Label>
-                <div className="grid grid-cols-2 gap-2 mt-2">
-                  {(Object.keys(GOAL_META) as Goal[]).map((g) => {
-                    const meta = GOAL_META[g];
-                    const selected = goal === g;
-                    return (
-                      <button
-                        key={g}
-                        onClick={() => {
-                          setGoal(g);
-                          if (client) {
-                            const k = Math.max(
-                              1200,
-                              Math.round(
-                                (client.bmr * client.activityFactor + meta.kcalDelta) / 10,
-                              ) * 10,
-                            );
-                            applySuggestedMacros(kcalOverride ?? k, g);
-                          }
-                        }}
-                        className={cn(
-                          "p-3 rounded-md border text-left transition-colors",
-                          selected
-                            ? "border-primary/40 bg-primary/10"
-                            : "border-border hover:bg-muted/40",
-                        )}
-                      >
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="text-lg">{meta.emoji}</span>
-                          <span className="text-sm font-medium">{meta.label}</span>
-                          {selected && <Check className="h-3.5 w-3.5 text-primary ml-auto" />}
-                        </div>
-                        <div className="text-[11px] text-muted-foreground">{meta.description}</div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <Separator />
-
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <Label className="text-xs uppercase tracking-wide text-muted-foreground">
-                    Duration
-                  </Label>
-                  <span className="text-sm font-medium tabular-nums">
-                    {weeks} week{weeks === 1 ? "" : "s"}
-                  </span>
-                </div>
-                <Slider
-                  value={[weeks]}
-                  onValueChange={([v]) => setWeeks(v)}
-                  min={1}
-                  max={12}
-                  step={1}
-                />
-                <div className="flex justify-between text-[10px] text-muted-foreground mt-1.5">
-                  <span>1w</span>
-                  <span>4w</span>
-                  <span>8w</span>
-                  <span>12w</span>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <InfoTile
-                  icon={CalendarDays}
-                  label="Starts"
-                  value={new Date().toLocaleDateString(undefined, {
-                    month: "short",
-                    day: "numeric",
-                  })}
-                />
-                <InfoTile
-                  icon={CalendarDays}
-                  label="Ends"
-                  value={new Date(Date.now() + weeks * 7 * 86400000).toLocaleDateString(undefined, {
-                    month: "short",
-                    day: "numeric",
-                  })}
-                />
-              </div>
-            </div>
-          )}
-
-          {step === 2 && (
             <div className="space-y-5">
               <div className="rounded-md border bg-muted/20 p-3 flex items-start gap-3">
                 <Target className="h-4 w-4 text-primary mt-0.5" />
@@ -555,7 +473,7 @@ export function NewPlanDialog({
             </div>
           )}
 
-          {step === 3 && (
+          {step === 2 && (
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-2">
                 <StarterCard
@@ -618,7 +536,7 @@ export function NewPlanDialog({
             </div>
           )}
 
-          {step === 4 && (
+          {step === 3 && (
             <div className="space-y-4">
               <div className="rounded-md border p-4 bg-muted/10 space-y-3">
                 <div className="flex items-center gap-3">
@@ -688,28 +606,6 @@ export function NewPlanDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function InfoTile({
-  icon: Icon,
-  label,
-  value,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="rounded-md border p-3 flex items-center gap-3">
-      <div className="h-8 w-8 rounded-md bg-muted/40 grid place-items-center">
-        <Icon className="h-4 w-4 text-muted-foreground" />
-      </div>
-      <div>
-        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
-        <div className="text-sm font-medium">{value}</div>
-      </div>
-    </div>
   );
 }
 

@@ -224,6 +224,26 @@ export async function updateSlotTime(planId, slot, time) {
   return populatePlan(plan._id);
 }
 
+// Removes a slot's registered time (prompt-111). For a custom slot that is the whole of its
+// existence on the plan — slotTimes is the registry the frontend's buildDays reads to decide
+// which slots a plan has — so this is what "remove this slot" means. Guarded rather than blind:
+// buildDays also derives slots from the items that sit in them, so dropping the time entry
+// while items remain would leave the slot still rendered but with no configured time, a
+// half-removed state the UI can't express. The frontend disables the action in that case; this
+// is the same rule enforced where it can't be bypassed.
+export async function deleteSlotTime(planId, slot) {
+  const plan = await MealPlan.findById(planId);
+  if (!plan) throw new ApiError(404, "Meal plan not found");
+  if (!plan.slotTimes.has(slot)) throw new ApiError(404, `No time set for slot "${slot}"`);
+
+  const used = plan.items.some((i) => i.slot === slot);
+  if (used) throw new ApiError(409, `Slot "${slot}" still has items — remove them first`);
+
+  plan.slotTimes.delete(slot);
+  await plan.save();
+  return populatePlan(plan._id);
+}
+
 export async function deletePlan(id) {
   const plan = await MealPlan.findByIdAndDelete(id);
   if (!plan) throw new ApiError(404, "Meal plan not found");
@@ -292,9 +312,12 @@ async function populatePlan(id) {
       // portions (prompt-45's real per-food measures) added for prompt-48's in-place item
       // editor — MeasureSelect needs a food's real measures to let the dietitian switch to a
       // different one when editing an already-added item, not just when first adding it.
-      "name servingSize servingUnit gramsPerCup gramsPerTbsp gramsPerTsp gramsPerPiece gramsPerMl commonServings portions",
+      // allergens (prompt-104) so an already-placed item can be cross-referenced against the
+      // client's recorded allergies without a second fetch per row. Curated tags stored on the
+      // document — see the vocabulary note in frontend lib/allergy-matching.ts.
+      "name servingSize servingUnit gramsPerCup gramsPerTbsp gramsPerTsp gramsPerPiece gramsPerMl commonServings portions allergens",
     )
-    .populate("items.meal", "name servings")
+    .populate("items.meal", "name servings allergens")
     .lean();
 }
 

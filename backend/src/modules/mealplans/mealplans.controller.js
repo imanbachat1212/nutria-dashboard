@@ -51,6 +51,11 @@ export const updateSlotTime = asyncHandler(async (req, res) => {
   res.json({ data: plan });
 });
 
+export const deleteSlotTime = asyncHandler(async (req, res) => {
+  const plan = await svc.deleteSlotTime(req.params.id, req.params.slot);
+  res.json({ data: plan });
+});
+
 export const pdfExport = asyncHandler(async (req, res) => {
   const { pdf, name } = await svc.exportPlanToPdf(req.params.id);
   const safe = name.replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "_") || "meal-plan";

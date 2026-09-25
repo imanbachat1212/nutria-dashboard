@@ -42,10 +42,13 @@ interface APIPlanItem {
         // Real per-food measures (prompt-45), added to this populate in prompt-48 so the
         // in-place item editor can offer the exact same MeasureSelect options the add flow does.
         portions?: { description: string; grams: number }[];
+        // Curated allergen tags (prompt-104), added to populatePlan's projection so a placed
+        // item can be checked against the client's allergies without a per-row fetch.
+        allergens?: string[];
       }
     | string
     | null;
-  meal?: { _id: string; name: string } | string | null;
+  meal?: { _id: string; name: string; allergens?: string[] } | string | null;
   name: string;
   quantity: number;
   unit: string;
@@ -167,7 +170,9 @@ interface APIListResult {
 // ── Helpers ──
 
 const DAY_KEYS: DayKey[] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
-const DEFAULT_SLOTS: MealSlot[] = [
+// Exported (prompt-111) so meal-plans.tsx can tell a built-in slot from a custom one — the
+// 5 built-ins are never removable, custom ones are.
+export const DEFAULT_SLOTS: MealSlot[] = [
   "breakfast",
   "snack-am",
   "lunch",
@@ -190,7 +195,11 @@ function initials(name: string): string {
     .slice(0, 2);
 }
 
-function relativeTime(iso: string): string {
+// Exported (prompt-116) so the Food Database and Meal Library "last used" columns format their
+// timestamps through the SAME implementation this file already used, rather than a third copy
+// alongside journal-api.ts's timeAgo. Callers render "—" for a null/absent timestamp themselves;
+// this returns "" for one, which is not the same statement.
+export function relativeTime(iso: string): string {
   if (!iso) return "";
   const diffMs = Date.now() - new Date(iso).getTime();
   const mins = Math.round(diffMs / 60000);
@@ -245,20 +254,97 @@ function buildItemView(i: APIPlanItem) {
         }
       : undefined,
     commonServings: food?.commonServings,
+    // From whichever side this item is — a food item's own tags, or the recipe's (prompt-104).
+    // Left undefined rather than defaulted to []: "this plan predates the populate" and "this
+    // item genuinely has no allergen tags" are different, and only the latter is a real answer.
+    allergens:
+      food?.allergens ?? (i.meal && typeof i.meal === "object" ? i.meal.allergens : undefined),
   };
 }
 
+// Which slots this plan has (prompt-111). Was hardcoded to DEFAULT_SLOTS, which silently
+// dropped any item whose slot wasn't one of the 5 — present in Mongo, invisible in the UI,
+// since `slot` is a free String server-side. Two sources now, unioned:
+//
+//   1. plan.slotTimes keys — the registry a custom slot is created in ("Add custom meal slot"
+//      writes one via PATCH /slot-time). This is what makes a brand-new custom slot show up
+//      EMPTY on every day, the same way the 5 built-ins do.
+//   2. the slots items actually sit in — the safety net. An item can outlive its slotTimes
+//      entry (a plan edited outside this UI, or a future partial delete), and rendering it
+//      is always better than hiding it.
+//
+// Every slot on the day, built-in and custom alike, ordered by the time it actually displays
+// (prompt-112). A custom slot at 11:00 lands between AM Snack and Lunch rather than after
+// Dinner. This deliberately applies to the built-ins too: retime Breakfast to 23:00 and it
+// moves to the end of the list, which is the intended behaviour of this change, not a
+// regression — it supersedes prompt-111's defaults-first ordering.
+function planSlots(items: APIPlanItem[], slotTimes?: Record<string, string>): string[] {
+  const builtin = new Set<string>(DEFAULT_SLOTS);
+  const custom = new Set<string>();
+  for (const key of Object.keys(slotTimes ?? {})) if (!builtin.has(key)) custom.add(key);
+  for (const i of items) if (i.slot && !builtin.has(i.slot)) custom.add(i.slot);
+
+  // Canonical pre-sort order, so the tie-break below is deterministic rather than dependent
+  // on Object.keys/Set insertion order: built-ins in their declared order, then customs by
+  // name.
+  const all = [...DEFAULT_SLOTS, ...[...custom].sort()];
+
+  // Decorate-sort-undecorate with an explicit index tie-break, rather than leaning on
+  // Array.prototype.sort's specified stability — two slots sharing a time keep their
+  // canonical order on every render, guaranteed by the comparator itself.
+  return all
+    .map((slot, idx) => ({ slot, idx, time: slotDisplayTime(slot, slotTimes) }))
+    .sort((a, b) => {
+      // Both times are zero-padded 24h "HH:mm" — the PATCH /slot-time regex rejects "9:00",
+      // "0:00", "24:00" and "1130" (verified against the live API), and SLOT_META's
+      // defaultTimes are literals of the same shape. Fixed-width, same alphabet, so a plain
+      // lexicographic compare IS chronological. Not localeCompare: locale collation has no
+      // business deciding clock order.
+      if (a.time && b.time) {
+        if (a.time < b.time) return -1;
+        if (a.time > b.time) return 1;
+        return a.idx - b.idx;
+      }
+      // A slot with no resolvable time at all — unreachable through the UI (the new-slot
+      // dialog requires one), but reachable by direct data edits: an item sitting in a slot
+      // with no slotTimes entry. Sorts after every timed slot, stable among its own kind.
+      if (a.time) return -1;
+      if (b.time) return 1;
+      return a.idx - b.idx;
+    })
+    .map((entry) => entry.slot);
+}
+
+// The one place a slot's effective time is resolved, so ordering and rendering can never
+// disagree about it. null means "no time at all" — distinct from a slot that merely falls
+// back to its built-in default.
+function slotDisplayTime(slot: string, slotTimes?: Record<string, string>): string | null {
+  return slotTimes?.[slot] ?? SLOT_META[slot as MealSlot]?.defaultTime ?? null;
+}
+
 function buildDays(items: APIPlanItem[], slotTimes?: Record<string, string>): DayPlan[] {
+  // Computed once over the WHOLE item list, not per day, so every day shows the same slots —
+  // matching how slotTimes is already plan-wide ("Applies to this slot on every day in the
+  // plan"). A custom slot used only on Tuesday still appears, empty, on Monday.
+  const slots = planSlots(items, slotTimes);
+
   return DAY_KEYS.map((dayKey, dayIdx) => {
     const dayItems = items.filter((i) => i.day === dayIdx);
 
-    const meals: MealEntry[] = DEFAULT_SLOTS.map((slot, slotIdx) => {
+    const meals: MealEntry[] = slots.map((slot, slotIdx) => {
       const slotItems = dayItems.filter((i) => i.slot === slot);
+      const meta = SLOT_META[slot as MealSlot];
       return {
         id: `${dayKey}-${slotIdx}-${slot}`,
         slot,
-        title: SLOT_META[slot].label,
-        time: slotTimes?.[slot] ?? SLOT_META[slot].defaultTime,
+        // For a custom slot the name the dietitian typed IS the label — there's no separate
+        // display name to look up, which is exactly what every SLOT_META[...]?.label ?? slot
+        // fallback in the render layer was already written to expect.
+        title: meta?.label ?? slot,
+        // "--:--" only reachable via source 2 (an item-only slot with no registry entry);
+        // anything created through the UI is required to carry a time. Same resolver the
+        // sort above uses, so what's displayed is exactly what was ordered on.
+        time: slotDisplayTime(slot, slotTimes) ?? "--:--",
         items: slotItems.map(buildItemView),
       };
     });
@@ -444,6 +530,17 @@ export async function updateSlotTime(
   data: { slot: string; time: string },
 ): Promise<MealPlan> {
   const raw = await api.patch<APIPlan>(`/api/mealplans/${planId}/slot-time`, data);
+  return toPlan(raw);
+}
+
+// Removes a custom slot from the plan by dropping its slotTimes entry (prompt-111). The slot
+// travels in the path, so it's encoded — a name like "Pre-workout snack" stays one segment.
+// The server refuses (409) while any day still has items in the slot; the UI disables the
+// action in that case, so a 409 here means the two views of the plan had drifted apart.
+export async function deleteSlotTime(planId: string, slot: string): Promise<MealPlan> {
+  const raw = await api.delete<APIPlan>(
+    `/api/mealplans/${planId}/slot-time/${encodeURIComponent(slot)}`,
+  );
   return toPlan(raw);
 }
 

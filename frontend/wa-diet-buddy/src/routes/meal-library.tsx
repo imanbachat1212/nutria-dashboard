@@ -52,16 +52,32 @@ import {
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { MicronutrientPanel } from "@/components/micronutrient-panel";
+import { ContributionHover } from "@/components/nutrient-contributions";
 import {
   CATEGORY_META,
-  ALLERGEN_LABEL,
+  type NutrientContribution,
   type Recipe,
   type RecipeCategory,
   type DietTag,
 } from "@/lib/meal-library-mock";
-import { fetchMeals, deleteMeal, duplicateMeal } from "@/lib/meals-api";
+import {
+  NUTRIENT_CLAIM_LABEL,
+  OTHER_NUTRIENT_FIELDS,
+  type NutrientClaimLevel,
+} from "@/lib/food-database-mock";
+import { fetchMeals, deleteMeal, duplicateMeal, getMeal } from "@/lib/meals-api";
 import { fetchDietaryPreferences } from "@/lib/settings-api";
 import { NewRecipeDialog } from "@/components/new-recipe-dialog";
+
+// "Other" nutrient key (as OTHER_NUTRIENT_FIELDS and the backend's Food fields name it) -> this
+// recipe's own per-serving figure (prompt-100). Written out rather than computed as
+// r[`${key}PerServing`], so TypeScript actually checks each field exists — a stringly-typed
+// lookup would return undefined for a typo and silently filter everything out instead of
+// failing the build. Add a nutrient here when one is added to OTHER_NUTRIENT_FIELDS.
+const OTHER_PER_SERVING: Record<string, (r: Recipe) => number | null | undefined> = {
+  oxalate: (r) => r.oxalatePerServing,
+  phytate: (r) => r.phytatePerServing,
+};
 
 export const Route = createFileRoute("/meal-library")({
   head: () => ({
@@ -91,6 +107,16 @@ function MealLibraryPage() {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<RecipeCategory | "all">("all");
   const [activeDiets, setActiveDiets] = useState<DietTag[]>([]);
+  // FDA %DV nutrient content claim filter (same High/Good Source system as the Food Database
+  // page), applied to this recipe's own per-serving micronutrient panel — computed server-side
+  // from its ingredients (see Recipe.micronutrients / meals.service.js withMicronutrients).
+  const [claimNutrient, setClaimNutrient] = useState<string>("");
+  const [claimLevel, setClaimLevel] = useState<NutrientClaimLevel | "">("");
+  // "Other"-group MAXIMUM per serving in mg (prompt-99 for oxalate, generalized to a nutrient
+  // picker in prompt-100) — its own pair of controls, not a claim level, since neither nutrient
+  // has an FDA Daily Value to tier against. "" = off on either half; both are needed to filter.
+  const [otherNutrient, setOtherNutrient] = useState<string>("");
+  const [maxOther, setMaxOther] = useState<string>("");
   const [favOnly, setFavOnly] = useState(false);
   const [selected, setSelected] = useState<Recipe | null>(null);
   const [newOpen, setNewOpen] = useState(false);
@@ -155,9 +181,26 @@ function MealLibraryPage() {
     return allMeals.filter((r) => {
       if (favOnly && !r.isFavorite) return false;
       if (activeDiets.length && !activeDiets.every((d) => r.diets.includes(d))) return false;
+      // Nutrient claim: match a recipe whose own per-serving panel crosses the claim threshold
+      // for the chosen nutrient. "Any level" (claimLevel === "") matches either High or Good
+      // Source, mirroring the Food Database page's same filter.
+      if (claimNutrient) {
+        const row = r.micronutrients?.find((m) => m.nutrient === claimNutrient);
+        if (!row?.level) return false;
+        if (claimLevel && row.level !== claimLevel) return false;
+      }
+      // "Other" nutrient ceiling, per serving. A null (no ingredient in the recipe reports the
+      // chosen nutrient) EXCLUDES rather than passes: "we have no phytate data for this" is not
+      // the same claim as "this is low in phytate", and a filter meant to find safe recipes must
+      // not quietly hand back unverified ones. 0 is a real measured value and passes normally.
+      if (otherNutrient && maxOther) {
+        const perServing = OTHER_PER_SERVING[otherNutrient]?.(r);
+        if (perServing == null) return false;
+        if (perServing > Number(maxOther)) return false;
+      }
       return true;
     });
-  }, [allMeals, activeDiets, favOnly]);
+  }, [allMeals, activeDiets, favOnly, claimNutrient, claimLevel, otherNutrient, maxOther]);
 
   const stats = useMemo(() => {
     const total = allMeals.length;
@@ -214,9 +257,131 @@ function MealLibraryPage() {
               );
             })}
           </div>
-          {activeDiets.length > 0 && (
+
+          <Separator className="my-3" />
+
+          {/* FDA %DV nutrient content claim filter — "High Source" is >=20% DV per serving,
+              "Good Source" is 10-19% (21 CFR 101.54), exactly like the Food Database page's
+              same filter. Here it reads a recipe's own per-serving micronutrient panel, which
+              the server computes from that recipe's ingredients (Recipe.micronutrients). Only
+              nutrients with an FDA Daily Value that this app stores are listed. */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+              Nutrient claim
+            </span>
+            <select
+              value={claimNutrient}
+              onChange={(e) => setClaimNutrient(e.target.value)}
+              className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+            >
+              <option value="">Any nutrient</option>
+              {Object.entries(NUTRIENT_CLAIM_LABEL)
+                .sort((a, b) => a[1].localeCompare(b[1]))
+                .map(([key, label]) => (
+                  <option key={key} value={key}>
+                    {label}
+                  </option>
+                ))}
+            </select>
+            <select
+              value={claimLevel}
+              onChange={(e) => setClaimLevel(e.target.value as NutrientClaimLevel | "")}
+              disabled={!claimNutrient}
+              className="h-8 rounded-md border border-input bg-background px-2 text-xs disabled:opacity-50"
+            >
+              <option value="">Any level</option>
+              <option value="high">High Source (&ge;20% DV)</option>
+              <option value="good">Good Source (10-19% DV)</option>
+            </select>
+            {claimNutrient && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => {
+                  setClaimNutrient("");
+                  setClaimLevel("");
+                }}
+              >
+                <X className="size-3.5" />
+                Clear
+              </Button>
+            )}
+
+            {/* "Other" nutrients (prompt-99 for oxalate, generalized in prompt-100). Beside the
+                claim filter but deliberately not part of it: neither nutrient has an FDA Daily
+                Value, so neither has a High/Good Source tier and this must not read as a claim
+                — the same reason the Food Database gives omega-3 its own numeric control
+                instead of forcing it into the claim dropdown.
+
+                Shaped like the Nutrient claim pair above — pick the nutrient, then the
+                qualifier — rather than one hardcoded select per nutrient, so a third "Other"
+                nutrient needs no new control. Options come from OTHER_NUTRIENT_FIELDS, the same
+                list the Food Database's picker and the food detail panel use.
+
+                A MAXIMUM for both: the client doesn't care about direction for phytate, so it
+                keeps oxalate's "find me low-X" framing and the control reads one way.
+
+                PER SERVING here, where the Food Database's version is per 100 g. That
+                difference is intentional, not a bug: every recipe figure on this page is per
+                serving (Recipe.macros, the micronutrient panel, the drawer's tiles), while the
+                Food Database shows a food's raw per-100 g panel. Each select states its own
+                basis so neither can be misread as the other.
+
+                Thresholds are placeholder round numbers, NOT sourced clinical cutoffs. */}
+            <span className="mx-1 hidden h-5 w-px bg-border sm:block" />
+            <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+              Other
+            </span>
+            <select
+              value={otherNutrient}
+              onChange={(e) => setOtherNutrient(e.target.value)}
+              className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+            >
+              <option value="">Any nutrient</option>
+              {OTHER_NUTRIENT_FIELDS.map((f) => (
+                <option key={f.key} value={f.key}>
+                  {f.label}
+                </option>
+              ))}
+            </select>
+            <select
+              value={maxOther}
+              onChange={(e) => setMaxOther(e.target.value)}
+              disabled={!otherNutrient}
+              className="h-8 rounded-md border border-input bg-background px-2 text-xs disabled:opacity-50"
+            >
+              <option value="">Any amount</option>
+              <option value="10">&le; 10 mg / serving</option>
+              <option value="25">&le; 25 mg / serving</option>
+              <option value="50">&le; 50 mg / serving</option>
+              <option value="100">&le; 100 mg / serving</option>
+            </select>
+            {otherNutrient && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => {
+                  setOtherNutrient("");
+                  setMaxOther("");
+                }}
+              >
+                <X className="size-3.5" />
+                Clear
+              </Button>
+            )}
+          </div>
+
+          {(activeDiets.length > 0 || claimNutrient || otherNutrient) && (
             <button
-              onClick={() => setActiveDiets([])}
+              onClick={() => {
+                setActiveDiets([]);
+                setClaimNutrient("");
+                setClaimLevel("");
+                setOtherNutrient("");
+                setMaxOther("");
+              }}
               className="mt-3 text-xs text-muted-foreground hover:text-foreground"
             >
               Clear filters
@@ -289,6 +454,10 @@ function MealLibraryPage() {
           if (!o) setEditingId(null);
         }}
         editId={editingId}
+        // Whatever category tab the dietitian is currently filtering by — "New recipe" from
+        // the Snack tab starts the form on Snack instead of always defaulting to Lunch. "All"
+        // has no single category to hand down, so the dialog falls back to its own default.
+        initialCategory={category !== "all" ? category : undefined}
       />
 
       <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
@@ -431,7 +600,11 @@ function RecipeCard({ recipe, onOpen }: { recipe: Recipe; onOpen: () => void }) 
         </div>
 
         <div className="flex items-center justify-between pt-1 border-t text-[11px] text-muted-foreground">
-          <span>Used in {recipe.usedInPlans} plans</span>
+          {/* Pluralised (prompt-116): this count was hardcoded to 0 until now, so
+              "1 plans" was never reachable. Same form getFoodUsages uses backend-side. */}
+          <span>
+            Used in {recipe.usedInPlans} plan{recipe.usedInPlans === 1 ? "" : "s"}
+          </span>
           <span>{recipe.lastUsed}</span>
         </div>
       </div>
@@ -478,6 +651,23 @@ function RecipeDrawer({
   useEffect(() => {
     setActiveIndex(0);
   }, [recipe?.id]);
+
+  // `recipe` comes from the LIST query, and listMeals deliberately skips the per-recipe
+  // ingredient lookup that the nutrient breakdown needs (prompt-98) — a page of cards would
+  // pay for it once per card and never show it. So the drawer fetches the single recipe when
+  // it opens: one request, only when someone is actually looking, and it shares the ["meal",
+  // id] cache with the edit dialog and with the Meal Plan sheet's level-2 drill-down.
+  const { data: detail } = useQuery({
+    queryKey: ["meal", recipe?.id],
+    queryFn: () => getMeal(recipe!.id),
+    enabled: !!recipe,
+  });
+  const macroContributions = detail?.macroContributions;
+  // Micronutrient rows still come from the list response (they're cheap); only the breakdown
+  // is merged in from the detail fetch, matched by nutrient key.
+  const contributionsByNutrient = new Map(
+    (detail?.micronutrients ?? []).map((m) => [m.nutrient, m.contributions]),
+  );
 
   const photos = recipe?.photos ?? [];
   const activePhotoUrl = photos[activeIndex]?.url ?? recipe?.photoUrl;
@@ -598,30 +788,48 @@ function RecipeDrawer({
                   Per serving
                 </div>
                 <div className="grid grid-cols-5 gap-3">
+                  {/* `field` is the backend's key (calories, not kcal) so the hover can look
+                      the same nutrient up one level deeper. macroContributions is undefined on
+                      a recipe that came from the list endpoint, which just means no hover. */}
                   <MacroStat
                     label="Calories"
                     value={recipe.macros.kcal}
                     unit="kcal"
                     tone="text-amber-600"
+                    field="calories"
+                    contributions={macroContributions?.calories}
                   />
                   <MacroStat
                     label="Protein"
                     value={recipe.macros.protein}
                     unit="g"
                     tone="text-rose-600"
+                    field="protein"
+                    contributions={macroContributions?.protein}
                   />
                   <MacroStat
                     label="Carbs"
                     value={recipe.macros.carbs}
                     unit="g"
                     tone="text-orange-600"
+                    field="carbs"
+                    contributions={macroContributions?.carbs}
                   />
-                  <MacroStat label="Fat" value={recipe.macros.fat} unit="g" tone="text-sky-600" />
+                  <MacroStat
+                    label="Fat"
+                    value={recipe.macros.fat}
+                    unit="g"
+                    tone="text-sky-600"
+                    field="fat"
+                    contributions={macroContributions?.fat}
+                  />
                   <MacroStat
                     label="Fiber"
                     value={recipe.macros.fiber}
                     unit="g"
                     tone="text-emerald-600"
+                    field="fiber"
+                    contributions={macroContributions?.fiber}
                   />
                 </div>
               </Card>
@@ -636,6 +844,7 @@ function RecipeDrawer({
                   unit: r.unit,
                   value: r.value,
                   dv: { pct: r.pct, level: r.level, pctExact: r.pctExact },
+                  contributions: contributionsByNutrient.get(r.nutrient),
                 }))}
               />
 
@@ -667,7 +876,7 @@ function RecipeDrawer({
                         variant="outline"
                         className="text-[11px] border-amber-300 bg-amber-50 text-amber-900"
                       >
-                        {ALLERGEN_LABEL[a]}
+                        {a}
                       </Badge>
                     ))}
                   </div>
@@ -682,15 +891,35 @@ function RecipeDrawer({
                   Ingredients
                 </div>
                 <ul className="space-y-1.5">
-                  {recipe.ingredients.map((i, idx) => (
-                    <li
-                      key={idx}
-                      className="flex items-center justify-between text-sm py-1.5 border-b border-dashed last:border-0"
-                    >
-                      <span>{i.name}</span>
-                      <span className="text-muted-foreground text-xs">{i.amount}</span>
-                    </li>
-                  ))}
+                  {recipe.ingredients.map((i, idx) =>
+                    // A section header (prompt-97) is a divider inside the list, not an
+                    // ingredient: no amount column, and no bottom rule of its own — it sits
+                    // above the rows it introduces rather than reading as one of them. The
+                    // leading pt only applies after the first row, so a recipe that opens with
+                    // a section doesn't start with a gap.
+                    i.type === "section" ? (
+                      <li
+                        key={idx}
+                        className={cn(
+                          // Darker than the "Ingredients" eyebrow directly above it — same
+                          // size and weight would read as a second panel heading rather than
+                          // a divider inside this one.
+                          "text-xs font-semibold text-foreground uppercase tracking-wider",
+                          idx > 0 && "pt-3",
+                        )}
+                      >
+                        {i.name}
+                      </li>
+                    ) : (
+                      <li
+                        key={idx}
+                        className="flex items-center justify-between text-sm py-1.5 border-b border-dashed last:border-0"
+                      >
+                        <span>{i.name}</span>
+                        <span className="text-muted-foreground text-xs">{i.amount}</span>
+                      </li>
+                    ),
+                  )}
                 </ul>
               </div>
 
@@ -728,21 +957,32 @@ function RecipeDrawer({
   );
 }
 
-
 function MacroStat({
   label,
   value,
   unit,
   tone,
+  field,
+  contributions,
 }: {
   label: string;
   value: number;
   unit: string;
   tone: string;
+  // Both optional so this tile still renders unchanged anywhere a breakdown isn't available.
+  field?: string;
+  contributions?: NutrientContribution[];
 }) {
   return (
     <div className="text-center">
-      <div className={cn("text-lg font-display font-semibold", tone)}>{value}</div>
+      <ContributionHover
+        contributions={contributions}
+        field={field ?? ""}
+        label={label}
+        align="center"
+      >
+        <div className={cn("text-lg font-display font-semibold", tone)}>{value}</div>
+      </ContributionHover>
       <div className="text-[10px] text-muted-foreground uppercase">{unit}</div>
       <div className="text-[10px] text-muted-foreground mt-0.5">{label}</div>
     </div>

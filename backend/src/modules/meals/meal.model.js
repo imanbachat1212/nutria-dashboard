@@ -3,6 +3,16 @@ import { imageSchema } from "../../lib/imageSchema.js";
 
 const ingredientSchema = new mongoose.Schema(
   {
+    // What this row IS (prompt-97). A "section" is a titled divider the dietitian inserts
+    // between ingredients ("Batter", "Frosting") so a multi-component recipe reads in groups.
+    // It lives in THIS array rather than a parallel sections structure on purpose: array order
+    // stays the single source of display order, headers and ingredients interleave naturally,
+    // and nothing that already iterates `ingredients` needs new grouping logic. A section row
+    // carries only `name` (its title) — no food/quantity/unit — so computeRecipeMacros skips it
+    // for free through its existing `if (!ing.food) continue`, with no calc changes at all.
+    // Documents written before this field read back as "ingredient" via the default below, so
+    // this is non-breaking and needs no migration.
+    type: { type: String, enum: ["ingredient", "section"], default: "ingredient" },
     food: { type: mongoose.Schema.Types.ObjectId, ref: "Food", default: null },
     name: { type: String, required: true },
     quantity: { type: Number },
@@ -86,6 +96,18 @@ const mealSchema = new mongoose.Schema(
     totalCopper: { type: Number, default: null },
     totalManganese: { type: Number, default: null },
     totalSelenium: { type: Number, default: null },
+    // Food's "Other" group (OTHER_NUTRIENT_FIELDS in food.model.js), totalled for the whole
+    // recipe in mg — oxalate prompt-99, phytate prompt-100. Deliberately NOT part of the
+    // DRI-matched block above and NOT in recipeMacros.js's MICRO_FIELDS: neither has a DRI or
+    // an FDA Daily Value, so neither carries a target, a %DV or a High/Good Source tier —
+    // they're raw amounts a dietitian may want to keep low. Both summed in one pass by
+    // computeRecipeOtherNutrients (lib/calc/nutrientContributions.js).
+    //
+    // Same nullability rule as the micronutrients, tracked per nutrient and independently:
+    // null means no ingredient reported THAT one, 0 means one did and the sum is genuinely
+    // zero. A recipe can have a real oxalate total and a null phytate total.
+    totalOxalate: { type: Number, default: null },
+    totalPhytate: { type: Number, default: null },
     verified: { type: Boolean, default: false },
     notes: { type: String },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },

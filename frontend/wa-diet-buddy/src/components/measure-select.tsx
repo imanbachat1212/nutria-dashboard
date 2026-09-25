@@ -14,6 +14,10 @@ import {
   type RealMeasure,
 } from "@/lib/measure-options";
 
+// The two units where "100" is a normal, expected starting amount (100 g of chicken, 100 ml of
+// milk) — see the onValueChange comment below for why this set matters.
+const BULK_UNITS = new Set(["g", "ml"]);
+
 // One shared measure picker for Meal Library's ingredient picker and Meal Plan's item picker
 // (prompt-45) — dropdown options come from the selected food's real, food-specific portions
 // (e.g. "1 pitted date" -> 7.1g) when available, falling back to the app's generic g/ml/cup/
@@ -59,9 +63,33 @@ export function MeasureSelect({
           const v = e.target.value;
           onCountChange(v === "" ? "" : Math.max(0, Number(v)));
         }}
+        // Selects the existing amount the moment this field gets focus (tabbing in, or
+        // clicking after picking a food) so typing a fresh number replaces "1" outright
+        // instead of landing the cursor after it and appending onto "13". Backspace-to-clear
+        // already worked (onChange above already lets count go "" rather than snapping back
+        // to a minimum) — this is the companion fix for the "click and just type over it"
+        // path, which a plain click doesn't give you for free in a number input.
+        onFocus={(e) => e.currentTarget.select()}
         className={quantityClassName ?? "w-20"}
       />
-      <Select value={selectValue} onValueChange={onOptionChange}>
+      <Select
+        value={selectValue}
+        onValueChange={(newOption) => {
+          // Switching from a bulk unit (g/ml, where "100" is the conventional starting amount)
+          // to a discrete one (tsp, tbsp, cup, oz, piece, or a real per-food measure) otherwise
+          // leaves a stray "100 tsp" behind — 100 was the PREVIOUS unit's sensible default, not
+          // this one's, and nobody means 100 teaspoons of anything. Reset it to 1 (a sensible
+          // default for any of those) so switching units doesn't also force re-typing the
+          // amount by hand. Only fires when the count is still exactly the untouched bulk
+          // default — a dietitian's own already-entered number (45 g, 250 ml, …) is never
+          // silently overwritten. Deliberately one-directional: going back to g/ml is left
+          // alone, since 1 g / 1 ml is a perfectly ordinary amount with nothing to fix.
+          if (BULK_UNITS.has(option) && !BULK_UNITS.has(newOption) && count === 100) {
+            onCountChange(1);
+          }
+          onOptionChange(newOption);
+        }}
+      >
         <SelectTrigger className={unitClassName ?? "w-28"}>
           <SelectValue />
         </SelectTrigger>

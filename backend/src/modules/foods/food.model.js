@@ -152,6 +152,8 @@ const foodSchema = new mongoose.Schema(
     // by usda-import.
     oxalate: { type: Number, default: null },
     phytate: { type: Number, default: null },
+    // ^ The two fields above are the "Other" group, and OTHER_NUTRIENT_FIELDS below is their
+    //   one canonical list — see its comment.
 
     // Provenance/citation for the numbers on this food (e.g. "Hoteit et al., lab-analyzed").
     // Absent on hand-estimated and USDA-imported foods.
@@ -220,5 +222,29 @@ foodSchema.index({ "nutrientClaims.nutrient": 1, "nutrientClaims.level": 1 });
 // Backs the Food Database's numeric "at least N mg EPA+DHA" filter and any sort on it. Sparse:
 // only ~110 of 1,300 foods have a value, so there's no point indexing the nulls.
 foodSchema.index({ omega3EpaDhaPerServingMg: -1 }, { sparse: true });
+// Backs the Food Database's "at most N mg oxalate per 100 g" filter (prompt-99). Ascending,
+// since that filter is a $lte. Sparse for the same reason as the line above, only more so:
+// oxalate is manual-entry-only and currently set on none of the 1,429 foods, so indexing the
+// nulls would be pure overhead. Sparse is also safe here precisely because the query is
+// type-bracketed — a numeric $lte never wants the null documents the index omits.
+foodSchema.index({ oxalate: 1 }, { sparse: true });
+// Same again for phytate (prompt-100) — the "Other" filter can now pick either nutrient, so
+// both need to be indexed for it, and the reasoning above applies unchanged to this one.
+foodSchema.index({ phytate: 1 }, { sparse: true });
+
+// The "Other" nutrient group: raw per-100 g amounts that belong to none of this app's
+// nutrient systems — no DRI target (so they're absent from lib/calc/dri.js and from
+// Client.driTargets), no FDA Daily Value (so they can never carry a High/Good Source claim),
+// and no %DV column anywhere. They exist because a dietitian may simply want to keep them low.
+//
+// Exported as the single source of truth for that list, because it is used three ways that
+// must not drift apart:
+//   1. lib/calc/nutrientContributions.js sums them onto a recipe (Meal.totalOxalate/…Phytate),
+//   2. foods.service.js ALLOWLISTS a client-supplied filter key against it before that key is
+//      ever used as a Mongo field name,
+//   3. foods.validation.js rejects anything outside it at the edge.
+// Adding a third "Other" nutrient means adding it here, adding Meal.total<Name>, and running
+// the backfill — nothing else.
+export const OTHER_NUTRIENT_FIELDS = ["oxalate", "phytate"];
 
 export default mongoose.model("Food", foodSchema);

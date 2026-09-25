@@ -60,7 +60,13 @@ import {
   DRI_MINERAL_FIELDS,
 } from "@/lib/clients-mock";
 import { getDriTargets } from "@/lib/dri";
-import { fetchDietaryPreferences, fetchAllergies, fetchMedicalHistory } from "@/lib/settings-api";
+import {
+  fetchDietaryPreferences,
+  fetchAllergies,
+  fetchMedicalHistory,
+  updateAllergies,
+} from "@/lib/settings-api";
+import { normalizeAllergy } from "@/lib/allergy-matching";
 import {
   fetchClient,
   createClient,
@@ -139,15 +145,21 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
   const [allergies, setAllergies] = useState<string[]>([]);
   const [medicalHistory, setMedicalHistory] = useState<string[]>([]);
 
-  const { data: dietaryPreferenceOptions = [] } = useQuery({
+  // `isLoading` (still fetching, no data yet) drives the "Loading options…" state below —
+  // NOT `options.length === 0`, which is also true once a list has genuinely loaded empty
+  // (nothing added under Settings yet). That mixup used to hide these fields — predefined pills,
+  // already-saved custom chips, and the "Other" free-text entry alike — behind a permanent
+  // "Loading options…" for any list with zero predefined items, Medical history being the one
+  // most likely to start out empty in a fresh practice.
+  const { data: dietaryPreferenceOptions = [], isLoading: dietaryPreferencesLoading } = useQuery({
     queryKey: ["settings", "dietary-preferences"],
     queryFn: fetchDietaryPreferences,
   });
-  const { data: allergyOptions = [] } = useQuery({
+  const { data: allergyOptions = [], isLoading: allergyOptionsLoading } = useQuery({
     queryKey: ["settings", "allergies"],
     queryFn: fetchAllergies,
   });
-  const { data: medicalHistoryOptions = [] } = useQuery({
+  const { data: medicalHistoryOptions = [], isLoading: medicalHistoryOptionsLoading } = useQuery({
     queryKey: ["settings", "medical-history"],
     queryFn: fetchMedicalHistory,
   });
@@ -168,7 +180,10 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
   const ageN = Number(age) || 0;
   const heightN = Number(heightCm) || 0;
   const weightN = Number(weightKg) || 0;
-  const startWeightN = Number(startWeightKg) || 0;
+  // A new client's start weight IS the weight just entered on this same step — there is
+  // no history yet for the two to have diverged. Only an existing client (isEdit), whose
+  // weight has since moved on from intake, keeps startWeightKg as its own editable field.
+  const startWeightN = isEdit ? Number(startWeightKg) || 0 : weightN;
   const targetWeightN = Number(targetWeightKg) || 0;
   const sleepN = Number(sleepHours) || 0;
 
@@ -302,6 +317,64 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
     onOpenChange(o);
   };
 
+  // Promotes a one-off "Other" allergy into the shared Settings list (prompt-106), so it stops
+  // being a dead end: until now such a value lived only on this one client, could never be
+  // tagged on a food or recipe, and therefore could never raise a conflict warning.
+  //
+  // Called only AFTER the client save succeeds, never from PillMultiSelectWithOther.addOther().
+  // That component adds the typed text to local state the moment "Add"/Enter is pressed, and
+  // the dialog can still be cancelled afterwards — writing to a shared, practice-wide setting
+  // at that point would let an abandoned dialog permanently pollute it.
+  //
+  // Scoped to the Allergies field alone. PillMultiSelectWithOther is shared with the Medical
+  // history field ("Other condition…"), which has its own Settings list and is deliberately
+  // untouched — hooking the submit handler rather than the component is what keeps custom
+  // medical-condition text out of the allergy list.
+  //
+  // updateAllergies does a full `{ value: allergies }` replace server-side (confirmed in
+  // settings.service.js), NOT a merge — so this sends existing + additions. Sending only the
+  // new entries would wipe the list.
+  const promoteCustomAllergies = async (saved: string[]) => {
+    // `allergyOptions` is the list this dialog rendered its pills from; anything selected that
+    // isn't in it is custom — the same test PillMultiSelectWithOther's customChips uses to
+    // decide what to draw as a custom chip, via the shared normalizer so the two can't diverge.
+    const known = new Set(allergyOptions.map(normalizeAllergy));
+    const candidates = saved.filter((a) => {
+      const key = normalizeAllergy(a);
+      return key && !known.has(key);
+    });
+    if (candidates.length === 0) return;
+
+    try {
+      // Re-fetched rather than trusting `allergyOptions`, which may be minutes stale if another
+      // dialog or another user added an option since this one opened. Merging onto a stale copy
+      // would drop their addition on the full-replace write below.
+      const current = await fetchAllergies();
+      const seen = new Set(current.map(normalizeAllergy));
+      const additions: string[] = [];
+      for (const candidate of candidates) {
+        const key = normalizeAllergy(candidate);
+        // Dedupes against the live list AND against the other candidates in this same save.
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        additions.push(candidate.trim());
+      }
+      if (additions.length === 0) return;
+
+      // Appended, so the existing list keeps its order and a dietitian's Settings screen
+      // doesn't reshuffle itself as a side effect of saving a client.
+      await updateAllergies([...current, ...additions]);
+      // Refreshes the New Food dialog, the recipe editor, the Settings editor and any other
+      // open copy of this dialog without a reload.
+      queryClient.invalidateQueries({ queryKey: ["settings", "allergies"] });
+    } catch {
+      // Deliberately silent. The client itself already saved; the only thing that failed is a
+      // convenience write to a shared setting, and the PATCH needs "settings.update", which a
+      // dietitian may not hold. Surfacing an error here would read as "your client didn't save".
+      // The allergy is still recorded on the client either way — it just isn't taggable yet.
+    }
+  };
+
   const avatarInitials = useMemo(() => {
     return name
       .split(" ")
@@ -354,6 +427,8 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
         await createClient(payload);
       }
       queryClient.invalidateQueries({ queryKey: ["clients"] });
+      // Only AFTER the client itself saved (prompt-106) — see promoteCustomAllergies.
+      await promoteCustomAllergies(allergies);
       // Only the success path resets the form — see handleClose's comment.
       reset();
       handleClose(false);
@@ -575,6 +650,11 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
                       className="pl-8"
                     />
                   </div>
+                  {!isEdit && (
+                    <p className="text-[11px] text-muted-foreground">
+                      Used as their starting weight too.
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -602,18 +682,25 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label htmlFor="startWeight">Start weight (kg)</Label>
-                  <Input
-                    id="startWeight"
-                    type="number"
-                    step={0.1}
-                    value={startWeightKg}
-                    onChange={(e) => setStartWeightKg(e.target.value)}
-                    placeholder="e.g. 78"
-                  />
-                </div>
+              <div className={cn("grid gap-3", isEdit ? "grid-cols-2" : "grid-cols-1")}>
+                {/* A brand-new client's starting weight is whatever they just weighed in at
+                    (see the note under Weight above and startWeightN's derivation) — asking for
+                    the same number twice on intake reads as a mistake waiting to happen. Once
+                    the client has history (isEdit), their weight has moved on from where they
+                    started, so this becomes its own editable field again. */}
+                {isEdit && (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="startWeight">Start weight (kg)</Label>
+                    <Input
+                      id="startWeight"
+                      type="number"
+                      step={0.1}
+                      value={startWeightKg}
+                      onChange={(e) => setStartWeightKg(e.target.value)}
+                      placeholder="e.g. 78"
+                    />
+                  </div>
+                )}
                 <div className="space-y-1.5">
                   <Label htmlFor="targetWeight">Target weight (kg)</Label>
                   <Input
@@ -726,7 +813,7 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
                     <span className="text-xs font-normal text-muted-foreground">(none selected)</span>
                   )}
                 </Label>
-                {dietaryPreferenceOptions.length === 0 ? (
+                {dietaryPreferencesLoading ? (
                   <p className="text-xs text-muted-foreground">Loading options…</p>
                 ) : (
                   <div className="flex flex-wrap gap-1.5">
@@ -756,7 +843,7 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
                 label="Allergies"
                 icon={AlertTriangle}
                 options={allergyOptions}
-                optionsLoading={allergyOptions.length === 0}
+                optionsLoading={allergyOptionsLoading}
                 selected={allergies}
                 onChange={setAllergies}
                 otherPlaceholder="Other allergy…"
@@ -766,7 +853,7 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
                 label="Medical history"
                 icon={Stethoscope}
                 options={medicalHistoryOptions}
-                optionsLoading={medicalHistoryOptions.length === 0}
+                optionsLoading={medicalHistoryOptionsLoading}
                 selected={medicalHistory}
                 onChange={setMedicalHistory}
                 otherPlaceholder="Other condition…"

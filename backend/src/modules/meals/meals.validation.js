@@ -1,6 +1,11 @@
 import { z } from "zod";
 
 const ingredientSchema = z.object({
+  // "ingredient" | "section" (prompt-97) — see meal.model.js's ingredientSchema.type comment.
+  // Optional so a payload written before this field still validates; mongoose then defaults it
+  // to "ingredient". Shared by createMealSchema and updateMealSchema below, so one edit covers
+  // both.
+  type: z.enum(["ingredient", "section"]).optional(),
   food: z.string().optional(),
   name: z.string().min(1),
   quantity: z.number().min(0).optional(),
@@ -135,5 +140,27 @@ export const listMealsSchema = z.object({
     limit: z.coerce.number().int().positive().max(100).default(20),
     search: z.string().optional(),
     category: z.string().optional(),
+    // Comma-separated dietary preferences (e.g. "Vegan,Gluten-free") — mirrors the
+    // usda-search route's dataTypes convention, this codebase's existing shape for an
+    // array-ish query param (prompt-109).
+    //
+    // A SORT input, never a filter: recipes matching at least one of these are ordered ahead
+    // of the rest, but nothing is excluded. Omitted/empty means today's plain recency order,
+    // which is what Meal Library's own list relies on — it doesn't send this.
+    //
+    // Deliberately NOT validated against the Settings dietary-preferences list: that list is
+    // dietitian-editable, so refining against a snapshot of it would start 400ing the moment
+    // someone adds a preference. An unrecognized value simply matches no recipe.
+    dietaryPrefs: z
+      .string()
+      .optional()
+      .transform((v) =>
+        v
+          ? v
+              .split(",")
+              .map((t) => t.trim())
+              .filter(Boolean)
+          : undefined,
+      ),
   }),
 });

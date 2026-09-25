@@ -1,4 +1,4 @@
-import Food from "./food.model.js";
+import Food, { OTHER_NUTRIENT_FIELDS } from "./food.model.js";
 import Meal from "../meals/meal.model.js";
 import MealPlan from "../mealplans/meal-plan.model.js";
 import MealPlanBlock from "../mealplans/meal-plan-block.model.js";
@@ -11,6 +11,11 @@ import { matchFoodName } from "../../lib/foodMatching.js";
 import { getPortionsByFoodCode } from "../../lib/foodPortions.js";
 import { computeNutrientClaims } from "./lib/nutrientClaims.js";
 import { computeEpaDhaPerServingMg } from "./lib/omega3.js";
+import {
+  getPlanUsage,
+  getRecipeIngredientUsage,
+  attachPlanUsage,
+} from "../../lib/usageCounts.js";
 
 // Shapes a foodMatching.js result into what the API/frontend actually needs — never returned
 // for "no-match" (nothing to show), and never exposes the internal coreMismatch/compositeDish
@@ -81,7 +86,7 @@ function escapeRegex(s) {
 // five other real foods that plainly contain both words. A single-token search (today's only
 // working case) is the trivial one-element case of this same $and, so existing single-word
 // searches are unaffected.
-function buildFoodFilter({ search, category, source, verified, favorites, userId, claimNutrient, claimLevel, minEpaDhaMg }) {
+function buildFoodFilter({ search, category, source, verified, favorites, userId, claimNutrient, claimLevel, minEpaDhaMg, otherNutrient, otherMaxMg }) {
   const filter = {};
   if (category) filter.category = category;
   if (source) filter.source = source;
@@ -104,6 +109,33 @@ function buildFoodFilter({ search, category, source, verified, favorites, userId
   if (minEpaDhaMg != null) {
     filter.omega3EpaDhaPerServingMg = { $gte: minEpaDhaMg };
   }
+  // "Other"-group MAXIMUM per 100 g — oxalate (prompt-99), generalized to a nutrient picker
+  // covering phytate too (prompt-100). The same shape as the omega-3 minimum above, just
+  // inverted, and for the same reason: neither of these has an FDA Daily Value, so neither can
+  // be expressed as a High/Good Source claim and neither must borrow that vocabulary.
+  // Confirmed with the client that this is a ceiling ("find me low-X foods"), not a floor —
+  // kept for both nutrients so the control reads one way.
+  //
+  // Filters the raw per-100 g Food field directly — unlike EPA+DHA, which needed a precomputed
+  // per-serving field because its threshold is per serving. No derived field, so no backfill
+  // is needed on the Food side for either nutrient.
+  //
+  // `otherNutrient` becomes a Mongo FIELD KEY, so it is checked against the allowlist here
+  // even though foods.validation.js already restricts it to the same enum at the edge. That is
+  // deliberate belt-and-braces: a dynamic key built from request data is the one place where a
+  // future caller reaching this service directly (a script, another module, a route added
+  // without the validator) could otherwise write an arbitrary field name into the query. An
+  // unrecognised nutrient applies NO filter rather than throwing — this builder has no other
+  // failure mode, and the edge validator is what turns a bad value into a 400.
+  //
+  // Nulls are excluded automatically, and that is the wanted behaviour, not an accident:
+  // MongoDB's comparison operators are type-bracketed, so a numeric $lte never matches a null
+  // or a missing field. A food nobody has entered oxalate/phytate for is NOT a verified low-X
+  // food, so it must not appear under "≤10 mg". Verified against the live collection: with all
+  // 1,429 foods currently null, even { $lte: 1e9 } returns 0.
+  if (otherNutrient != null && otherMaxMg != null && OTHER_NUTRIENT_FIELDS.includes(otherNutrient)) {
+    filter[otherNutrient] = { $lte: otherMaxMg };
+  }
   if (search) {
     const tokens = search
       .split(/[\s,]+/)
@@ -119,10 +151,71 @@ function buildFoodFilter({ search, category, source, verified, favorites, userId
   return filter;
 }
 
-export async function listFoods({ page, limit, search, category, source, verified, favorites, userId, claimNutrient, claimLevel, minEpaDhaMg }) {
-  const filter = buildFoodFilter({ search, category, source, verified, favorites, userId, claimNutrient, claimLevel, minEpaDhaMg });
+// Ranks the WHOLE filtered set by a usage count, then cuts the requested page out of the
+// ranking (prompt-117). The "Used" column could annotate a page that was already chosen;
+// sorting BY usage can't — the ranking has to exist across every matching food before you know
+// which ids belong on page 1 at all.
+//
+// Cost: step 1 touches every food matching the filter, not just one page. At this app's real
+// scale — 1,433 foods, 15 recipes, 4 meal plans in the live database today — that is an _id-only
+// projection over a filtered subset, which is fine. It is the kind of thing that stops being
+// fine at a very different order of magnitude, so it is called out rather than buried.
+async function listFoodsRankedByUsage({ filter, skip, limit, page, userId, sortBy }) {
+  // 1. Every matching id, in TODAY's default order. That order is doing double duty: it is the
+  //    tie-break below, so equal-usage foods keep exactly the sequence they have now.
+  const matching = await Food.find(filter).sort({ createdAt: -1 }).select("_id").lean();
+  const total = matching.length;
+
+  // 2. The relevant count for this context, over exactly those ids.
+  const ids = matching.map((f) => f._id);
+  const usage =
+    sortBy === "usedInPlans"
+      ? await getPlanUsage("food", ids)
+      : await getRecipeIngredientUsage(ids);
+  const countOf = (id) => {
+    const u = usage.get(String(id));
+    if (!u) return 0;
+    return sortBy === "usedInPlans" ? u.usedInPlans : u.usedInRecipes;
+  };
+
+  // 3. Count descending, ties broken by the original index — an explicit tie-break rather than
+  //    a reliance on Array.prototype.sort's stability. With no usage recorded anywhere every
+  //    count is 0, every comparison falls through to idx, and the result is byte-for-byte the
+  //    createdAt: -1 order this endpoint returns today.
+  const ranked = matching.map((f, idx) => ({ _id: f._id, idx, count: countOf(f._id) }));
+  ranked.sort((a, b) => b.count - a.count || a.idx - b.idx);
+
+  // 4. Cut the page, THEN fetch the documents for just those ids.
+  const pageIds = ranked.slice(skip, skip + limit).map((r) => r._id);
+  const docs = pageIds.length ? await Food.find({ _id: { $in: pageIds } }).lean() : [];
+  // $in makes no ordering promise — re-impose the ranking.
+  const byId = new Map(docs.map((d) => [String(d._id), d]));
+  const foods = pageIds.map((id) => byId.get(String(id))).filter(Boolean);
+
+  // The usedInPlans/lastUsed annotation stays plan usage in BOTH modes, so the public food
+  // shape means the same thing whatever the list was sorted by. When that is already the sort
+  // key the map is in hand; otherwise one small lookup over just this page's ids.
+  const planUsage =
+    sortBy === "usedInPlans" ? usage : await getPlanUsage("food", pageIds);
+  return {
+    foods: attachPlanUsage(foods.map((f) => toPublicFood(f, userId)), planUsage),
+    total,
+    page,
+    limit,
+  };
+}
+
+export async function listFoods({ page, limit, search, category, source, verified, favorites, userId, claimNutrient, claimLevel, minEpaDhaMg, otherNutrient, otherMaxMg, sortBy }) {
+  const filter = buildFoodFilter({ search, category, source, verified, favorites, userId, claimNutrient, claimLevel, minEpaDhaMg, otherNutrient, otherMaxMg });
 
   const skip = (page - 1) * limit;
+
+  // Opt-in only (prompt-117): the two pickers that asked for it pass sortBy, everything else —
+  // Food Database's own page included — falls through to the untouched default path below.
+  if (sortBy === "usedInPlans" || sortBy === "usedInRecipes") {
+    return listFoodsRankedByUsage({ filter, skip, limit, page, userId, sortBy });
+  }
+
   const [foods, total] = await Promise.all([
     // Without an explicit sort, Mongo returns natural order — once the collection exceeds
     // `limit`, a freshly created document can fall entirely outside the page-1 window and
@@ -131,7 +224,15 @@ export async function listFoods({ page, limit, search, category, source, verifie
     Food.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
     Food.countDocuments(filter),
   ]);
-  return { foods: foods.map((f) => toPublicFood(f, userId)), total, page, limit };
+  // One aggregation for the whole page (prompt-116) — see lib/usageCounts.js for why this is
+  // batched rather than the per-id countDocuments getFoodUsages uses for its delete guard.
+  const usage = await getPlanUsage("food", foods.map((f) => f._id));
+  return {
+    foods: attachPlanUsage(foods.map((f) => toPublicFood(f, userId)), usage),
+    total,
+    page,
+    limit,
+  };
 }
 
 // True counts for the KPI strip — deliberately NOT derived from a page of `listFoods` results,
@@ -140,8 +241,8 @@ export async function listFoods({ page, limit, search, category, source, verifie
 // crossed 100 documents. Respects the same search/category/source/verified/favorites filter as
 // listFoods, so the KPIs reflect "matching the current filter," consistent with how `total`
 // already behaved (e.g. verified=true&source=lebanese returns the correct intersection).
-export async function getFoodsStats({ search, category, source, verified, favorites, userId, claimNutrient, claimLevel, minEpaDhaMg }) {
-  const filter = buildFoodFilter({ search, category, source, verified, favorites, userId, claimNutrient, claimLevel, minEpaDhaMg });
+export async function getFoodsStats({ search, category, source, verified, favorites, userId, claimNutrient, claimLevel, minEpaDhaMg, otherNutrient, otherMaxMg }) {
+  const filter = buildFoodFilter({ search, category, source, verified, favorites, userId, claimNutrient, claimLevel, minEpaDhaMg, otherNutrient, otherMaxMg });
   const [total, verifiedCount, lebanese] = await Promise.all([
     Food.countDocuments(filter),
     Food.countDocuments({ ...filter, verified: true }),
@@ -153,7 +254,10 @@ export async function getFoodsStats({ search, category, source, verified, favori
 export async function getFoodById(id, userId) {
   const food = await Food.findById(id).lean();
   if (!food) throw new ApiError(404, "Food not found");
-  return toPublicFood(food, userId);
+  // Same helper as the list path rather than a second single-id query: one id in, one id out,
+  // and the detail drawer then shows exactly what the table row showed.
+  const usage = await getPlanUsage("food", [food._id]);
+  return attachPlanUsage([toPublicFood(food, userId)], usage)[0];
 }
 
 export async function updateFood(id, data, userId) {

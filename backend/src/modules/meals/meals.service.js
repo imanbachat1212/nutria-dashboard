@@ -3,6 +3,12 @@ import { ApiError } from "../../lib/ApiError.js";
 import { deleteImage } from "../../lib/storage.js";
 import { computeRecipeMacros, MICRO_FIELDS, microTotalKey } from "../../lib/calc/recipeMacros.js";
 import { classifyPerServing, DAILY_VALUES } from "../foods/lib/nutrientClaims.js";
+import {
+  computeIngredientContributions,
+  computeRecipeOtherNutrients,
+  contributionsFor,
+} from "../../lib/calc/nutrientContributions.js";
+import { getPlanUsage, attachPlanUsage } from "../../lib/usageCounts.js";
 
 // Recipes saved before the single-photo → photos[] migration still have a raw `photo` field
 // in Mongo (schema no longer declares it, but .lean() reads are unaffected by that — the field
@@ -51,15 +57,72 @@ function withMicronutrients(meal) {
   return { ...meal, micronutrients: rows };
 }
 
+// withMicronutrients + "which ingredient did each number come from" (prompt-98).
+//
+// Deliberately a SEPARATE, async wrapper rather than folding this into withMicronutrients:
+// listMeals renders a page of recipe cards and would pay one extra Food.find per card for a
+// breakdown the card never shows. Only the three single-recipe reads (getMealById, updateMeal,
+// duplicateMeal) call this; listMeals keeps the cheap synchronous path unchanged.
+//
+// Percentages are scale-invariant — dividing every ingredient by `servings` scales numerator
+// and denominator alike — so these are computed on the whole-recipe basis and are equally valid
+// against the per-serving figures the drawer actually prints.
+async function withNutrientBreakdown(meal) {
+  if (!meal) return meal;
+  const base = withMicronutrients(meal);
+  const rows = await computeIngredientContributions(meal.ingredients);
+  if (!rows.length) return base;
+
+  return {
+    ...base,
+    // No explicit denominator: every stored total is rounded (Math.round for macros, 2dp for
+    // micros), and dividing by the rounded figure makes the shares stop adding to 100 —
+    // dramatically so where the total is small. A 4.4 g fiber recipe stores totalFiber: 4 and
+    // its single fiber source would read "110%". Letting contributionsFor sum the exact rows
+    // keeps each list consistent with itself; see its own note.
+    macroContributions: {
+      calories: contributionsFor(rows, "calories"),
+      protein: contributionsFor(rows, "protein"),
+      carbs: contributionsFor(rows, "carbs"),
+      fat: contributionsFor(rows, "fat"),
+      fiber: contributionsFor(rows, "fiber"),
+    },
+    micronutrients: base.micronutrients.map((row) => ({
+      ...row,
+      contributions: contributionsFor(rows, row.nutrient),
+    })),
+  };
+}
+
 export async function createMeal(data, actor) {
   if (data.ingredients?.length) {
-    const macros = await computeRecipeMacros(data.ingredients);
-    Object.assign(data, macros);
+    // The "Other" nutrients (oxalate, phytate) are summed separately from the macros
+    // (prompt-99/100) — neither has a DRI or a Daily Value, so neither is one of
+    // recipeMacros.js's MICRO_FIELDS and neither ever will be. Same whole-recipe basis,
+    // returned already keyed as totalOxalate/totalPhytate, merged into the same save.
+    const [macros, other] = await Promise.all([
+      computeRecipeMacros(data.ingredients),
+      computeRecipeOtherNutrients(data.ingredients),
+    ]);
+    Object.assign(data, macros, other);
   }
   return Meal.create({ ...data, createdBy: actor._id });
 }
 
-export async function listMeals({ page, limit, search, category }) {
+// Shared by both branches of listMeals below so the two can never populate different fields.
+// Unit weights only (prompt-75) — the recipe drawer renders each ingredient's stored
+// "0.25 cup" as a gram weight too, and a cup of oats (80 g) is not a cup of flour
+// (125 g), so it needs this food's own numbers to do that. Deliberately NOT the wider
+// set populatePlan/getTemplateById use: no portions, no macros — nothing the drawer
+// doesn't render. Mongoose collapses every ingredient ref across the page into one
+// extra $in query, so this costs a single round trip regardless of page size.
+// portions added (prompt-80): a food with no gramsPerX of its own can still have a real
+// USDA "1 cup" / "1 tbsp" portion, which is now the next fallback in gramsPerUnitForFood
+// — without it here the drawer would resolve these rows differently from the server.
+const LIST_INGREDIENT_FOOD_FIELDS =
+  "name gramsPerCup gramsPerTbsp gramsPerTsp gramsPerPiece gramsPerMl commonServings portions";
+
+export async function listMeals({ page, limit, search, category, dietaryPrefs }) {
   const filter = {};
   if (category) filter.category = category;
   if (search) {
@@ -70,28 +133,100 @@ export async function listMeals({ page, limit, search, category }) {
   }
 
   const skip = (page - 1) * limit;
+
+  // ── Diet-aware ordering (prompt-109) ────────────────────────────────────────────────────
+  // Recipes carrying at least one of the client's own dietary preferences sort ahead of the
+  // rest; -createdAt breaks ties inside each group, exactly as before. Nothing is filtered
+  // out — a dietitian can still reach every recipe, the relevant ones are just first.
+  //
+  // Done server-side on purpose: sorting a page client-side would only reorder whatever the
+  // recency query already returned, so an older matching recipe that fell past the page
+  // boundary would stay invisible no matter how well it matched.
+  //
+  // Needs an aggregation because the sort key is computed, which a find().sort() can't do —
+  // and an aggregation can't .populate(), so it resolves the ORDER first and then re-reads
+  // those documents through the normal populated query, restoring the order in JS. Matching
+  // is exact string equality: dietTags and Client.dietaryPrefs are filled from the one
+  // shared Settings list (see settings.service.js's DIETARY_PREFERENCES comment), so there
+  // is no casing to reconcile.
+  if (dietaryPrefs?.length) {
+    const [ordered, total] = await Promise.all([
+      Meal.aggregate([
+        { $match: filter },
+        {
+          $addFields: {
+            dietMatch: {
+              $cond: [
+                {
+                  $gt: [
+                    {
+                      $size: {
+                        // $ifNull guards recipes saved before dietTags existed — a missing
+                        // field would make $setIntersection return null and $size throw.
+                        $setIntersection: [{ $ifNull: ["$dietTags", []] }, dietaryPrefs],
+                      },
+                    },
+                    0,
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+          },
+        },
+        { $sort: { dietMatch: -1, createdAt: -1 } },
+        { $skip: skip },
+        { $limit: limit },
+        { $project: { _id: 1 } },
+      ]),
+      Meal.countDocuments(filter),
+    ]);
+
+    const ids = ordered.map((d) => d._id);
+    const docs = ids.length
+      ? await Meal.find({ _id: { $in: ids } })
+          .populate("ingredients.food", LIST_INGREDIENT_FOOD_FIELDS)
+          .lean()
+      : [];
+    // $in returns documents in arbitrary order — re-impose the aggregation's ordering.
+    const byId = new Map(docs.map((d) => [String(d._id), d]));
+    const meals = ids.map((id) => byId.get(String(id))).filter(Boolean);
+    const usage = await getPlanUsage("meal", meals.map((m) => m._id));
+    return {
+      meals: attachPlanUsage(
+        meals.map((m) => withMicronutrients(normalizePhotos(m))),
+        usage,
+      ),
+      total,
+      page,
+      limit,
+    };
+  }
+
+  // No preferences supplied (Meal Library's own list, or a client with none recorded):
+  // byte-for-byte the query this endpoint has always run.
   const [meals, total] = await Promise.all([
     Meal.find(filter)
       .skip(skip)
       .limit(limit)
       .sort("-createdAt")
-      // Unit weights only (prompt-75) — the recipe drawer renders each ingredient's stored
-      // "0.25 cup" as a gram weight too, and a cup of oats (80 g) is not a cup of flour
-      // (125 g), so it needs this food's own numbers to do that. Deliberately NOT the wider
-      // set populatePlan/getTemplateById use: no portions, no macros — nothing the drawer
-      // doesn't render. Mongoose collapses every ingredient ref across the page into one
-      // extra $in query, so this costs a single round trip regardless of page size.
-      // portions added (prompt-80): a food with no gramsPerX of its own can still have a real
-      // USDA "1 cup" / "1 tbsp" portion, which is now the next fallback in gramsPerUnitForFood
-      // — without it here the drawer would resolve these rows differently from the server.
-      .populate(
-        "ingredients.food",
-        "name gramsPerCup gramsPerTbsp gramsPerTsp gramsPerPiece gramsPerMl commonServings portions",
-      )
+      .populate("ingredients.food", LIST_INGREDIENT_FOOD_FIELDS)
       .lean(),
     Meal.countDocuments(filter),
   ]);
-  return { meals: meals.map((m) => withMicronutrients(normalizePhotos(m))), total, page, limit };
+  // One aggregation for the page (prompt-116): a recipe is "used" when a plan item references
+  // it via items.meal. See lib/usageCounts.js for the batching and counting rules.
+  const usage = await getPlanUsage("meal", meals.map((m) => m._id));
+  return {
+    meals: attachPlanUsage(
+      meals.map((m) => withMicronutrients(normalizePhotos(m))),
+      usage,
+    ),
+    total,
+    page,
+    limit,
+  };
 }
 
 export async function getMealById(id) {
@@ -106,7 +241,9 @@ export async function getMealById(id) {
     )
     .lean();
   if (!meal) throw new ApiError(404, "Meal not found");
-  return withMicronutrients(normalizePhotos(meal));
+  // withNutrientBreakdown is async, so it must be awaited before the usage merge.
+  const usage = await getPlanUsage("meal", [meal._id]);
+  return attachPlanUsage([await withNutrientBreakdown(normalizePhotos(meal))], usage)[0];
 }
 
 // Recipe copy (prompt-77) — deliberately the same shape as duplicatePlan in
@@ -156,17 +293,22 @@ export async function duplicateMeal(id, { name } = {}, actor) {
       "name gramsPerCup gramsPerTbsp gramsPerTsp gramsPerPiece gramsPerMl commonServings portions",
     )
     .lean();
-  return withMicronutrients(populated);
+  return withNutrientBreakdown(populated);
 }
 
 export async function updateMeal(id, data) {
   if (data.ingredients?.length) {
-    const macros = await computeRecipeMacros(data.ingredients);
-    Object.assign(data, macros);
+    // See createMeal — the "Other" totals ride along with the macro recompute so an edited
+    // recipe's totalOxalate/totalPhytate can never lag its ingredient list.
+    const [macros, other] = await Promise.all([
+      computeRecipeMacros(data.ingredients),
+      computeRecipeOtherNutrients(data.ingredients),
+    ]);
+    Object.assign(data, macros, other);
   }
   const meal = await Meal.findByIdAndUpdate(id, data, { new: true }).lean();
   if (!meal) throw new ApiError(404, "Meal not found");
-  return withMicronutrients(normalizePhotos(meal));
+  return withNutrientBreakdown(normalizePhotos(meal));
 }
 
 export async function deleteMeal(id) {

@@ -290,6 +290,18 @@ export const MICRO_FIELD_GROUPS: MicroFieldGroup[] = [
   },
 ];
 
+// The "Other" nutrient group: raw per-100 g amounts belonging to none of this app's nutrient
+// systems — no DRI target, no FDA Daily Value, so no %DV column and no High/Good Source tier.
+// They exist because a dietitian may simply want to keep them low.
+//
+// Derived from MICRO_FIELD_GROUPS rather than re-listed, so the "Other" filter pickers on Food
+// Database and Meal Library can never offer a nutrient the detail panel doesn't show, or miss
+// one it does. Mirrors the backend's OTHER_NUTRIENT_FIELDS (food.model.js), which is what
+// allowlists the Mongo field key — add a nutrient in both places, or the picker offers
+// something the API will 400 on.
+export const OTHER_NUTRIENT_FIELDS: MicroFieldDef[] =
+  MICRO_FIELD_GROUPS.find((g) => g.id === "other")?.fields ?? [];
+
 export interface FoodItem {
   id: string;
   name: string;

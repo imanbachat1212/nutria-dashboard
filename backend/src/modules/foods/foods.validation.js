@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { CLAIMABLE_NUTRIENTS } from "./lib/nutrientClaims.js";
+import { OTHER_NUTRIENT_FIELDS } from "./food.model.js";
 import { USDA_DATA_TYPES } from "./lib/usda-client.js";
 
 // Shared by createFoodSchema and updateFoodSchema — ~44 optional/nullable micronutrient
@@ -148,6 +149,12 @@ export const listFoodsSchema = z.object({
   query: z.object({
     page: z.coerce.number().int().positive().default(1),
     limit: z.coerce.number().int().positive().max(100).default(20),
+    // Popularity ordering for the two "add a food" pickers (prompt-117). Two different
+    // questions, deliberately not merged: "usedInPlans" ranks by distinct meal plans using the
+    // food (Meal Plans → add item), "usedInRecipes" by distinct recipes using it as an
+    // ingredient (New/Edit Recipe → ingredient search). Omitted — the default, and what every
+    // other caller including Food Database's own page sends — means today's createdAt: -1.
+    sortBy: z.enum(["usedInPlans", "usedInRecipes"]).optional(),
     search: z.string().optional(),
     category: z.string().optional(),
     source: z.enum(["usda", "lebanese", "custom"]).optional(),
@@ -163,6 +170,17 @@ export const listFoodsSchema = z.object({
     // Plain numeric omega-3 minimum in mg EPA+DHA per typical serving (prompt-67). Not a claim
     // threshold — no tier vocabulary attached.
     minEpaDhaMg: z.coerce.number().min(0).optional(),
+    // "Other"-group MAXIMUM in mg per 100 g — pick the nutrient, then the ceiling (prompt-99,
+    // generalized in prompt-100). Same reasoning as minEpaDhaMg — a measured amount, not an FDA
+    // claim tier — but a ceiling rather than a floor: the dietitian is looking for low-X foods.
+    // Per 100 g, not per serving, because it filters Food's raw stored field directly (no
+    // derived per-serving figure exists for either nutrient).
+    //
+    // The enum is built from OTHER_NUTRIENT_FIELDS rather than spelled out, so this can never
+    // drift from the list foods.service.js allowlists the Mongo field key against. An unknown
+    // nutrient is a 400 here, which is what stops a bad value reaching that dynamic key at all.
+    otherNutrient: z.enum(OTHER_NUTRIENT_FIELDS).optional(),
+    otherMaxMg: z.coerce.number().min(0).optional(),
   }),
 });
 
@@ -181,6 +199,17 @@ export const foodsStatsSchema = z.object({
     // Plain numeric omega-3 minimum in mg EPA+DHA per typical serving (prompt-67). Not a claim
     // threshold — no tier vocabulary attached.
     minEpaDhaMg: z.coerce.number().min(0).optional(),
+    // "Other"-group MAXIMUM in mg per 100 g — pick the nutrient, then the ceiling (prompt-99,
+    // generalized in prompt-100). Same reasoning as minEpaDhaMg — a measured amount, not an FDA
+    // claim tier — but a ceiling rather than a floor: the dietitian is looking for low-X foods.
+    // Per 100 g, not per serving, because it filters Food's raw stored field directly (no
+    // derived per-serving figure exists for either nutrient).
+    //
+    // The enum is built from OTHER_NUTRIENT_FIELDS rather than spelled out, so this can never
+    // drift from the list foods.service.js allowlists the Mongo field key against. An unknown
+    // nutrient is a 400 here, which is what stops a bad value reaching that dynamic key at all.
+    otherNutrient: z.enum(OTHER_NUTRIENT_FIELDS).optional(),
+    otherMaxMg: z.coerce.number().min(0).optional(),
   }),
 });
 

@@ -12,6 +12,7 @@ import {
   copyMealSlotSchema,
   copySlotToSlotSchema,
   updateSlotTimeSchema,
+  deleteSlotTimeSchema,
   duplicatePlanSchema,
   addItemSchema,
   updateItemSchema,
@@ -80,6 +81,18 @@ router.patch(
   validate(updateSlotTimeSchema),
   auditAction("update", "mealplan"),
   ctrl.updateSlotTime
+);
+
+// Counterpart to the PATCH above (prompt-111). Same "mealplans.update" permission, not
+// "mealplans.delete": this edits one field of a plan the dietitian already owns, the same way
+// the PATCH does — it removes no plan and no item (the service refuses outright while items
+// still sit in the slot). "mealplans.delete" is scoped to destroying a whole plan.
+router.delete(
+  "/:id/slot-time/:slot",
+  requirePermission("mealplans.update"),
+  validate(deleteSlotTimeSchema),
+  auditAction("update", "mealplan"),
+  ctrl.deleteSlotTime
 );
 
 router.post(

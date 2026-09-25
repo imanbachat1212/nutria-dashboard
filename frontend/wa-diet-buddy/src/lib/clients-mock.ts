@@ -74,7 +74,7 @@ export const DRI_MINERAL_FIELDS: { key: NumericDriKey; label: string; unit: stri
   { key: "potassium", label: "Potassium", unit: "mg" },
   { key: "sodium", label: "Sodium", unit: "mg" },
   { key: "zinc", label: "Zinc", unit: "mg" },
-  { key: "copper", label: "Copper", unit: "mcg" },
+  { key: "copper", label: "Copper", unit: "mg" },
   { key: "manganese", label: "Manganese", unit: "mg" },
   { key: "selenium", label: "Selenium", unit: "mcg" },
 ];

@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createMeal, updateMeal, getMeal, type PhotoItem } from "@/lib/meals-api";
+import {
+  createMeal,
+  updateMeal,
+  getMeal,
+  type CreateMealIngredient,
+  type PhotoItem,
+} from "@/lib/meals-api";
 import { fetchFoods } from "@/lib/foods-api";
 import {
   searchUsda,
@@ -17,7 +23,7 @@ import { gramsPerUnitForFood, realGramsPerUnit } from "@/lib/unit-conversion";
 import { resolveMeasure, pickInitialMeasureSelection, formatGramEquivalent } from "@/lib/measure-options";
 import { MeasureSelect } from "@/components/measure-select";
 import { uploadMedia } from "@/lib/api";
-import { fetchDietaryPreferences } from "@/lib/settings-api";
+import { fetchDietaryPreferences, fetchAllergies } from "@/lib/settings-api";
 import {
   Plus,
   Trash2,
@@ -40,7 +46,25 @@ import {
   Search,
   Loader2,
   Star,
+  GripVertical,
 } from "lucide-react";
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -69,11 +93,9 @@ import {
 import { cn } from "@/lib/utils";
 import {
   CATEGORY_META,
-  ALLERGEN_LABEL,
   type RecipeCategory,
   type RecipeCuisine,
   type DietTag,
-  type Allergen,
 } from "@/lib/meal-library-mock";
 
 const MAX_PHOTOS = 6;
@@ -121,6 +143,19 @@ interface IngredientMacros {
 }
 
 interface IngredientDraft {
+  // Stable per-row identity, frontend-only — never sent to the server, never persisted.
+  // The list was keyed by array index, which is fine while rows are only appended and removed;
+  // once they can be REORDERED (prompt-97) an index key makes React reuse the wrong row's DOM,
+  // so a dragged row's search box would keep the previous occupant's text and focus. dnd-kit
+  // needs a stable sort id regardless, so the two requirements are satisfied by the same field.
+  // Every state update below addresses rows by this id rather than by index, for the same
+  // reason: an index captured at render time is stale the moment anything moves.
+  rowId: string;
+  // "ingredient" | "section" — a section is a titled divider the dietitian inserts between
+  // ingredients ("Batter", "Frosting"); see meal.model.js's ingredientSchema.type. A section
+  // row carries ONLY `name` (its title); every other field below stays at its blank value and
+  // is never read for it.
+  type: "ingredient" | "section";
   foodId: string;
   name: string;
   // "How many of `unit`" — when `unit` is a real measure's own label (see realMeasures), this
@@ -145,6 +180,54 @@ interface IngredientDraft {
   // originally picked (see the editData hydration below) instead of always defaulting to grams.
   measureDescription?: string | null;
   measureCount?: number | null;
+}
+
+// The single definition of "this row is a real ingredient that can be saved". Used by both
+// validIngredients (which gates step 2 and drives the review count) and the save mapping —
+// two hand-kept copies of this condition would eventually disagree about what gets written.
+function isSavableIngredient(i: IngredientDraft): boolean {
+  return (
+    i.type === "ingredient" &&
+    !!i.foodId &&
+    !!i.name.trim() &&
+    typeof i.quantity === "number" &&
+    i.quantity > 0
+  );
+}
+
+// Row ids only have to be unique within one open dialog, so a counter is enough — and unlike
+// crypto.randomUUID() it needs no secure context and can't differ between the server render and
+// the client hydration.
+let rowSeq = 0;
+
+function blankIngredient(): IngredientDraft {
+  return {
+    rowId: `row-${++rowSeq}`,
+    type: "ingredient",
+    foodId: "",
+    name: "",
+    quantity: "",
+    unit: "g",
+    per100g: null,
+  };
+}
+
+// Same blank shape with type flipped: a section only ever reads `name`, but keeping the other
+// fields present (rather than optional) means nothing downstream has to null-check them.
+function blankSection(): IngredientDraft {
+  return { ...blankIngredient(), type: "section" };
+}
+
+// Index just past this section's own contiguous run of ingredient rows — i.e. right before the
+// next section header, or the array's end if this is the last section. A flat array keeps
+// ordering trivial but gives a section no boundary of its own, so "where does Batter end" has
+// to be answered by scanning forward from its header; only the section itself knows.
+function sectionInsertIndex(rows: IngredientDraft[], sectionRowId: string): number {
+  const start = rows.findIndex((r) => r.rowId === sectionRowId);
+  if (start === -1) return rows.length;
+  let i = start + 1;
+  while (i < rows.length && rows[i].type !== "section") i++;
+  return i;
 }
 
 // The one place this dialog turns a {count, unit} selection into grams. resolveMeasure() turns
@@ -192,13 +275,248 @@ function ingredientMacros(ing: IngredientDraft): IngredientMacros | null {
 // one decimal, matching how per-serving figures round elsewhere in the app.
 function formatIngredientMacros(m: IngredientMacros): string {
   const r1 = (v: number) => Math.round(v * 10) / 10;
-  return `${Math.round(m.kcal)} kcal · P${r1(m.protein)} C${r1(m.carbs)} F${r1(m.fat)}`;
+  // "Fib" (not "F") for fiber — "F" is already taken by fat two tokens earlier on this same
+  // line, and this dialog's own Live preview/Review macro tiles already label fiber "Fib"
+  // (MacroPrev/ReviewMacro below), so this line now reads consistently with those.
+  return `${Math.round(m.kcal)} kcal · P${r1(m.protein)} C${r1(m.carbs)} F${r1(m.fat)} Fib${r1(m.fiber)}`;
+}
+
+/* ── One draggable row of the ingredients list ────────────────────────────────────────────── */
+
+// Extracted from the step-2 map (prompt-97) because useSortable is a hook and has to be called
+// from a component, not a loop body. Rows are addressed by `rowId`, never by index: `onPatch`
+// and `onRemove` are already bound to this row's id by the parent, so a reorder mid-edit can't
+// write into the wrong row.
+function SortableIngredientRow({
+  ing,
+  number,
+  canDelete,
+  onPatch,
+  onRemove,
+  onAddIngredient,
+}: {
+  ing: IngredientDraft;
+  // Position in the ingredient sequence, or null for a section header — headers don't consume
+  // a number, so "Batter / 1. flour / 2. butter / Frosting / 3. sugar" reads 1,2,3.
+  number: number | null;
+  canDelete: boolean;
+  onPatch: (patch: Partial<IngredientDraft>) => void;
+  onRemove: () => void;
+  // Section rows only — appends an ingredient at the end of THIS section's run. Absent on
+  // ingredient rows, which have no run of their own to append to.
+  onAddIngredient?: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: ing.rowId,
+  });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    // Lifts the row being dragged above its neighbours; without it the rows it passes over
+    // paint on top of it halfway through the drag.
+    zIndex: isDragging ? 20 : undefined,
+  };
+
+  const handle = (
+    <button
+      type="button"
+      className="h-8 w-5 shrink-0 cursor-grab touch-none text-muted-foreground/50 hover:text-foreground active:cursor-grabbing"
+      aria-label={`Reorder ${ing.name || "this row"}`}
+      {...attributes}
+      {...listeners}
+    >
+      <GripVertical className="h-3.5 w-3.5" />
+    </button>
+  );
+
+  // ── Section header ──
+  // Deliberately renders none of the ingredient machinery: no FoodSearchInput (there's no food
+  // to match), no MeasureSelect / gram equivalent / approximate-unit warning (no amount), and
+  // no macro line below. That last one matters — the macro block's fallback branch fires for
+  // any row with `per100g === null` and a non-empty name, so a titled section would otherwise
+  // accuse itself of not being matched to a food.
+  if (ing.type === "section") {
+    return (
+      <div
+        ref={setNodeRef}
+        data-row-id={ing.rowId}
+        style={style}
+        className={cn("pt-3", isDragging && "opacity-60")}
+      >
+        <div className="flex items-center gap-2">
+          {handle}
+          <Input
+            value={ing.name}
+            onChange={(e) => onPatch({ name: e.target.value })}
+            placeholder="Section title"
+            className="h-8 flex-1 rounded-none border-0 border-b border-dashed bg-transparent px-0 text-xs font-semibold uppercase tracking-wider focus-visible:ring-0"
+          />
+          {onAddIngredient && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 shrink-0 text-[11px] text-muted-foreground"
+              onClick={onAddIngredient}
+            >
+              <Plus className="h-3 w-3" /> Add ingredient
+            </Button>
+          )}
+          {/* Always deletable — the "keep at least one row" rule exists so the form can't end
+              up with nowhere to enter an ingredient, and a header is not that. */}
+          <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={onRemove}>
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Ingredient ──
+  return (
+    <div
+      ref={setNodeRef}
+      data-row-id={ing.rowId}
+      style={style}
+      className={cn("space-y-1", isDragging && "opacity-60")}
+    >
+      <div className="flex items-center gap-2">
+        {handle}
+        <span className="h-6 w-6 rounded-full bg-muted text-xs flex items-center justify-center shrink-0">
+          {number}
+        </span>
+        <FoodSearchInput
+          value={ing.name}
+          foodId={ing.foodId}
+          onSelect={(id, label, macros, unitWeights, commonServings, realMeasures) =>
+            onPatch({
+              foodId: id,
+              name: label,
+              per100g: macros,
+              unitWeights,
+              commonServings,
+              realMeasures,
+              // A fresh food swap resets to plain grams rather than keeping the previous
+              // food's measure selection, which may not even exist for this one (e.g. "1
+              // stick" doesn't apply to a vegetable) — and its label along with it, since it
+              // described that other food's measure.
+              unit: "g",
+              measureLabel: null,
+              measureDescription: null,
+              measureCount: null,
+              // Defaults a freshly-picked food to a quantity of 1 rather than leaving this
+              // row's existing amount (almost always "" on a brand-new row) untouched. Without
+              // this, picking a food contributes nothing to the recipe until the dietitian
+              // separately remembers to also type an amount — the row shows no macro line and
+              // the Live preview card doesn't appear, which reads as "the app didn't register
+              // my pick" rather than "there's one more field to fill in". Only overrides a
+              // quantity that isn't already a real (>0) amount, so re-picking a different food
+              // for a row the dietitian already sized keeps that sizing.
+              quantity: typeof ing.quantity === "number" && ing.quantity > 0 ? ing.quantity : 1,
+            })
+          }
+          onChange={(val) =>
+            onPatch({
+              name: val,
+              foodId: "",
+              per100g: null,
+              unitWeights: undefined,
+              commonServings: undefined,
+              realMeasures: undefined,
+              measureLabel: null,
+              measureDescription: null,
+              measureCount: null,
+            })
+          }
+        />
+        <MeasureSelect
+          realMeasures={ing.realMeasures}
+          option={ing.unit}
+          count={ing.quantity}
+          onOptionChange={(v) => onPatch({ unit: v })}
+          onCountChange={(v) => onPatch({ quantity: v })}
+        />
+        {/* Gram equivalent (prompt-69) — the weight this selection already resolves to, for
+            clients who think in metric. tabular-nums + a fixed min-width so the row doesn't
+            jitter as digits change while typing. */}
+        {(() => {
+          const eq = formatGramEquivalent(ing.unit, ing.quantity, ingredientGrams(ing));
+          return eq ? (
+            <span className="text-[11px] text-muted-foreground tabular-nums shrink-0 min-w-14">
+              {eq}
+            </span>
+          ) : null;
+        })()}
+        {isApproximateUnit(ing.commonServings, ing.unitWeights, ing.unit, ing.realMeasures) && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+            </TooltipTrigger>
+            <TooltipContent className="max-w-56 text-xs">
+              Approximate — real weight not available for this food, enter in grams for exact
+              accuracy.
+            </TooltipContent>
+          </Tooltip>
+        )}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 shrink-0"
+          onClick={onRemove}
+          disabled={!canDelete}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+      {/* This ingredient's own macros at the amount entered above (prompt-78). Its own line
+          rather than more text on the row, which already carries the name, the amount picker
+          and the gram equivalent; pl-13 lines it up under the food name (past the drag handle
+          + the h-6 index badge + two gap-2s). Deliberately plainer than the "Live preview"
+          card below, which is the recipe total — a small grey figure per row can't be mistaken
+          for the headline. */}
+      {(() => {
+        const m = ingredientMacros(ing);
+        // Gate on "is there an amount to scale?", NOT on "is the result > 0" (prompt-81). Salt,
+        // water and most spices are genuinely 0 kcal, and the old `m.kcal > 0` test hid their
+        // line entirely — indistinguishable from the unmatched-food gap below, and wrong:
+        // "0 kcal · P0 C0 F0" is a true and useful statement about a matched ingredient.
+        if (m && ingredientGrams(ing) > 0) {
+          return (
+            <p className="pl-13 text-[11px] text-muted-foreground tabular-nums">
+              {formatIngredientMacros(m)}
+            </p>
+          );
+        }
+        // No macro line means this row has no food behind it — its text was typed but never
+        // matched to one in the library (prompt-81). Say so. The blank space alone read as
+        // "still loading", and the row's only other signal is the absence of a subtle green
+        // tint, which is easy to miss. This ingredient contributes 0 to every total until
+        // it's matched.
+        if (!ing.per100g && ing.name.trim()) {
+          return (
+            <p className="pl-13 flex items-center gap-1 text-[11px] text-amber-600">
+              <AlertTriangle className="h-3 w-3 shrink-0" />
+              Not matched to a food in your library — adds nothing to this recipe. Pick a
+              suggestion from the search box.
+            </p>
+          );
+        }
+        return null;
+      })()}
+    </div>
+  );
 }
 
 interface NewRecipeDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   editId?: string | null;
+  // Pre-selects the category for a brand-new recipe with whatever category tab the dietitian
+  // was already filtering the library by (e.g. clicking "New recipe" while on the "Snack" tab
+  // starts the form on Snack instead of always defaulting to Lunch). Ignored in edit mode — an
+  // existing recipe's own category always wins there, regardless of the caller's current tab.
+  // Undefined (the "All" tab has no single category to hand down) falls back to "lunch", the
+  // form's original default.
+  initialCategory?: RecipeCategory;
 }
 
 const CATEGORIES: RecipeCategory[] = ["breakfast", "lunch", "dinner", "snack", "dessert", "drink"];
@@ -210,8 +528,6 @@ const CUISINES: RecipeCuisine[] = [
   "asian",
   "italian",
 ];
-const ALLERGENS: Allergen[] = ["gluten", "dairy", "nuts", "eggs", "soy", "shellfish", "sesame"];
-
 const STEPS = [
   { id: 1, label: "Basics" },
   { id: 2, label: "Ingredients" },
@@ -220,7 +536,12 @@ const STEPS = [
   { id: 5, label: "Review" },
 ];
 
-export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogProps) {
+export function NewRecipeDialog({
+  open,
+  onOpenChange,
+  editId,
+  initialCategory,
+}: NewRecipeDialogProps) {
   const isEdit = !!editId;
   const queryClient = useQueryClient();
   const [step, setStep] = useState(1);
@@ -233,18 +554,23 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [prepMin, setPrepMin] = useState(10);
-  const [cookMin, setCookMin] = useState(15);
-  const [servings, setServings] = useState(1);
+  // number | "" (prompt: servings backspace fix) — mirrors measure-select.tsx's own
+  // onCountChange pattern for the exact same reason: a controlled <input type="number"> whose
+  // value is clamped to a minimum ON EVERY KEYSTROKE can never actually show empty, because
+  // Number("") is 0 and Math.max(min, 0) instantly snaps back to the minimum before the
+  // dietitian can type a replacement digit — backspacing "1" just re-renders "1". Letting the
+  // state hold "" while the field is transiently empty (clamped back to the minimum on blur,
+  // not on every change) is what lets a plain backspace-then-retype actually work.
+  const [prepMin, setPrepMin] = useState<number | "">(10);
+  const [cookMin, setCookMin] = useState<number | "">(15);
+  const [servings, setServings] = useState<number | "">(1);
 
-  const [ingredients, setIngredients] = useState<IngredientDraft[]>([
-    { foodId: "", name: "", quantity: "", unit: "g", per100g: null },
-  ]);
+  const [ingredients, setIngredients] = useState<IngredientDraft[]>([blankIngredient()]);
 
   const [steps, setMethodSteps] = useState<string[]>([""]);
 
   const [diets, setDiets] = useState<DietTag[]>([]);
-  const [allergens, setAllergens] = useState<Allergen[]>([]);
+  const [allergens, setAllergens] = useState<string[]>([]);
   const [notes, setNotes] = useState("");
 
   const reset = () => {
@@ -257,7 +583,7 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
     setPrepMin(10);
     setCookMin(15);
     setServings(1);
-    setIngredients([{ foodId: "", name: "", quantity: "", unit: "g", per100g: null }]);
+    setIngredients([blankIngredient()]);
     setMethodSteps([""]);
     setDiets([]);
     setAllergens([]);
@@ -269,6 +595,17 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
     setTimeout(reset, 200);
   };
 
+  // Seeds a brand-new recipe's category from whatever tab the dietitian was on in the library
+  // (see initialCategory above), each time the dialog actually opens for a NEW recipe. Doing
+  // this in an effect on `open` rather than trusting reset()'s own hardcoded "lunch" avoids a
+  // staleness trap: reset() runs 200ms after the PREVIOUS close, capturing whatever category
+  // tab was active back then — if the dietitian then switches tabs before opening the dialog
+  // again, that stale reset would win. Gated on !isEdit so opening this same dialog to edit an
+  // existing recipe never overrides its own stored category.
+  useEffect(() => {
+    if (open && !isEdit) setCategory(initialCategory ?? "lunch");
+  }, [open, isEdit, initialCategory]);
+
   const { data: editData } = useQuery({
     queryKey: ["meal", editId],
     queryFn: () => getMeal(editId as string),
@@ -278,6 +615,14 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
   const { data: dietOptions = [] } = useQuery({
     queryKey: ["settings", "dietary-preferences"],
     queryFn: fetchDietaryPreferences,
+  });
+  // Same Settings-managed allergen list the New Client dialog and New Food dialog now use
+  // (prompt-105) — one vocabulary on both sides of the client/food divide, so a tag chosen here
+  // can actually match a client's recorded allergy. Replaces a hardcoded lowercase array that
+  // shared none of its values' casing with the client side.
+  const { data: allergyOptions = [] } = useQuery({
+    queryKey: ["settings", "allergies"],
+    queryFn: fetchAllergies,
   });
   const formReady = !isEdit || !!editData;
 
@@ -294,6 +639,10 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
     setIngredients(
       editData.ingredients.length
         ? editData.ingredients.map((i) => {
+            // A section row has no food, no portions and no amount, so there is no measure to
+            // pre-select — pickInitialMeasureSelection reads exactly those fields. Rebuild it
+            // from a blank section and keep only its title.
+            if (i.type === "section") return { ...blankSection(), name: i.name };
             // Pre-selects the exact real measure originally picked (prompt-49) when it still
             // matches one of this food's current portions, else falls back to grams + the
             // stored quantity — same rule as EditPlanItemDialog.
@@ -304,30 +653,124 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
               typeof i.quantity === "number" ? i.quantity : 0,
               i.unit,
             );
-            return { ...i, unit: initial.option, quantity: initial.count };
+            return {
+              ...i,
+              rowId: `row-${++rowSeq}`,
+              // A recipe saved before sections existed has no `type` on its rows; every one of
+              // those is an ingredient.
+              type: "ingredient" as const,
+              unit: initial.option,
+              quantity: initial.count,
+            };
           })
-        : [{ foodId: "", name: "", quantity: "", unit: "g", per100g: null }],
+        : [blankIngredient()],
     );
     setMethodSteps(editData.steps.length ? editData.steps : [""]);
     setDiets(editData.dietTags as DietTag[]);
-    setAllergens(editData.allergens as Allergen[]);
+    setAllergens(editData.allergens);
     setNotes(editData.notes || "");
   }, [open, isEdit, editData]);
 
-  // Rows that will actually be SAVED — a row with no foodId has no food to reference, so it
-  // can't be persisted as an ingredient. This gates submission and must keep that meaning.
-  const validIngredients = ingredients.filter(
-    (i) => i.foodId && i.name.trim() && typeof i.quantity === "number" && i.quantity > 0,
-  );
+  // Rows that will actually be SAVED as ingredients — a row with no foodId has no food to
+  // reference, so it can't be persisted as one. This gates submission and must keep that
+  // meaning. Section headers are excluded (prompt-97): they're saved too, but they aren't
+  // ingredients, and letting one count here would let a recipe consisting of nothing but a
+  // title pass step 2's gate and be saved with no food in it at all.
+  const validIngredients = ingredients.filter(isSavableIngredient);
   // Rows the dietitian has actually FILLED IN, matched or not (prompt-81). The "n/n matched"
   // ratio has to be against this: it was previously counted against validIngredients, which
   // already excludes unmatched rows, so an unmatched ingredient was left out of its own
   // denominator and the ratio read a reassuring "5/5 matched" while one row silently
   // contributed nothing. A ratio that can never report a problem is worse than no ratio.
   const filledIngredients = ingredients.filter(
-    (i) => i.name.trim() && typeof i.quantity === "number" && i.quantity > 0,
+    (i) => i.type === "ingredient" && i.name.trim() && typeof i.quantity === "number" && i.quantity > 0,
   );
   const validSteps = steps.filter((s) => s.trim());
+
+  // Scrolls a freshly-added row into view. Without this, "+ Add"/"+ Add section"/a section's
+  // own "+ Add ingredient" silently appends off the bottom of a long list — nothing on screen
+  // changes, so it reads as if the click did nothing until the dietitian manually scrolls down
+  // to find it. Set (to the new row's rowId, via data-row-id on its rendered element) right
+  // before the state update that introduces it; the effect below consumes it exactly once,
+  // after the row has actually rendered, so scrollIntoView has a real element to find rather
+  // than racing the render.
+  const pendingScrollRowId = useRef<string | null>(null);
+  useEffect(() => {
+    const id = pendingScrollRowId.current;
+    if (!id) return;
+    pendingScrollRowId.current = null;
+    requestAnimationFrame(() => {
+      document
+        .querySelector(`[data-row-id="${id}"]`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }, [ingredients]);
+
+  // Rows are addressed by rowId, never by index — after a drag, an index captured when the row
+  // rendered points at whatever moved into that slot.
+  const patchRow = useCallback((rowId: string, patch: Partial<IngredientDraft>) => {
+    setIngredients((prev) => prev.map((r) => (r.rowId === rowId ? { ...r, ...patch } : r)));
+  }, []);
+  const removeRow = useCallback((rowId: string) => {
+    setIngredients((prev) => prev.filter((r) => r.rowId !== rowId));
+  }, []);
+  // Appends into one section's own run rather than at the end of the whole list. Without this
+  // the toolbar's "+ Add" is the only way to add an ingredient, so with two or more sections a
+  // new row could only ever join the LAST one — everything else needed a drag to get there.
+  const addIngredientToSection = useCallback((sectionRowId: string) => {
+    const row = blankIngredient();
+    pendingScrollRowId.current = row.rowId;
+    setIngredients((prev) => {
+      const idx = sectionInsertIndex(prev, sectionRowId);
+      return [...prev.slice(0, idx), row, ...prev.slice(idx)];
+    });
+  }, []);
+  // Appends a section, except that an untouched placeholder ingredient sitting at the end is
+  // REPLACED rather than pushed above the new header. The dialog opens with one blank row, and
+  // sections append to the end, so the common "open the form, start with a section" path
+  // otherwise strands that row above the first heading, outside every section. Only a row with
+  // neither a matched food nor typed text qualifies — anything the dietitian has actually put
+  // something into stays exactly where it is.
+  const addSection = useCallback(() => {
+    const row = blankSection();
+    pendingScrollRowId.current = row.rowId;
+    setIngredients((prev) => {
+      const last = prev[prev.length - 1];
+      const swallow = last && last.type === "ingredient" && !last.foodId && !last.name.trim();
+      return swallow ? [...prev.slice(0, -1), row] : [...prev, row];
+    });
+  }, []);
+
+  // The visible sequence skips section headers, so numbering reads 1,2,3 across the whole
+  // recipe rather than restarting or leaving gaps where a title sits.
+  const rowNumbers = useMemo(() => {
+    let n = 0;
+    return ingredients.map((i) => (i.type === "section" ? null : ++n));
+  }, [ingredients]);
+  // The last remaining INGREDIENT row can't be deleted — the form would then have nowhere to
+  // enter one. Section headers don't count toward that floor and are always deletable, so a
+  // recipe can freely have none or several.
+  const ingredientRowCount = ingredients.filter((i) => i.type === "ingredient").length;
+
+  const sensors = useSensors(
+    // A few pixels of travel before a drag starts, so clicking the handle (or tabbing to it)
+    // isn't read as the beginning of one.
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    setIngredients((prev) => {
+      const from = prev.findIndex((r) => r.rowId === active.id);
+      const to = prev.findIndex((r) => r.rowId === over.id);
+      if (from === -1 || to === -1) return prev;
+      // Array order IS recipe order — reordering here is the whole feature, no position field
+      // to keep in sync.
+      return arrayMove(prev, from, to);
+    });
+  }, []);
 
   const liveMacros = useMemo(() => {
     let kcal = 0,
@@ -346,7 +789,10 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
       fat += m.fat;
       fiber += m.fiber;
     }
-    const s = Math.max(1, servings);
+    // servings can be "" transiently while the dietitian is mid-edit (see the servings state
+    // comment above) — treated as 0 here so Math.max still falls through to the same 1-serving
+    // floor, exactly as it did when servings was always a plain number.
+    const s = Math.max(1, servings === "" ? 0 : servings);
     return {
       total: {
         kcal: Math.round(kcal),
@@ -373,7 +819,14 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
     return true;
   }, [step, name, validIngredients]);
 
-  const totalTime = prepMin + cookMin;
+  // Normalized numbers for every downstream read (macros, display text, the save payload) —
+  // "" only ever exists transiently in the input itself while the dietitian is mid-edit; it
+  // must never leak into arithmetic ("" + 15 is the STRING "15", not 15) or be saved as a
+  // recipe's actual servings/time.
+  const numServings = servings === "" ? 1 : servings;
+  const numPrepMin = prepMin === "" ? 0 : prepMin;
+  const numCookMin = cookMin === "" ? 0 : cookMin;
+  const totalTime = numPrepMin + numCookMin;
   const meta = CATEGORY_META[category];
   const ps = liveMacros.perServing;
 
@@ -447,7 +900,12 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                         type="number"
                         min={1}
                         value={servings}
-                        onChange={(e) => setServings(Math.max(1, Number(e.target.value)))}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setServings(v === "" ? "" : Math.max(1, Number(v)));
+                        }}
+                        onFocus={(e) => e.currentTarget.select()}
+                        onBlur={() => setServings((s) => (s === "" ? 1 : s))}
                       />
                     </div>
                     <div className="space-y-1.5">
@@ -489,7 +947,12 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                         type="number"
                         min={0}
                         value={prepMin}
-                        onChange={(e) => setPrepMin(Math.max(0, Number(e.target.value)))}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setPrepMin(v === "" ? "" : Math.max(0, Number(v)));
+                        }}
+                        onFocus={(e) => e.currentTarget.select()}
+                        onBlur={() => setPrepMin((m) => (m === "" ? 0 : m))}
                       />
                     </div>
                     <div className="space-y-1.5">
@@ -498,7 +961,12 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                         type="number"
                         min={0}
                         value={cookMin}
-                        onChange={(e) => setCookMin(Math.max(0, Number(e.target.value)))}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setCookMin(v === "" ? "" : Math.max(0, Number(v)));
+                        }}
+                        onFocus={(e) => e.currentTarget.select()}
+                        onBlur={() => setCookMin((m) => (m === "" ? 0 : m))}
                       />
                     </div>
                   </div>
@@ -611,157 +1079,61 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                     <div>
                       <div className="text-sm font-semibold">Ingredients</div>
                       <div className="text-xs text-muted-foreground">
-                        For {servings} serving{servings > 1 ? "s" : ""}. Search your library and
+                        For {numServings} serving{numServings > 1 ? "s" : ""}. Search your library and
                         USDA FoodData Central — picking a USDA result adds it to your library.
                       </div>
                     </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        setIngredients([
-                          ...ingredients,
-                          { foodId: "", name: "", quantity: "", unit: "g", per100g: null },
-                        ])
-                      }
+                    <div className="flex items-center gap-2">
+                      {/* A section header is just another row appended to the same list — it
+                          can then be dragged anywhere, like any other row. */}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={addSection}
+                      >
+                        <Plus className="h-3.5 w-3.5" /> Add section
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          const row = blankIngredient();
+                          pendingScrollRowId.current = row.rowId;
+                          setIngredients([...ingredients, row]);
+                        }}
+                      >
+                        <Plus className="h-3.5 w-3.5" /> Add
+                      </Button>
+                    </div>
+                  </div>
+                  <DndContext
+                    sensors={sensors}
+                    collisionDetection={closestCenter}
+                    onDragEnd={handleDragEnd}
+                  >
+                    <SortableContext
+                      items={ingredients.map((i) => i.rowId)}
+                      strategy={verticalListSortingStrategy}
                     >
-                      <Plus className="h-3.5 w-3.5" /> Add
-                    </Button>
-                  </div>
-                  <div className="space-y-2">
-                    {ingredients.map((ing, idx) => (
-                      <div key={idx} className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="h-6 w-6 rounded-full bg-muted text-xs flex items-center justify-center shrink-0">
-                          {idx + 1}
-                        </span>
-                        <FoodSearchInput
-                          value={ing.name}
-                          foodId={ing.foodId}
-                          onSelect={(id, label, macros, unitWeights, commonServings, realMeasures) => {
-                            const copy = [...ingredients];
-                            copy[idx] = {
-                              ...copy[idx],
-                              foodId: id,
-                              name: label,
-                              per100g: macros,
-                              unitWeights,
-                              commonServings,
-                              realMeasures,
-                              // A fresh food swap resets to plain grams rather than keeping the
-                              // previous food's measure selection, which may not even exist for
-                              // this one (e.g. "1 stick" doesn't apply to a vegetable) — and its
-                              // label along with it, since it described that other food's measure.
-                              unit: "g",
-                              measureLabel: null,
-                              measureDescription: null,
-                              measureCount: null,
-                            };
-                            setIngredients(copy);
-                          }}
-                          onChange={(val) => {
-                            const copy = [...ingredients];
-                            copy[idx] = {
-                              ...copy[idx],
-                              name: val,
-                              foodId: "",
-                              per100g: null,
-                              unitWeights: undefined,
-                              commonServings: undefined,
-                              realMeasures: undefined,
-                              measureLabel: null,
-                              measureDescription: null,
-                              measureCount: null,
-                            };
-                            setIngredients(copy);
-                          }}
-                        />
-                        <MeasureSelect
-                          realMeasures={ing.realMeasures}
-                          option={ing.unit}
-                          count={ing.quantity}
-                          onOptionChange={(v) => {
-                            const copy = [...ingredients];
-                            copy[idx] = { ...copy[idx], unit: v };
-                            setIngredients(copy);
-                          }}
-                          onCountChange={(v) => {
-                            const copy = [...ingredients];
-                            copy[idx] = { ...copy[idx], quantity: v };
-                            setIngredients(copy);
-                          }}
-                        />
-                        {/* Gram equivalent (prompt-69) — the weight this selection already
-                            resolves to, for clients who think in metric. tabular-nums + a fixed
-                            min-width so the row doesn't jitter as digits change while typing. */}
-                        {(() => {
-                          const eq = formatGramEquivalent(ing.unit, ing.quantity, ingredientGrams(ing));
-                          return eq ? (
-                            <span className="text-[11px] text-muted-foreground tabular-nums shrink-0 min-w-14">
-                              {eq}
-                            </span>
-                          ) : null;
-                        })()}
-                        {isApproximateUnit(ing.commonServings, ing.unitWeights, ing.unit, ing.realMeasures) && (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
-                            </TooltipTrigger>
-                            <TooltipContent className="max-w-56 text-xs">
-                              Approximate — real weight not available for this food, enter in
-                              grams for exact accuracy.
-                            </TooltipContent>
-                          </Tooltip>
-                        )}
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 shrink-0"
-                          onClick={() => setIngredients(ingredients.filter((_, i) => i !== idx))}
-                          disabled={ingredients.length === 1}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
+                      <div className="space-y-2">
+                        {ingredients.map((ing, idx) => (
+                          <SortableIngredientRow
+                            key={ing.rowId}
+                            ing={ing}
+                            number={rowNumbers[idx]}
+                            canDelete={ing.type === "section" || ingredientRowCount > 1}
+                            onPatch={(patch) => patchRow(ing.rowId, patch)}
+                            onRemove={() => removeRow(ing.rowId)}
+                            onAddIngredient={
+                              ing.type === "section"
+                                ? () => addIngredientToSection(ing.rowId)
+                                : undefined
+                            }
+                          />
+                        ))}
                       </div>
-                      {/* This ingredient's own macros at the amount entered above (prompt-78).
-                          Its own line rather than more text on the row, which already carries
-                          the name, the amount picker and the gram equivalent; pl-8 lines it up
-                          under the food name (past the h-6 index badge + gap-2). Deliberately
-                          plainer than the "Live preview" card below, which is the recipe total
-                          — a small grey figure per row can't be mistaken for the headline. */}
-                      {(() => {
-                        const m = ingredientMacros(ing);
-                        // Gate on "is there an amount to scale?", NOT on "is the result > 0"
-                        // (prompt-81). Salt, water and most spices are genuinely 0 kcal, and the
-                        // old `m.kcal > 0` test hid their line entirely — indistinguishable from
-                        // the unmatched-food gap below, and wrong: "0 kcal · P0 C0 F0" is a true
-                        // and useful statement about a matched ingredient.
-                        if (m && ingredientGrams(ing) > 0) {
-                          return (
-                            <p className="pl-8 text-[11px] text-muted-foreground tabular-nums">
-                              {formatIngredientMacros(m)}
-                            </p>
-                          );
-                        }
-                        // No macro line means this row has no food behind it — its text was
-                        // typed but never matched to one in the library (prompt-81). Say so.
-                        // The blank space alone read as "still loading", and the row's only
-                        // other signal is the absence of a subtle green tint, which is easy to
-                        // miss. This ingredient contributes 0 to every total until it's matched.
-                        if (!ing.per100g && ing.name.trim()) {
-                          return (
-                            <p className="pl-8 flex items-center gap-1 text-[11px] text-amber-600">
-                              <AlertTriangle className="h-3 w-3 shrink-0" />
-                              Not matched to a food in your library — adds nothing to this recipe.
-                              Pick a suggestion from the search box.
-                            </p>
-                          );
-                        }
-                        return null;
-                      })()}
-                      </div>
-                    ))}
-                  </div>
+                    </SortableContext>
+                  </DndContext>
                   {liveMacros.matched > 0 && (
                     <Card className="p-3 bg-accent/30 text-xs">
                       <div className="flex items-center gap-1.5 mb-1.5 font-semibold text-foreground">
@@ -775,7 +1147,7 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                         <MacroPrev label="F" value={`${ps.fat}g`} />
                         <MacroPrev label="Fib" value={`${ps.fiber}g`} />
                       </div>
-                      {servings > 1 && (
+                      {numServings > 1 && (
                         <div className="text-[10px] text-muted-foreground mt-1.5 text-center">
                           Per serving (total: {liveMacros.total.kcal} kcal)
                         </div>
@@ -889,7 +1261,7 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                         bg="bg-emerald-50"
                       />
                     </div>
-                    {servings > 1 && (
+                    {numServings > 1 && (
                       <div className="text-[11px] text-muted-foreground text-center">
                         Total recipe: {liveMacros.total.kcal} kcal · {liveMacros.total.protein}g P ·{" "}
                         {liveMacros.total.carbs}g C · {liveMacros.total.fat}g F
@@ -929,29 +1301,33 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                     <Label className="flex items-center gap-1.5">
                       <AlertTriangle className="h-3.5 w-3.5 text-amber-600" /> Allergens
                     </Label>
-                    <div className="flex flex-wrap gap-1.5">
-                      {ALLERGENS.map((a) => {
-                        const active = allergens.includes(a);
-                        return (
-                          <button
-                            key={a}
-                            onClick={() =>
-                              setAllergens((prev) =>
-                                prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a],
-                              )
-                            }
-                            className={cn(
-                              "px-2.5 py-1 rounded-md text-xs border transition-colors",
-                              active
-                                ? "bg-amber-100 text-amber-900 border-amber-300"
-                                : "bg-background border-border hover:bg-muted",
-                            )}
-                          >
-                            {ALLERGEN_LABEL[a]}
-                          </button>
-                        );
-                      })}
-                    </div>
+                    {allergyOptions.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">Loading allergens…</p>
+                    ) : (
+                      <div className="flex flex-wrap gap-1.5">
+                        {allergyOptions.map((a) => {
+                          const active = allergens.includes(a);
+                          return (
+                            <button
+                              key={a}
+                              onClick={() =>
+                                setAllergens((prev) =>
+                                  prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a],
+                                )
+                              }
+                              className={cn(
+                                "px-2.5 py-1 rounded-md text-xs border transition-colors",
+                                active
+                                  ? "bg-amber-100 text-amber-900 border-amber-300"
+                                  : "bg-background border-border hover:bg-muted",
+                              )}
+                            >
+                              {a}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                   <div className="space-y-1.5">
                     <Label>
@@ -1022,7 +1398,7 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                         </span>
                         <span className="flex items-center gap-1">
                           <Users className="h-3 w-3" />
-                          {servings}
+                          {numServings}
                         </span>
                       </div>
                       <div className="grid grid-cols-5 gap-2 text-center">
@@ -1075,7 +1451,7 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                     <Card className="p-3 border-amber-200 bg-amber-50 text-xs">
                       <div className="font-semibold flex items-center gap-1.5 text-amber-900">
                         <AlertTriangle className="h-3 w-3" />
-                        Contains: {allergens.map((a) => ALLERGEN_LABEL[a]).join(", ")}
+                        Contains: {allergens.join(", ")}
                       </div>
                     </Card>
                   )}
@@ -1114,12 +1490,24 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                     nameAr: arabicName.trim() || undefined,
                     category,
                     cuisine,
-                    servings,
-                    prepTime: prepMin,
-                    cookTime: cookMin,
+                    servings: numServings,
+                    prepTime: numPrepMin,
+                    cookTime: numCookMin,
                     dietTags: diets,
                     allergens,
-                    ingredients: validIngredients.map((i) => {
+                    // Iterates the FULL row list rather than validIngredients (prompt-97).
+                    // That filter requires a foodId and a section header has none, so mapping
+                    // over it would silently drop every section on save — the recipe would come
+                    // back from a reload with its headers gone and no error anywhere.
+                    ingredients: ingredients.flatMap((i): CreateMealIngredient[] => {
+                      if (i.type === "section") {
+                        // Same "don't save empty junk" rule ingredients already follow: an
+                        // untitled header is a row that was started and abandoned (and `name`
+                        // is required server-side regardless).
+                        const title = i.name.trim();
+                        return title ? [{ type: "section" as const, name: title }] : [];
+                      }
+                      if (!isSavableIngredient(i)) return [];
                       // Same resolution as the live preview — a real-measure selection (e.g.
                       // "3" × "1 pitted date, pitted") is sent as its exact resolved gram total
                       // with unit="g", since that's the only unit value every downstream
@@ -1127,7 +1515,8 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                       // edit) can resolve correctly for an arbitrary per-food measure.
                       const qty = typeof i.quantity === "number" ? i.quantity : 0;
                       const resolved = resolveMeasure(i.realMeasures, i.unit, qty);
-                      return {
+                      return [{
+                        type: "ingredient" as const,
                         food: i.foodId,
                         name: i.name,
                         quantity: resolved.quantity,
@@ -1143,7 +1532,7 @@ export function NewRecipeDialog({ open, onOpenChange, editId }: NewRecipeDialogP
                         measureLabel: resolved.measureLabel ?? i.measureLabel ?? null,
                         measureDescription: resolved.measureDescription ?? i.measureDescription ?? null,
                         measureCount: resolved.measureCount ?? i.measureCount ?? null,
-                      };
+                      }];
                     }),
                     steps: validSteps,
                     notes: notes.trim() || undefined,
@@ -1253,12 +1642,19 @@ type SearchOption =
   | { kind: "library"; key: string; food: FoodSearchResult }
   | { kind: "usda"; key: string; hit: UsdaSearchResult };
 
-// Deliberately small — this is a dropdown, not Food Database's 200-per-page browser. The query
-// key below is namespaced with "ingredient" for that reason: Food Database caches its USDA
-// searches under ["foods","usda-search", q, page, types] with no limit in the key, so sharing
-// that key at a different limit would let a 10-result dropdown response be served to its
-// paginated 200-result list.
-const USDA_DROPDOWN_LIMIT = 10;
+// Deliberately smaller than Food Database's 200-per-page browser — this is a dropdown, not a
+// paginated list. Raised from the original 10 (prompt-100): FDC's Branded dataset outnumbers
+// Foundation/SR Legacy/Survey (FNDDS) combined by roughly 15:1, so relevance-ranked results for
+// a common ingredient name can fill 10 slots with Branded products alone even though generic
+// matches exist further down. 25 gives real headroom for a mix up front.
+//
+// Also doubles (prompt-101) as the STARTING point and GROWTH STEP for usdaLimit below — scrolling
+// near the bottom of the results panel asks for another batch of this size, up to FDC's own
+// 200-per-request ceiling, instead of stopping dead at a fixed count. The query key is
+// namespaced with "ingredient" for that reason: Food Database caches its USDA searches under
+// ["foods","usda-search", q, page, types] with no limit in the key, so sharing that key at a
+// different limit would let a dropdown response be served to its paginated list.
+const USDA_DROPDOWN_LIMIT = 25;
 
 function FoodSearchInput({
   value,
@@ -1286,7 +1682,15 @@ function FoodSearchInput({
   // keystroke (prompt-62/63's latency work — the safeguard is the debounce plus React Query's
   // cache, since neither USDA route carries server-side rate limiting).
   const [debounced, setDebounced] = useState("");
-  const [dataTypeFilter, setDataTypeFilter] = useState<Set<UsdaDataType>>(new Set());
+  // Defaults to every type EXCEPT Branded (prompt-100) — a recipe ingredient normally wants the
+  // generic USDA reference food (Foundation/SR Legacy/Survey), not a specific commercial
+  // product, and Branded's sheer size (see USDA_DROPDOWN_LIMIT above) otherwise crowds the
+  // other three out of a small dropdown. Branded stays one tap away via its own chip below;
+  // deselecting all three chips (an empty Set) falls through to "no filter", matching the
+  // chips' existing all-or-nothing semantics — it doesn't mean "just Branded".
+  const [dataTypeFilter, setDataTypeFilter] = useState<Set<UsdaDataType>>(
+    new Set(["Foundation", "SR Legacy", "Survey (FNDDS)"]),
+  );
   const [importingFdcId, setImportingFdcId] = useState<number | null>(null);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -1309,7 +1713,10 @@ function FoodSearchInput({
     }
     setLoading(true);
     try {
-      const res = await fetchFoods({ search: q, limit: 20 });
+      // Most-used-as-an-ingredient first (prompt-117) — distinct recipes containing this
+      // food, NOT meal-plan usage. Staples like flour, eggs and olive oil should lead
+      // here; what gets dropped straight into a plan is a different list entirely.
+      const res = await fetchFoods({ search: q, limit: 20, sortBy: "usedInRecipes" });
       setResults(
         res.foods.map((f) => ({
           id: f.id,
@@ -1349,15 +1756,42 @@ function FoodSearchInput({
   // only the page size and the query-key namespace differ (see USDA_DROPDOWN_LIMIT).
   const dataTypesKey = [...dataTypeFilter].sort().join(",");
   const usdaEnabled = debounced.length > 1;
+  // How many results to ask FDC for — grows as the dietitian scrolls (see handleResultsScroll
+  // below), starting from USDA_DROPDOWN_LIMIT and capped at 200, FDC's own per-request ceiling
+  // (see the comment on searchUsdaFoods in usda-client.js — 201 gets a live 400). Re-querying at
+  // a bigger flat limit rather than paging+merging keeps this dropdown's fetch/render logic
+  // identical to before scroll growth existed; FDC has no server-side rate limiting on this
+  // route (see the debounce comment above) and the result sets here are small enough that
+  // re-fetching from the top on each growth step is cheap. A recipe ingredient search hitting
+  // the 200 ceiling with more still unseen is exactly the case Food Database's full 200-per-page
+  // "Search USDA" tab (with real pagination) exists for.
+  const [usdaLimit, setUsdaLimit] = useState(USDA_DROPDOWN_LIMIT);
+  // A fresh search (new query or source filter) starts back at the small default — growth is
+  // earned per-search, not carried over from whatever the dietitian had scrolled to before.
+  useEffect(() => {
+    setUsdaLimit(USDA_DROPDOWN_LIMIT);
+  }, [debounced, dataTypesKey]);
   const { data: usdaData, isFetching: usdaFetching } = useQuery({
-    queryKey: ["foods", "usda-search", "ingredient", debounced, dataTypesKey],
+    queryKey: ["foods", "usda-search", "ingredient", debounced, dataTypesKey, usdaLimit],
     queryFn: () =>
       searchUsda(debounced, {
-        limit: USDA_DROPDOWN_LIMIT,
+        limit: usdaLimit,
         dataTypes: dataTypeFilter.size > 0 ? [...dataTypeFilter] : undefined,
       }),
     enabled: usdaEnabled,
   });
+  const usdaTotal = usdaData?.total ?? 0;
+  const usdaHasMore = usdaLimit < 200 && usdaLimit < usdaTotal;
+  // Fires on any scroll of the results panel — native (scrollbar drag) or the manual
+  // scrollTop-driven wheel handling below, both change scrollTop and both fire this. 48px of
+  // slack so growth kicks in a little before the literal last pixel, which reads as smoother.
+  const handleResultsScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    if (!usdaHasMore || usdaFetching) return;
+    const el = e.currentTarget;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 48) {
+      setUsdaLimit((n) => Math.min(200, n + USDA_DROPDOWN_LIMIT));
+    }
+  };
 
   // Anything already imported is dropped from the USDA section — it's already in the library
   // section above, from its own Food document. Same bulk existence check Food Database uses for
@@ -1543,6 +1977,7 @@ function FoodSearchInput({
         onWheel={(e) => {
           e.currentTarget.scrollTop += e.deltaY;
         }}
+        onScroll={handleResultsScroll}
       >
         {/* Data-type filter, same four values and the same semantics as Food Database's Source
             chips: none selected = no filter = search every type, and the choice is forwarded to

@@ -25,6 +25,7 @@ import {
   Layers,
   GripVertical,
   Loader2,
+  Stethoscope,
 } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
@@ -42,6 +43,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -54,6 +56,8 @@ import {
   SLOT_META,
   DRI_FIELD_GROUPS,
   dayMacros,
+  itemContributions,
+  type ItemContribution,
   mealMacros,
   dayMicros,
   mealMicros,
@@ -65,6 +69,7 @@ import {
   fetchMealPlans,
   fetchMealPlan,
   updateMealPlan,
+  deleteMealPlan,
   addPlanItem,
   updatePlanItem,
   removePlanItem,
@@ -73,6 +78,8 @@ import {
   copyMealSlot,
   copySlotToSlot,
   updateSlotTime,
+  deleteSlotTime,
+  DEFAULT_SLOTS,
 } from "@/lib/mealplans-api";
 import { toast } from "sonner";
 import { NewPlanDialog } from "@/components/new-plan-dialog";
@@ -89,6 +96,9 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { PlanItemPicker } from "@/components/plan-item-picker";
+import { AllergyConflictBadge } from "@/components/allergy-conflict-badge";
+import { getAllergyConflicts } from "@/lib/allergy-matching";
+import { fetchClient } from "@/lib/clients-api";
 import {
   allItemIds,
   createdItemIds,
@@ -97,6 +107,7 @@ import {
   type CopyUndoRecord,
 } from "@/lib/copy-undo";
 import { MicronutrientPanel, type MicronutrientRow } from "@/components/micronutrient-panel";
+import { ContributionHover } from "@/components/nutrient-contributions";
 import { fetchDailyValues } from "@/lib/foods-api";
 import { EditPlanItemDialog, type EditableItem } from "@/components/edit-plan-item-dialog";
 
@@ -138,6 +149,8 @@ function MealPlansPage() {
   const [downloading, setDownloading] = useState(false);
   const [duplicateDialogOpen, setDuplicateDialogOpen] = useState(false);
   const [saveAsTemplateOpen, setSaveAsTemplateOpen] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deletingPlan, setDeletingPlan] = useState(false);
   const [copyDayOpen, setCopyDayOpen] = useState(false);
   const [copyTargetDays, setCopyTargetDays] = useState<number[]>([]);
   const [copying, setCopying] = useState(false);
@@ -154,8 +167,15 @@ function MealPlansPage() {
   const [slotAction, setSlotAction] = useState<{
     mealId: string;
     slot: string;
-    mode: "copy" | "time";
+    // "new-slot" (prompt-111) reuses this same Dialog rather than standing up a second one.
+    // It's the only mode with no existing slot behind it, so mealId/slot are "" for it.
+    mode: "copy" | "time" | "new-slot";
   } | null>(null);
+  const [newSlotName, setNewSlotName] = useState("");
+  const [newSlotTime, setNewSlotTime] = useState("");
+  const [newSlotError, setNewSlotError] = useState<string | null>(null);
+  const [savingNewSlot, setSavingNewSlot] = useState(false);
+  const [removingSlot, setRemovingSlot] = useState(false);
   const [copyTargetDaysForSlot, setCopyTargetDaysForSlot] = useState<number[]>([]);
   const [copyingSlot, setCopyingSlot] = useState(false);
   const [editTimeValue, setEditTimeValue] = useState("");
@@ -199,6 +219,18 @@ function MealPlansPage() {
   const plan = detailPlan ?? plans.find((p) => p.id === effectiveId);
   const day = plan?.days.find((d) => d.day === activeDay) ?? plan?.days[0];
 
+  // The client's recorded allergies, for the conflict warnings on this page (prompt-104).
+  // APIPlan.client only carries profile/targets/driTargets, so this is a separate fetch rather
+  // than a widened populate — the allergies are only needed by this one page, and the key
+  // ["client", id] is the same one clients.$clientId.tsx already uses, so navigating between
+  // the two shares one cache entry instead of refetching.
+  const { data: clientRecord } = useQuery({
+    queryKey: ["client", plan?.clientId],
+    queryFn: () => fetchClient(plan!.clientId),
+    enabled: !!plan?.clientId,
+  });
+  const clientAllergies = clientRecord?.allergies ?? [];
+
   const filteredPlans = useMemo(() => {
     const q = query.trim().toLowerCase();
     return plans.filter((p) => {
@@ -223,6 +255,16 @@ function MealPlansPage() {
   // sumMicros over each slot's mealMicros (meal-plans-mock.ts), so "day == sum of its slots" is
   // structural here, not a coincidence to be re-checked. No new calculation path (prompt-83).
   const microTotals = microsSlot ? mealMicros(microsSlot) : day ? dayMicros(day) : {};
+  // Macros use the exact same slot-vs-day scoping as microTotals above, and are compared
+  // against the same day-level `targets` regardless of scope — same "how much of today's
+  // need does this slot alone cover" semantics already used for the %DRI rows below.
+  const sheetMacros = microsSlot ? mealMacros(microsSlot) : totals;
+  // The same items those totals are built from, flattened — the contribution list has to be
+  // over individual items, not over per-slot subtotals, or a slot would appear as one opaque
+  // contributor. Scope follows the sheet's own day/slot switcher.
+  const microItems = microsSlot ? microsSlot.items : (day?.meals.flatMap((m) => m.items) ?? []);
+  // Day-level macro bars always break down across the whole day, whatever the sheet is showing.
+  const dayItems = day?.meals.flatMap((m) => m.items) ?? [];
 
   // Rows for the shared panel: the client's own DRI target drives the bar, the FDA Daily Value
   // rides alongside as generic context. Nutrients nothing reported are dropped rather than
@@ -232,23 +274,29 @@ function MealPlansPage() {
     if (value == null) return [];
     const target = plan?.driTargets?.[f.key] ?? null;
     const dvEntry = dvRef?.dailyValues?.[f.key];
-    return [{
-      nutrient: f.key,
-      label: f.label,
-      unit: f.unit,
-      value,
-      dri: target != null && target > 0 ? { target, pct: Math.round((value / target) * 100) } : null,
-      // pctExact is display-only (prompt-88): it lets the shared panel show "9.8%" rather than
-      // a "10%" that reads as a Good Source threshold this day never crossed. No day or slot
-      // carries a claim level, so nothing here is classified either way.
-      dv: dvEntry
-        ? {
-            pct: Math.round((value / dvEntry.dv) * 100),
-            level: null,
-            pctExact: (value / dvEntry.dv) * 100,
-          }
-        : null,
-    }];
+    return [
+      {
+        nutrient: f.key,
+        label: f.label,
+        unit: f.unit,
+        value,
+        dri:
+          target != null && target > 0 ? { target, pct: Math.round((value / target) * 100) } : null,
+        // Level 1 (prompt-98): which ITEM in this slot/day the nutrient came from. A recipe
+        // item carries its mealId so the hover can open it into that recipe's own ingredients.
+        contributions: itemContributions(microItems, f.key),
+        // pctExact is display-only (prompt-88): it lets the shared panel show "9.8%" rather
+        // than a "10%" that reads as a Good Source threshold this day never crossed. No day or
+        // slot carries a claim level, so nothing here is classified either way.
+        dv: dvEntry
+          ? {
+              pct: Math.round((value / dvEntry.dv) * 100),
+              level: null,
+              pctExact: (value / dvEntry.dv) * 100,
+            }
+          : null,
+      },
+    ];
   });
 
   async function handleRemoveItem(itemId: string) {
@@ -302,6 +350,26 @@ function MealPlansPage() {
       await downloadPlanPdf(effectiveId, plan.name);
     } finally {
       setDownloading(false);
+    }
+  }
+
+  async function handleDeletePlan() {
+    if (!effectiveId) return;
+    const deletedName = plan?.name ?? "Plan";
+    setDeletingPlan(true);
+    try {
+      await deleteMealPlan(effectiveId);
+      toast.success(`Deleted "${deletedName}"`);
+      qc.removeQueries({ queryKey: ["mealplan", effectiveId] });
+      qc.invalidateQueries({ queryKey: ["mealplans"] });
+      // Falls back to whatever plans[0] is once the list refetches, same as never having
+      // selected a plan (line ~195) — avoids pointing at the id we just deleted.
+      setSelectedId(null);
+      setDeleteConfirmOpen(false);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Couldn't delete plan — try again");
+    } finally {
+      setDeletingPlan(false);
     }
   }
 
@@ -415,9 +483,17 @@ function MealPlansPage() {
     setEditTimeValue(currentTime);
   }
 
+  function openNewSlot() {
+    setSlotAction({ mealId: "", slot: "", mode: "new-slot" });
+    setNewSlotName("");
+    setNewSlotTime("");
+    setNewSlotError(null);
+  }
+
   function closeSlotAction() {
     setSlotAction(null);
     setCopyTargetDaysForSlot([]);
+    setNewSlotError(null);
   }
 
   function toggleCopyTargetForSlot(idx: number) {
@@ -570,6 +646,82 @@ function MealPlansPage() {
       }
     } catch {
       toast.error(`Couldn't copy into ${SLOT_META[toSlot as MealSlot]?.label ?? toSlot} — try again`);
+    }
+  }
+
+  // How many items each slot holds across EVERY day of the plan (prompt-111) — a custom slot
+  // is plan-wide, so "is it empty?" has to be asked of the whole plan, not the day on screen.
+  // Built from detailPlan only: the list endpoint responds with `-items`, so the plans-list
+  // fallback `plan` above would report every slot as empty and wrongly green-light a removal.
+  const slotItemCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const d of detailPlan?.days ?? []) {
+      for (const m of d.meals) counts.set(m.slot, (counts.get(m.slot) ?? 0) + m.items.length);
+    }
+    return counts;
+  }, [detailPlan]);
+
+  const isDefaultSlot = (slot: string) => (DEFAULT_SLOTS as string[]).includes(slot);
+
+  async function handleCreateSlot() {
+    if (!effectiveId) return;
+    const name = newSlotName.trim();
+    if (!name) {
+      setNewSlotError("Give the slot a name.");
+      return;
+    }
+    // Collision check against both halves of a slot's identity: its internal key AND its
+    // displayed title. For the 5 built-ins those differ ("snack-am" vs "AM Snack"), so
+    // checking only one would let "AM Snack" through as a second, near-identical slot. For a
+    // custom slot the two are the same string. day.meals is the right source for the full
+    // vocabulary — buildDays gives every day an identical slot list.
+    const taken = new Set<string>();
+    for (const m of day?.meals ?? []) {
+      taken.add(m.slot.toLowerCase());
+      taken.add(m.title.toLowerCase());
+    }
+    if (taken.has(name.toLowerCase())) {
+      setNewSlotError(`"${name}" already exists on this plan.`);
+      return;
+    }
+    if (!newSlotTime) {
+      setNewSlotError("Pick a time — it decides where the slot sits in the day.");
+      return;
+    }
+    setSavingNewSlot(true);
+    try {
+      // No dedicated create endpoint: registering a time in plan.slotTimes IS what brings a
+      // custom slot into existence, since that map is the registry buildDays reads.
+      const updated = await updateSlotTime(effectiveId, { slot: name, time: newSlotTime });
+      // Written straight into the cache rather than invalidated-and-refetched. Measured, not
+      // assumed: GET /api/mealplans/:id on a 52-item plan takes 4.5–35s here, so an invalidate
+      // leaves the dietitian staring at a dialog that closed but changed nothing — and worse,
+      // a second add within that window gets deduped into the still-in-flight GET, whose
+      // older response then lands and erases the newer slot. The PATCH response is already
+      // the full post-save plan (the service returns populatePlan), so it IS the authoritative
+      // state; refetching it would only re-ask for what we just received.
+      qc.setQueryData(["mealplan", effectiveId], updated);
+      closeSlotAction();
+      toast.success(`Added ${name} at ${newSlotTime} — on every day of the plan`);
+    } catch {
+      setNewSlotError("Couldn't add the slot — try again.");
+    } finally {
+      setSavingNewSlot(false);
+    }
+  }
+
+  async function handleRemoveSlot(slot: string) {
+    if (!effectiveId) return;
+    setRemovingSlot(true);
+    try {
+      // Same cache-write-not-refetch reasoning as handleCreateSlot above.
+      const updated = await deleteSlotTime(effectiveId, slot);
+      qc.setQueryData(["mealplan", effectiveId], updated);
+      toast.success(`Removed ${slot} from this plan`);
+    } catch {
+      toast.error(`Couldn't remove ${slot} — try again`);
+    } finally {
+      setRemovingSlot(false);
     }
   }
 
@@ -781,6 +933,39 @@ function MealPlansPage() {
                         {plan.clientName} · {plan.startDate} → {plan.endDate} ·{" "}
                         <span className="capitalize">{plan.goal.replace("-", " ")}</span>
                       </p>
+                      {/* Dietary preferences + medical history (prompt-108) — already recorded on
+                          the client's profile, surfaced here so Sura sees them while building the
+                          plan instead of having to open the client's page separately. Purely
+                          informational (unlike the allergy badges elsewhere on this page, these
+                          never block or warn) — distinct icons/tones keep the two kinds of tag
+                          from being confused with an allergy conflict. Hidden entirely when a
+                          client has neither, rather than showing an empty row. */}
+                      {clientRecord &&
+                        (clientRecord.dietaryPrefs.length > 0 ||
+                          clientRecord.medicalHistory.length > 0) && (
+                          <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                            {clientRecord.dietaryPrefs.map((pref) => (
+                              <Badge
+                                key={`diet-${pref}`}
+                                variant="outline"
+                                className="gap-1 text-[10px] font-normal border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+                              >
+                                <Leaf className="h-2.5 w-2.5" />
+                                {pref}
+                              </Badge>
+                            ))}
+                            {clientRecord.medicalHistory.map((condition) => (
+                              <Badge
+                                key={`med-${condition}`}
+                                variant="outline"
+                                className="gap-1 text-[10px] font-normal border-sky-500/30 bg-sky-500/10 text-sky-300"
+                              >
+                                <Stethoscope className="h-2.5 w-2.5" />
+                                {condition}
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
                     </div>
                     <div className="flex items-center gap-1.5">
                       {plan.status === "draft" && (
@@ -837,6 +1022,19 @@ function MealPlansPage() {
                         </TooltipTrigger>
                         <TooltipContent>Save as template</TooltipContent>
                       </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-muted-foreground hover:text-rose-300 hover:bg-rose-500/10"
+                            onClick={() => setDeleteConfirmOpen(true)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Delete plan</TooltipContent>
+                      </Tooltip>
                       <Button size="sm" className="h-8">
                         <Send className="h-4 w-4" />
                         Send to client
@@ -861,12 +1059,16 @@ function MealPlansPage() {
                       </Button>
                     </div>
                     <div className="grid grid-cols-5 gap-2">
+                      {/* `field` is the backend's key so the hover's level-2 drill-down can
+                          look the same nutrient up inside a recipe item. */}
                       <MacroBar
                         icon={Flame}
                         label="kcal"
                         value={totals.kcal}
                         target={targets.kcal}
                         tone="primary"
+                        field="calories"
+                        contributions={itemContributions(dayItems, "calories")}
                       />
                       <MacroBar
                         icon={Beef}
@@ -875,6 +1077,8 @@ function MealPlansPage() {
                         target={targets.protein}
                         unit="g"
                         tone="rose"
+                        field="protein"
+                        contributions={itemContributions(dayItems, "protein")}
                       />
                       <MacroBar
                         icon={Wheat}
@@ -883,6 +1087,8 @@ function MealPlansPage() {
                         target={targets.carbs}
                         unit="g"
                         tone="amber"
+                        field="carbs"
+                        contributions={itemContributions(dayItems, "carbs")}
                       />
                       <MacroBar
                         icon={Droplet}
@@ -891,6 +1097,8 @@ function MealPlansPage() {
                         target={targets.fat}
                         unit="g"
                         tone="violet"
+                        field="fat"
+                        contributions={itemContributions(dayItems, "fat")}
                       />
                       <MacroBar
                         icon={Leaf}
@@ -899,6 +1107,8 @@ function MealPlansPage() {
                         target={targets.fiber}
                         unit="g"
                         tone="emerald"
+                        field="fiber"
+                        contributions={itemContributions(dayItems, "fiber")}
                       />
                     </div>
                   </div>
@@ -1091,6 +1301,38 @@ function MealPlansPage() {
                                       <Pill className="h-3.5 w-3.5" />
                                       Micronutrients
                                     </DropdownMenuItem>
+                                    {/* Custom slots only (prompt-111) — the 5 built-ins are
+                                        structural and never removable. Shown disabled rather
+                                        than hidden while the slot still holds items anywhere
+                                        in the plan, so the reason is visible instead of the
+                                        option just being missing. The reason is inline text,
+                                        not a tooltip: DropdownMenuItem carries
+                                        data-[disabled]:pointer-events-none, so a tooltip on a
+                                        disabled item can never fire. */}
+                                    {!isDefaultSlot(meal.slot) && (
+                                      <>
+                                        <DropdownMenuSeparator />
+                                        <DropdownMenuItem
+                                          disabled={
+                                            removingSlot ||
+                                            !detailPlan ||
+                                            (slotItemCounts.get(meal.slot) ?? 0) > 0
+                                          }
+                                          onSelect={() => handleRemoveSlot(meal.slot)}
+                                          className="text-rose-600 focus:text-rose-600"
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5" />
+                                          <div className="flex flex-col items-start">
+                                            <span>Remove this slot</span>
+                                            {(slotItemCounts.get(meal.slot) ?? 0) > 0 && (
+                                              <span className="text-[10px] text-muted-foreground">
+                                                Remove all items from this slot first
+                                              </span>
+                                            )}
+                                          </div>
+                                        </DropdownMenuItem>
+                                      </>
+                                    )}
                                   </DropdownMenuContent>
                                 </DropdownMenu>
                               </div>
@@ -1104,6 +1346,16 @@ function MealPlansPage() {
                                   <div className="min-w-0 flex-1">
                                     <div className="flex items-center gap-2">
                                       <span className="text-sm truncate">{it.name}</span>
+                                      {/* Persistent, not just a warning while adding
+                                          (prompt-104): a saved plan should still say why an
+                                          item is a concern when it's reopened weeks later, or
+                                          when an allergy is recorded after the plan was built. */}
+                                      <AllergyConflictBadge
+                                        conflicts={getAllergyConflicts(
+                                          clientAllergies,
+                                          it.allergens,
+                                        )}
+                                      />
                                     </div>
                                     <p className="text-[10px] text-muted-foreground flex items-center gap-1">
                                       {it.amount}
@@ -1148,6 +1400,7 @@ function MealPlansPage() {
                                             realMeasures: it.realMeasures,
                                             unitWeights: it.unitWeights,
                                             commonServings: it.commonServings,
+                                            allergens: it.allergens,
                                           })
                                         }
                                       >
@@ -1184,7 +1437,10 @@ function MealPlansPage() {
                         );
                       })}
 
-                      <button className="w-full rounded-lg border border-dashed border-border py-3 text-xs text-muted-foreground hover:bg-muted/30 hover:border-primary/40 flex items-center justify-center gap-1.5">
+                      <button
+                        onClick={openNewSlot}
+                        className="w-full rounded-lg border border-dashed border-border py-3 text-xs text-muted-foreground hover:bg-muted/30 hover:border-primary/40 flex items-center justify-center gap-1.5"
+                      >
                         <Plus className="h-3.5 w-3.5" />
                         Add custom meal slot
                       </button>
@@ -1223,6 +1479,30 @@ function MealPlansPage() {
           />
         )}
 
+        <AlertDialog
+          open={deleteConfirmOpen}
+          onOpenChange={(o) => !deletingPlan && setDeleteConfirmOpen(o)}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete "{plan?.name}"?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This permanently removes the plan and everything in it. This can't be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={deletingPlan}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-rose-600 text-white hover:bg-rose-700"
+                disabled={deletingPlan}
+                onClick={() => handleDeletePlan()}
+              >
+                {deletingPlan ? "Deleting…" : "Delete permanently"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
         {effectiveId && (
           <PlanItemPicker
             open={pickerState.open}
@@ -1231,6 +1511,8 @@ function MealPlansPage() {
             onAdded={() => qc.invalidateQueries({ queryKey: ["mealplan"] })}
             day={pickerState.day}
             slot={pickerState.slot}
+            clientAllergies={clientAllergies}
+            clientDietaryPrefs={clientRecord?.dietaryPrefs ?? []}
           />
         )}
 
@@ -1238,6 +1520,7 @@ function MealPlansPage() {
           item={editingItem}
           onOpenChange={(o) => !o && setEditingItem(null)}
           onSave={handleSaveEditedItem}
+          clientAllergies={clientAllergies}
         />
 
         <Dialog open={!!slotAction} onOpenChange={(o) => !o && closeSlotAction()}>
@@ -1312,6 +1595,55 @@ function MealPlansPage() {
                   onClick={handleSaveSlotTime}
                 >
                   {savingTime ? "Saving…" : "Save time"}
+                </Button>
+              </>
+            ) : slotAction?.mode === "new-slot" ? (
+              <>
+                <DialogHeader>
+                  <DialogTitle className="text-base">Add custom meal slot</DialogTitle>
+                </DialogHeader>
+                {/* Same wording as the Edit time branch above, for the same reason: a slot is
+                    plan-wide, so this adds it to all seven days at once (prompt-111). */}
+                <p className="text-xs text-muted-foreground -mt-2">
+                  Added to this slot on every day in the plan.
+                </p>
+                <div className="space-y-1">
+                  <label className="text-[11px] text-muted-foreground">Name</label>
+                  <Input
+                    autoFocus
+                    placeholder="Pre-workout snack"
+                    value={newSlotName}
+                    onChange={(e) => {
+                      setNewSlotName(e.target.value);
+                      setNewSlotError(null);
+                    }}
+                    onKeyDown={(e) => e.key === "Enter" && handleCreateSlot()}
+                    className="h-9 text-sm"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] text-muted-foreground">Time</label>
+                  {/* Required, not optional: the time is what positions the slot among the
+                      other custom slots — without one it can only fall to the end. */}
+                  <Input
+                    type="time"
+                    value={newSlotTime}
+                    onChange={(e) => {
+                      setNewSlotTime(e.target.value);
+                      setNewSlotError(null);
+                    }}
+                    onKeyDown={(e) => e.key === "Enter" && handleCreateSlot()}
+                    className="h-9 text-sm"
+                  />
+                </div>
+                {newSlotError && <p className="text-xs text-rose-600">{newSlotError}</p>}
+                <Button
+                  size="sm"
+                  className="w-full h-8 text-xs"
+                  disabled={savingNewSlot || !newSlotName.trim() || !newSlotTime}
+                  onClick={handleCreateSlot}
+                >
+                  {savingNewSlot ? "Adding…" : "Add slot"}
                 </Button>
               </>
             ) : null}
@@ -1392,6 +1724,49 @@ function MealPlansPage() {
                 ))}
               </div>
 
+              <div className="mb-3 space-y-1.5">
+                <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  Macros
+                </div>
+                <div className="rounded-md border divide-y">
+                  <div className="px-2.5 py-1.5">
+                    <MicroRow
+                      label="Calories"
+                      unit="kcal"
+                      value={sheetMacros.kcal}
+                      target={targets.kcal}
+                    />
+                  </div>
+                  <div className="px-2.5 py-1.5">
+                    <MicroRow
+                      label="Protein"
+                      unit="g"
+                      value={sheetMacros.protein}
+                      target={targets.protein}
+                    />
+                  </div>
+                  <div className="px-2.5 py-1.5">
+                    <MicroRow
+                      label="Carbs"
+                      unit="g"
+                      value={sheetMacros.carbs}
+                      target={targets.carbs}
+                    />
+                  </div>
+                  <div className="px-2.5 py-1.5">
+                    <MicroRow label="Fat" unit="g" value={sheetMacros.fat} target={targets.fat} />
+                  </div>
+                  <div className="px-2.5 py-1.5">
+                    <MicroRow
+                      label="Fiber"
+                      unit="g"
+                      value={sheetMacros.fiber}
+                      target={targets.fiber}
+                    />
+                  </div>
+                </div>
+              </div>
+
               <MicronutrientPanel
                 rows={microRows}
                 caption={microsSlot ? `${microsSlot.title} · ${microsSlot.items.length} item${microsSlot.items.length === 1 ? "" : "s"}` : "whole day"}
@@ -1459,6 +1834,8 @@ function MacroBar({
   target,
   unit = "",
   tone,
+  field,
+  contributions,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
@@ -1466,6 +1843,9 @@ function MacroBar({
   target: number;
   unit?: string;
   tone: "primary" | "rose" | "amber" | "violet" | "emerald";
+  // Both optional so the card renders unchanged wherever no breakdown is supplied.
+  field?: string;
+  contributions?: ItemContribution[];
 }) {
   const pct = target ? Math.min(100, Math.round((value / target) * 100)) : 0;
   const toneMap: Record<string, string> = {
@@ -1485,7 +1865,13 @@ function MacroBar({
         <span className="text-[10px] text-muted-foreground tabular-nums">{pct}%</span>
       </div>
       <div className="flex items-baseline gap-1">
-        <span className="text-base font-semibold tabular-nums">{Math.round(value)}</span>
+        <ContributionHover
+          contributions={contributions}
+          field={field ?? ""}
+          label={label === "kcal" ? "Calories" : label}
+        >
+          <span className="text-base font-semibold tabular-nums">{Math.round(value)}</span>
+        </ContributionHover>
         <span className="text-[10px] text-muted-foreground">
           / {target}
           {unit}

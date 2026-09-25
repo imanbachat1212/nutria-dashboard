@@ -121,6 +121,14 @@ export const updateSlotTimeSchema = z.object({
   }),
 });
 
+// Removing a slot's registered time (prompt-111) — the counterpart to updateSlotTimeSchema
+// above, and the only way a custom slot created through it can be taken back off a plan. The
+// slot travels in the path rather than the body (the one slot-carrying endpoint in this module
+// that does), so it arrives URL-encoded: a name like "Pre-workout snack" is a single segment.
+export const deleteSlotTimeSchema = z.object({
+  params: z.object({ id: z.string().min(1), slot: z.string().min(1) }),
+});
+
 export const duplicatePlanSchema = z.object({
   params: z.object({ id: z.string().min(1) }),
   body: z.object({

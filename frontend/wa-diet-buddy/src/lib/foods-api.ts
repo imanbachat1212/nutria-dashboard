@@ -1,4 +1,5 @@
 import { api } from "./api";
+import { relativeTime } from "./mealplans-api";
 import type {
   FoodItem,
   FoodCategory,
@@ -72,6 +73,10 @@ export interface APIMicronutrients {
 
 export interface APIFood extends APIMicronutrients {
   _id: string;
+  // Plan usage (prompt-116), computed per request by the list/detail endpoints — see
+  // backend lib/planUsage.js. `lastUsed` is an ISO timestamp, or null when never used.
+  usedInPlans?: number;
+  lastUsed?: string | null;
   name: string;
   nameAr?: string;
   brand?: string;
@@ -300,15 +305,25 @@ export function toFoodItem(f: APIFood): FoodItem {
     },
     allergens: f.allergens ?? [],
     verified: f.verified ?? false,
-    // from mealplans module — not wired yet
-    usedInPlans: 0,
-    lastUsed: "—",
+    // Real values from the mealplans module (prompt-116): distinct plans referencing this food,
+    // and the most recent updatedAt among them. A 0 here is a genuine "never used in a plan",
+    // not the placeholder this used to be. `lastUsed` is an approximation — see planUsage.js.
+    usedInPlans: f.usedInPlans ?? 0,
+    lastUsed: f.lastUsed ? relativeTime(f.lastUsed) : "—",
     isFavorite: f.isFavorite ?? false,
     notes: f.notes ?? undefined,
   };
 }
 
+// Popularity ordering (prompt-117) — two different questions, deliberately not merged into one
+// "popularity" number: "usedInPlans" ranks by distinct meal plans containing the food (the Meal
+// Plans add-item picker), "usedInRecipes" by distinct recipes using it as an ingredient (the
+// New/Edit Recipe ingredient search). Omitted means the server's default createdAt-desc order,
+// which is what Food Database's own page and every other caller keeps sending.
+export type FoodSortBy = "usedInPlans" | "usedInRecipes";
+
 interface FoodFilterParams {
+  sortBy?: FoodSortBy;
   search?: string;
   category?: string;
   source?: FoodSource;
@@ -323,6 +338,17 @@ interface FoodFilterParams {
   // Plain numeric minimum, mg EPA+DHA per typical serving (prompt-67). Deliberately not part of
   // the claim filter above — omega-3 has no FDA Daily Value and no tier vocabulary.
   minEpaDhaMg?: number;
+  // "Other"-group MAXIMUM: pick the nutrient ("oxalate" | "phytate"), then the ceiling in mg
+  // per 100 g (prompt-99, generalized in prompt-100). Same reasoning as minEpaDhaMg — neither
+  // nutrient has a Daily Value, so neither can be a High/Good Source claim — but a ceiling,
+  // since the dietitian is looking for low-X foods. Per 100 g here, not per serving: it filters
+  // the raw stored Food field. (The Meal Library's "Other" filter is per SERVING — see the note
+  // on Recipe.oxalatePerServing in meals-api.ts for why the two bases differ.)
+  //
+  // Both are sent together or not at all; the backend applies nothing unless it has both, and
+  // allowlists the nutrient name before using it as a field key.
+  otherNutrient?: string;
+  otherMaxMg?: number;
 }
 
 // Shared by fetchFoods and fetchFoodStats so the two never drift on how a category/source/
@@ -332,6 +358,7 @@ function buildFoodQuery(params?: FoodFilterParams & { page?: number; limit?: num
   if (params?.page) qs.set("page", String(params.page));
   if (params?.limit) qs.set("limit", String(params.limit));
   if (params?.search) qs.set("search", params.search);
+  if (params?.sortBy) qs.set("sortBy", params.sortBy);
   if (params?.source) qs.set("source", params.source);
   if (params?.verified) qs.set("verified", "true");
   if (params?.favorites) qs.set("favorites", "true");
@@ -339,6 +366,13 @@ function buildFoodQuery(params?: FoodFilterParams & { page?: number; limit?: num
   if (params?.claimNutrient) qs.set("claimNutrient", params.claimNutrient);
   if (params?.claimNutrient && params?.claimLevel) qs.set("claimLevel", params.claimLevel);
   if (params?.minEpaDhaMg) qs.set("minEpaDhaMg", String(params.minEpaDhaMg));
+  // Sent as a pair — a nutrient with no ceiling, or a ceiling with no nutrient, is not a
+  // filter. != null rather than truthiness on the amount: on a MAXIMUM, 0 is a meaningful
+  // threshold ("none at all"), where on the minimum above a 0 would just be a no-op.
+  if (params?.otherNutrient && params?.otherMaxMg != null) {
+    qs.set("otherNutrient", params.otherNutrient);
+    qs.set("otherMaxMg", String(params.otherMaxMg));
+  }
 
   if (params?.category) {
     const backendCats = CATEGORY_REVERSE[params.category];
@@ -352,6 +386,7 @@ function buildFoodQuery(params?: FoodFilterParams & { page?: number; limit?: num
 }
 
 export async function fetchFoods(params?: {
+  sortBy?: FoodSortBy;
   search?: string;
   category?: string;
   source?: FoodSource;
@@ -360,6 +395,8 @@ export async function fetchFoods(params?: {
   claimNutrient?: string;
   claimLevel?: "high" | "good";
   minEpaDhaMg?: number;
+  otherNutrient?: string;
+  otherMaxMg?: number;
   page?: number;
   limit?: number;
 }): Promise<{ foods: FoodItem[]; total: number }> {

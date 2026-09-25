@@ -79,6 +79,7 @@ import {
   epaDhaMgPerServing,
   type NutrientClaimLevel,
   MICRO_FIELD_GROUPS,
+  OTHER_NUTRIENT_FIELDS,
   EMPTY_MICROS,
   type FoodItem,
   type FoodCategory,
@@ -173,6 +174,13 @@ function FoodDatabasePage() {
   // Plain numeric omega-3 minimum (prompt-67), separate from the claim filter above because
   // omega-3 has no tier/%DV — "" means off.
   const [minEpaDha, setMinEpaDha] = useState<string>("");
+  // "Other"-group MAXIMUM per 100 g (prompt-99, generalized to a nutrient picker in
+  // prompt-100): pick oxalate or phytate, then a ceiling. Its own pair of controls for the same
+  // reason the omega-3 minimum is its own: these nutrients have no Daily Value, so there is no
+  // High/Good Source tier to hang them on. Shaped like the Nutrient claim pair above — nutrient
+  // first, then the qualifier. "" = off on either half; the filter applies only with both.
+  const [otherNutrient, setOtherNutrient] = useState<string>("");
+  const [maxOther, setMaxOther] = useState<string>("");
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<FoodItem | null>(null);
   const [newOpen, setNewOpen] = useState(false);
@@ -190,10 +198,34 @@ function FoodDatabasePage() {
   useEffect(() => {
     setPage(1);
     setBulkSelection(new Map());
-  }, [query, category, source, onlyVerified, onlyFavorites, claimNutrient, claimLevel, minEpaDha]);
+  }, [
+    query,
+    category,
+    source,
+    onlyVerified,
+    onlyFavorites,
+    claimNutrient,
+    claimLevel,
+    minEpaDha,
+    otherNutrient,
+    maxOther,
+  ]);
 
   const { data, isLoading } = useQuery({
-    queryKey: ["foods", query, category, source, onlyVerified, onlyFavorites, claimNutrient, claimLevel, minEpaDha, page],
+    queryKey: [
+      "foods",
+      query,
+      category,
+      source,
+      onlyVerified,
+      onlyFavorites,
+      claimNutrient,
+      claimLevel,
+      minEpaDha,
+      otherNutrient,
+      maxOther,
+      page,
+    ],
     queryFn: () =>
       fetchFoods({
         search: query || undefined,
@@ -204,6 +236,8 @@ function FoodDatabasePage() {
         claimNutrient: claimNutrient || undefined,
         claimLevel: claimNutrient && claimLevel ? claimLevel : undefined,
         minEpaDhaMg: minEpaDha ? Number(minEpaDha) : undefined,
+        otherNutrient: otherNutrient || undefined,
+        otherMaxMg: otherNutrient && maxOther ? Number(maxOther) : undefined,
         page,
         limit: FOODS_PAGE_SIZE,
       }),
@@ -226,7 +260,20 @@ function FoodDatabasePage() {
   // aggregate — NOT derived from `allFoods`, which is capped at the 100-row page size above
   // and would silently freeze these KPIs once the library passed that size (it already has).
   const { data: statsData } = useQuery({
-    queryKey: ["foods", "stats", query, category, source, onlyVerified, onlyFavorites, claimNutrient, claimLevel, minEpaDha],
+    queryKey: [
+      "foods",
+      "stats",
+      query,
+      category,
+      source,
+      onlyVerified,
+      onlyFavorites,
+      claimNutrient,
+      claimLevel,
+      minEpaDha,
+      otherNutrient,
+      maxOther,
+    ],
     queryFn: () =>
       fetchFoodStats({
         search: query || undefined,
@@ -237,6 +284,8 @@ function FoodDatabasePage() {
         claimNutrient: claimNutrient || undefined,
         claimLevel: claimNutrient && claimLevel ? claimLevel : undefined,
         minEpaDhaMg: minEpaDha ? Number(minEpaDha) : undefined,
+        otherNutrient: otherNutrient || undefined,
+        otherMaxMg: otherNutrient && maxOther ? Number(maxOther) : undefined,
       }),
     enabled: mode === "library",
   });
@@ -473,7 +522,75 @@ function FoodDatabasePage() {
                 <option value="1000">&ge; 1000 mg EPA+DHA / serving</option>
               </select>
               {minEpaDha && (
-                <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => setMinEpaDha("")}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={() => setMinEpaDha("")}
+                >
+                  <X className="size-3.5" />
+                  Clear
+                </Button>
+              )}
+
+              {/* "Other" nutrients (prompt-99 for oxalate, generalized in prompt-100). Its own
+                  control for the same reason the omega-3 one is: these have no FDA Daily Value,
+                  so they cannot be High/Good Source claims and this must not read as one.
+
+                  Shaped like the Nutrient claim pair above — pick the nutrient, then the
+                  qualifier — rather than one hardcoded select per nutrient, so a third "Other"
+                  nutrient needs no new control. The options come from OTHER_NUTRIENT_FIELDS,
+                  which is derived from the same MICRO_FIELD_GROUPS the detail panel renders, so
+                  this picker can never offer something the panel doesn't show.
+
+                  A MAXIMUM for both, unlike every other numeric filter on this page. The client
+                  doesn't care about direction for phytate, so it keeps oxalate's "find me
+                  low-X" framing and the control reads one way.
+
+                  Per 100 g, matching where these numbers are shown on this page
+                  (Micronutrients — per 100 g -> Other). The Meal Library's version is per
+                  SERVING, because everything that page shows is per serving; that difference is
+                  deliberate, and each select says which basis it uses.
+
+                  Thresholds are placeholder round numbers, NOT sourced clinical cutoffs. */}
+              <span className="mx-1 hidden h-5 w-px bg-border sm:block" />
+              <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                Other
+              </span>
+              <select
+                value={otherNutrient}
+                onChange={(e) => setOtherNutrient(e.target.value)}
+                className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+              >
+                <option value="">Any nutrient</option>
+                {OTHER_NUTRIENT_FIELDS.map((f) => (
+                  <option key={f.key} value={f.key}>
+                    {f.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={maxOther}
+                onChange={(e) => setMaxOther(e.target.value)}
+                disabled={!otherNutrient}
+                className="h-8 rounded-md border border-input bg-background px-2 text-xs disabled:opacity-50"
+              >
+                <option value="">Any amount</option>
+                <option value="10">&le; 10 mg / 100 g</option>
+                <option value="25">&le; 25 mg / 100 g</option>
+                <option value="50">&le; 50 mg / 100 g</option>
+                <option value="100">&le; 100 mg / 100 g</option>
+              </select>
+              {otherNutrient && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={() => {
+                    setOtherNutrient("");
+                    setMaxOther("");
+                  }}
+                >
                   <X className="size-3.5" />
                   Clear
                 </Button>
@@ -1658,11 +1775,10 @@ function FoodDrawer({ food, onClose }: { food: FoodItem | null; onClose: () => v
               </h3>
               <div className="flex flex-wrap gap-1.5">
                 {food.allergens.map((a) => (
-                  <Badge
-                    key={a}
-                    variant="secondary"
-                    className="bg-amber-100 text-amber-800 capitalize"
-                  >
+                  // No `capitalize` (prompt-105): tags now come from the Settings allergy
+                  // list already correctly cased ("Tree nuts", "Gluten/Wheat"), and CSS
+                  // capitalize would silently re-case them to "Tree Nuts".
+                  <Badge key={a} variant="secondary" className="bg-amber-100 text-amber-800">
                     {a}
                   </Badge>
                 ))}
@@ -1682,8 +1798,8 @@ function FoodDrawer({ food, onClose }: { food: FoodItem | null; onClose: () => v
 
           {/* Usage */}
           <section className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
-            Used in <span className="font-medium text-foreground">{food.usedInPlans}</span> plans ·
-            last logged {food.lastUsed}
+            Used in <span className="font-medium text-foreground">{food.usedInPlans}</span> plan
+            {food.usedInPlans === 1 ? "" : "s"} · last used {food.lastUsed}
           </section>
 
           {/* Actions */}
