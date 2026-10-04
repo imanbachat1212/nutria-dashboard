@@ -15,3 +15,8 @@ export const mealLookup = asyncHandler(async (req, res) => {
   const data = await automationService.lookupMeals(req.validated.query);
   res.json({ data });
 });
+
+export const recentMessages = asyncHandler(async (req, res) => {
+  const data = await automationService.getRecentMessages(req.validated.query);
+  res.json({ data });
+});

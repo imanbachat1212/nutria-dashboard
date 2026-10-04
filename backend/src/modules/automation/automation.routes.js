@@ -4,7 +4,12 @@ import { requirePermission } from "../../middleware/rbac.js";
 import { validate } from "../../middleware/validate.js";
 import * as ctrl from "./automation.controller.js";
 import * as messagesCtrl from "../messages/messages.controller.js";
-import { clientContextSchema, foodLookupSchema, mealLookupSchema } from "./automation.validation.js";
+import {
+  clientContextSchema,
+  foodLookupSchema,
+  mealLookupSchema,
+  recentMessagesSchema,
+} from "./automation.validation.js";
 import { logMessageSchema } from "../messages/messages.validation.js";
 
 const router = Router();
@@ -51,6 +56,16 @@ router.get(
   requirePermission("automation.context.read"),
   validate(mealLookupSchema),
   ctrl.mealLookup,
+);
+
+// The last few messages of this client's thread, so a follow-up ("another one", "something
+// lighter") can be understood in context instead of as a message out of nowhere. Same permission
+// and reasoning as the reads above: reuses automation.context.read, unaudited, changes nothing.
+router.get(
+  "/recent-messages",
+  requirePermission("automation.context.read"),
+  validate(recentMessagesSchema),
+  ctrl.recentMessages,
 );
 
 // Inbox logging (prompt-96). Lives under /automation because it is n8n-facing and carries an

@@ -28,3 +28,18 @@ export const mealLookupSchema = z.object({
     limit: z.coerce.number().int().positive().max(5).default(3),
   }),
 });
+
+export const recentMessagesSchema = z.object({
+  query: z.object({
+    phone: z.string().min(1),
+    // A short tail of the thread, not the whole inbox: this feeds the model's sense of "what did
+    // we just talk about", so "another suggestion" can mean something.
+    limit: z.coerce.number().int().positive().max(12).default(6),
+    // Only messages from before this instant. n8n passes the moment the CURRENT message arrived,
+    // because the inbound log runs in parallel with the AI pipeline and would otherwise hand the
+    // model the very message it is about to answer as if it were history.
+    before: z.string().datetime({ offset: true }).optional(),
+    // Old context is worse than none: "another one" three days later is not a follow-up.
+    sinceHours: z.coerce.number().positive().max(72).default(6),
+  }),
+});

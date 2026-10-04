@@ -2,6 +2,7 @@ import Client from "../clients/client.model.js";
 import JournalEntry from "../journal/journal-entry.model.js";
 import MealPlan from "../mealplans/meal-plan.model.js";
 import Meal from "../meals/meal.model.js";
+import Message from "../messages/message.model.js";
 import { computeTotals } from "../journal/journal.service.js";
 import * as foodsService from "../foods/foods.service.js";
 import { normalizePhone } from "../../lib/phone.js";
@@ -519,6 +520,45 @@ function perServing(meal) {
     fat: round1((meal.totalFat || 0) / servings),
     fiber: round1((meal.totalFiber || 0) / servings),
   };
+}
+
+// The tail of this client's thread, oldest first, for conversational context.
+//
+// Text only, trimmed: a photo or voice note becomes a short placeholder rather than disappearing
+// (the model should know SOMETHING non-text was sent) and no body can exceed MAX_BODY, since this
+// is prompt material, not a transcript export. Messages the dietitian typed from the dashboard are
+// labelled "dietitian" — the model must be able to tell her words from the coach's own.
+//
+// `before` excludes the message currently being answered (see the schema comment); `sinceHours`
+// stops a stale thread from posing as context. Neither changes anything: pure read.
+const MAX_BODY = 600;
+
+export async function getRecentMessages({ phone, limit, before, sinceHours }) {
+  const client = await resolveActiveClient(phone, { select: "_id" });
+
+  const upper = before ? new Date(before) : new Date();
+  const lower = new Date(upper.getTime() - sinceHours * 3600 * 1000);
+
+  const rows = await Message.find({
+    client: client._id,
+    sentAt: { $gte: lower, $lt: upper },
+  })
+    .sort({ sentAt: -1 })
+    .limit(limit)
+    .select("direction source kind body attachmentLabel sentAt")
+    .lean();
+
+  const messages = rows.reverse().map((m) => {
+    const text = (m.body || "").trim();
+    const placeholder = m.kind === "image" ? "[photo]" : m.kind === "voice" ? "[voice note]" : "";
+    return {
+      from: m.direction === "inbound" ? "client" : m.source === "automation" ? "coach" : "dietitian",
+      text: (text || placeholder).slice(0, MAX_BODY),
+      at: m.sentAt,
+    };
+  });
+
+  return { total: messages.length, messages };
 }
 
 export async function lookupMeals({ phone, q, limit }) {
