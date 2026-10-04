@@ -379,7 +379,7 @@ const STOPWORDS = new Set([
   "thank", "hi", "hello", "hey", "i", "me", "my", "mine", "you", "your", "yours", "we", "us",
   "our", "it", "its", "this", "that", "these", "those", "some", "any", "what", "which", "who",
   "how", "when", "where", "why", "recipe", "recipes", "meal", "meals", "dish", "dishes", "food",
-  "foods", "idea", "ideas", "suggestion", "suggestions", "something", "anything", "eat", "eating",
+  "foods", "idea", "ideas", "suggestion", "suggestions", "receipe", "receipes", "recepie", "recepies", "recipie", "something", "anything", "eat", "eating",
   "cook", "cooking", "today", "tonight", "now", "good", "nice", "best", "more", "much", "many",
   "about", "there", "here", "also", "just", "maybe", "ok", "okay", "yes", "no", "not",
 ]);
@@ -406,6 +406,36 @@ function tokenize(q) {
   return [...new Set(tokens)].slice(0, MAX_TOKENS);
 }
 
+// The meal's own LABELS — cuisine ("lebanese"), category ("dinner") and dietTags — are searchable
+// too, not just names and ingredients. A client who asks for "a Lebanese recipe" is asking about a
+// label: no recipe NAME has to contain the word, and matching only names and ingredients answered
+// that question with silence while several Lebanese recipes sat in the library.
+//
+// Whole-word equality against the label, never substring: "an" must not hit "italian". Each
+// token is also tried without a trailing "s" ("desserts" -> "dessert") and through a few country
+// words the cuisine enum doesn't spell ("lebanon" -> "lebanese").
+const LABEL_SYNONYMS = {
+  lebanon: "lebanese",
+  italy: "italian",
+  asia: "asian",
+  levant: "levantine",
+  snacks: "snack",
+  desserts: "dessert",
+  drinks: "drink",
+  beverage: "drink",
+  beverages: "drink",
+};
+
+function facetForms(tokens) {
+  const out = new Set();
+  for (const t of tokens) {
+    out.add(t);
+    if (t.endsWith("s")) out.add(t.slice(0, -1));
+    if (LABEL_SYNONYMS[t]) out.add(LABEL_SYNONYMS[t]);
+  }
+  return [...out];
+}
+
 // Scored OR, not AND — the judgement call this endpoint most depends on.
 //
 // AND reads better on paper ("chicken salad" should mean both) but on this library it returns
@@ -416,8 +446,9 @@ function tokenize(q) {
 // both still comes out on top. That is AND's precision where it matters (the first result) with
 // no empty-result cliff, which for a 3-result reply is the whole game.
 function buildFilter(tokens) {
+  const forms = facetForms(tokens);
   return {
-    $or: tokens.flatMap((t) => {
+    $or: [...tokens.flatMap((t) => {
       const rx = { $regex: escapeRegex(t), $options: "i" };
       return [
         { name: rx },
@@ -429,6 +460,12 @@ function buildFilter(tokens) {
         { ingredients: { $elemMatch: { name: rx, type: { $ne: "section" } } } },
       ];
     }),
+    // cuisine and category are lowercase enums; dietTags are free labels, so those match
+    // case-insensitively. $in with whole-string regexes is exact-word, not substring.
+    { cuisine: { $in: forms } },
+    { category: { $in: forms } },
+    { dietTags: { $in: forms.map((f) => new RegExp(`^${escapeRegex(f)}$`, "i")) } },
+    ],
   };
 }
 
@@ -525,20 +562,29 @@ export async function lookupMeals({ phone, q, limit }) {
       .filter((i) => i.type !== "section")
       .map((i) => String(i.name || "").toLowerCase());
 
+    const labels = new Set(
+      [meal.cuisine, meal.category, ...(meal.dietTags || [])]
+        .filter(Boolean)
+        .map((l) => String(l).toLowerCase()),
+    );
+
     let nameHits = 0;
     let ingredientHits = 0;
+    let facetHits = 0;
     for (const t of tokens) {
       if (haystackName.includes(t)) nameHits += 1;
       else if (ingredientNames.some((n) => n.includes(t))) ingredientHits += 1;
+      else if (facetForms([t]).some((f) => labels.has(f))) facetHits += 1;
     }
     // The Mongo filter matched this document on name, nameAr or a non-section ingredient. If
     // neither counter fired, the only thing that matched was a section row, which is not a food.
-    if (nameHits === 0 && ingredientHits === 0) continue;
+    if (nameHits === 0 && ingredientHits === 0 && facetHits === 0) continue;
 
     scored.push({
       meal,
       nameHits,
-      totalHits: nameHits + ingredientHits,
+      totalHits: nameHits + ingredientHits + facetHits,
+      matchedOn: nameHits > 0 ? "name" : ingredientHits > 0 ? "ingredient" : "label",
       dietMatch: (meal.dietTags || []).some((tag) => prefs.has(String(tag).toLowerCase())) ? 1 : 0,
       verified: meal.verified ? 1 : 0,
     });
@@ -547,16 +593,16 @@ export async function lookupMeals({ phone, q, limit }) {
   // Lexicographic, in exactly the priority order the contract states, rather than a single
   // weighted score — weights would need justifying and would let a big enough bonus in one tier
   // quietly outrank the tier above it.
-  //   1. a name match beats an ingredient-only match
-  //   2. more matched tokens beats fewer
+  //   1. more matched tokens beats fewer (a name, ingredient or cuisine/category label each count)
+  //   2. a name match beats an ingredient- or label-only match
   //   3. verified beats unverified
   //   4. a diet-tag match beats none
   //   5. newest first, then _id — so the order is fully determined even when every tier ties,
   //      and the same question never returns the same recipes in a different order.
   scored.sort(
     (a, b) =>
-      b.nameHits - a.nameHits ||
       b.totalHits - a.totalHits ||
+      b.nameHits - a.nameHits ||
       b.verified - a.verified ||
       b.dietMatch - a.dietMatch ||
       new Date(b.meal.createdAt) - new Date(a.meal.createdAt) ||
@@ -572,7 +618,7 @@ export async function lookupMeals({ phone, q, limit }) {
     // while quoting 3. Already net of allergy exclusions — an excluded recipe is not a match the
     // client is allowed to hear about, so counting it here would leak its existence.
     total: scored.length,
-    meals: scored.slice(0, limit).map(({ meal, nameHits }) => ({
+    meals: scored.slice(0, limit).map(({ meal, matchedOn }) => ({
       id: String(meal._id),
       name: meal.name,
       nameAr: meal.nameAr ?? null,
@@ -604,7 +650,7 @@ export async function lookupMeals({ phone, q, limit }) {
           measureLabel: i.measureLabel ?? null,
         })),
       steps: meal.steps ?? [],
-      matchedOn: nameHits > 0 ? "name" : "ingredient",
+      matchedOn,
     })),
   };
 }
