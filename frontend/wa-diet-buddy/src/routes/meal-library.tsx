@@ -68,6 +68,8 @@ import {
 import { fetchMeals, deleteMeal, duplicateMeal, getMeal } from "@/lib/meals-api";
 import { fetchDietaryPreferences } from "@/lib/settings-api";
 import { NewRecipeDialog } from "@/components/new-recipe-dialog";
+import { ImportRecipeDialog } from "@/components/import-recipe-dialog";
+import type { ImportedRecipe } from "@/lib/recipe-import-api";
 
 // "Other" nutrient key (as OTHER_NUTRIENT_FIELDS and the backend's Food fields name it) -> this
 // recipe's own per-serving figure (prompt-100). Written out rather than computed as
@@ -120,6 +122,11 @@ function MealLibraryPage() {
   const [favOnly, setFavOnly] = useState(false);
   const [selected, setSelected] = useState<Recipe | null>(null);
   const [newOpen, setNewOpen] = useState(false);
+  // Recipe import (prompt-120). `imported` is handed straight to NewRecipeDialog as pre-fill —
+  // it is never saved from here. Cleared when that dialog closes so the next plain "New recipe"
+  // starts blank rather than resurrecting the last import.
+  const [importOpen, setImportOpen] = useState(false);
+  const [imported, setImported] = useState<ImportedRecipe | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Recipe | null>(null);
 
@@ -166,12 +173,16 @@ function MealLibraryPage() {
 
   const openNewRecipe = () => {
     setEditingId(null);
+    // Belt-and-braces alongside the onOpenChange reset: "New recipe" must always start blank,
+    // never inherit the previous import's pre-fill.
+    setImported(null);
     setNewOpen(true);
   };
 
   const openEditRecipe = (recipe: Recipe) => {
     setSelected(null);
     setEditingId(recipe.id);
+    setImported(null);
     setNewOpen(true);
   };
 
@@ -218,10 +229,16 @@ function MealLibraryPage() {
         title="Meal Library"
         description="Reusable recipes with verified macros, photos, and allergen tags. Drop any recipe into a client plan in one click."
         actions={
-          <Button size="sm" onClick={openNewRecipe}>
-            <Plus className="h-4 w-4" />
-            New recipe
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => setImportOpen(true)}>
+              <Sparkles className="h-4 w-4" />
+              Import recipe
+            </Button>
+            <Button size="sm" onClick={openNewRecipe}>
+              <Plus className="h-4 w-4" />
+              New recipe
+            </Button>
+          </div>
         }
       />
 
@@ -447,13 +464,29 @@ function MealLibraryPage() {
         onDuplicate={(r) => duplicateMutation.mutate(r.id)}
         duplicating={duplicateMutation.isPending}
       />
+      <ImportRecipeDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        onImported={(recipe) => {
+          // Straight into the normal New Recipe dialog, on its review flow, under its existing
+          // save gate — the import never writes a recipe of its own.
+          setImported(recipe);
+          setEditingId(null);
+          setNewOpen(true);
+        }}
+      />
+
       <NewRecipeDialog
         open={newOpen}
         onOpenChange={(o) => {
           setNewOpen(o);
-          if (!o) setEditingId(null);
+          if (!o) {
+            setEditingId(null);
+            setImported(null);
+          }
         }}
         editId={editingId}
+        importData={imported}
         // Whatever category tab the dietitian is currently filtering by — "New recipe" from
         // the Snack tab starts the form on Snack instead of always defaulting to Lunch. "All"
         // has no single category to hand down, so the dialog falls back to its own default.

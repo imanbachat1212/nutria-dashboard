@@ -10,3 +10,8 @@ export const foodLookup = asyncHandler(async (req, res) => {
   const data = await automationService.lookupFoods(req.validated.query);
   res.json({ data });
 });
+
+export const mealLookup = asyncHandler(async (req, res) => {
+  const data = await automationService.lookupMeals(req.validated.query);
+  res.json({ data });
+});

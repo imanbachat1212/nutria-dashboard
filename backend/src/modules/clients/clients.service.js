@@ -159,6 +159,15 @@ export async function updateClient(id, data, actor) {
     data.driTargets = computeDriTargetsIfEligible(mergedProfile, existing.driTargets);
   }
 
+  // mergedProfile (existing profile + this patch's fields) was computed above only to feed the
+  // targets/driTargets recompute — without this line, `data.profile` below is whatever the
+  // caller sent, so findByIdAndUpdate's implicit $set overwrites the WHOLE profile subdocument
+  // with just the sent fields, silently destroying every field a partial-profile caller (n8n,
+  // a script, anything but the New Client dialog, which always sends a full profile) didn't
+  // mention. Confirmed live: a no-op single-field PATCH wiped a real client's profile down to
+  // that one field before this fix.
+  if (mergedProfile) data.profile = mergedProfile;
+
   const client = await Client.findByIdAndUpdate(id, data, { new: true }).lean();
   return client;
 }

@@ -18,8 +18,6 @@ const commonFields = {
   notes: z.string().optional(),
 };
 
-// 1:1 types (diet types + try-out) require a client. try-out's category is flexible
-// (dietitian or trainer), so it also carries an explicit category the fixed types don't need.
 const oneToOneSchema = (type) =>
   z.object({
     type: z.literal(type),
@@ -34,16 +32,12 @@ const tryOutSchema = z.object({
   ...commonFields,
 });
 
-// Capacity types (gym-class, gym-machine) take a title + capacity. Roster can be seeded
-// at creation time (attendees[], each entering as "booked") and built up further afterward
-// via the attendees sub-resource.
+
 const attendeeInputSchema = z.object({
   clientId: z.string().min(1),
   name: z.string().min(1),
 });
 
-// Gym machine has no name field at all — the resource is generic ("Gym machine" on the
-// tile/Sheet until attendees are booked, then their names take over).
 const gymMachineSchema = z.object({
   type: z.literal("gym-machine"),
   capacity: z.number().int().positive().max(50).optional(),
@@ -51,11 +45,7 @@ const gymMachineSchema = z.object({
   ...commonFields,
 });
 
-// gym-class's name used to be a static z.enum(["Pilates", "Zumba", "Yoga"]) here. The valid
-// set is now the Settings → Services class-type list (settings/setting.model.js, key
-// "gymClassTypes") — a runtime, DB-backed value Zod can't check synchronously — so this only
-// validates shape; appointments.service.js#createAppointment checks membership against the
-// live list before writing.
+
 const gymClassSchema = z.object({
   type: z.literal("gym-class"),
   name: z.string().trim().min(1),

@@ -4,7 +4,7 @@ import { requirePermission } from "../../middleware/rbac.js";
 import { validate } from "../../middleware/validate.js";
 import * as ctrl from "./automation.controller.js";
 import * as messagesCtrl from "../messages/messages.controller.js";
-import { clientContextSchema, foodLookupSchema } from "./automation.validation.js";
+import { clientContextSchema, foodLookupSchema, mealLookupSchema } from "./automation.validation.js";
 import { logMessageSchema } from "../messages/messages.validation.js";
 
 const router = Router();
@@ -32,6 +32,25 @@ router.get(
   requirePermission("automation.context.read"),
   validate(foodLookupSchema),
   ctrl.foodLookup,
+);
+
+// Meal Library lookup (prompt-121). Sits beside /food-lookup rather than in its own module:
+// same caller, same scope, same "read the dietitian's data so the AI doesn't invent it" job, and
+// it owns no entity of its own. A separate module would be a folder of five files to hold one
+// read.
+//
+// Reuses automation.context.read — NOT a new permission. The scoped INTAKE_API_KEY already
+// carries it, so the key n8n is already using works unchanged; minting a third permission for
+// another read by the same consumer would mean a seed migration and a key rotation to grant
+// n8n something it demonstrably already has.
+//
+// Unaudited for the same reason as the two reads above: polled per inbound message, changes
+// nothing.
+router.get(
+  "/meal-lookup",
+  requirePermission("automation.context.read"),
+  validate(mealLookupSchema),
+  ctrl.mealLookup,
 );
 
 // Inbox logging (prompt-96). Lives under /automation because it is n8n-facing and carries an

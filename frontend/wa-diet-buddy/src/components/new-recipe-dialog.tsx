@@ -23,6 +23,11 @@ import { gramsPerUnitForFood, realGramsPerUnit } from "@/lib/unit-conversion";
 import { resolveMeasure, pickInitialMeasureSelection, formatGramEquivalent } from "@/lib/measure-options";
 import { MeasureSelect } from "@/components/measure-select";
 import { uploadMedia } from "@/lib/api";
+import {
+  importedFoodToItem,
+  type ImportedRecipe,
+  type SiteNutrition,
+} from "@/lib/recipe-import-api";
 import { fetchDietaryPreferences, fetchAllergies } from "@/lib/settings-api";
 import {
   Plus,
@@ -47,6 +52,7 @@ import {
   Loader2,
   Star,
   GripVertical,
+  Link as LinkIcon,
 } from "lucide-react";
 import {
   DndContext,
@@ -180,6 +186,15 @@ interface IngredientDraft {
   // originally picked (see the editData hydration below) instead of always defaulting to grams.
   measureDescription?: string | null;
   measureCount?: number | null;
+  // The ingredient line exactly as the imported page wrote it (prompt-120). Frontend-only, like
+  // rowId — never sent to the server. Shown under the row so Sura can see the original wording
+  // while she picks a food, which matters most on the rows the importer could NOT match.
+  //
+  // The parsed quantity/unit are deliberately NOT pre-filled on an unmatched row: picking a food
+  // resets `unit` to "g" while KEEPING a non-zero quantity (see FoodSearchInput's onSelect), so
+  // a pre-filled "0.667 cup" would silently become "0.667 g" the moment she picked the oil.
+  // Showing the raw line avoids that trap and tells her more than a parsed number would.
+  importedRaw?: string;
 }
 
 // The single definition of "this row is a real ingredient that can be saved". Used by both
@@ -493,11 +508,18 @@ function SortableIngredientRow({
         // it's matched.
         if (!ing.per100g && ing.name.trim()) {
           return (
-            <p className="pl-13 flex items-center gap-1 text-[11px] text-amber-600">
-              <AlertTriangle className="h-3 w-3 shrink-0" />
-              Not matched to a food in your library — adds nothing to this recipe. Pick a
-              suggestion from the search box.
-            </p>
+            <>
+              <p className="pl-13 flex items-center gap-1 text-[11px] text-amber-600">
+                <AlertTriangle className="h-3 w-3 shrink-0" />
+                Not matched to a food in your library — adds nothing to this recipe. Pick a
+                suggestion from the search box.
+              </p>
+              {ing.importedRaw && (
+                <p className="pl-13 text-[11px] text-muted-foreground">
+                  Imported line: &ldquo;{ing.importedRaw}&rdquo;
+                </p>
+              )}
+            </>
           );
         }
         return null;
@@ -517,6 +539,11 @@ interface NewRecipeDialogProps {
   // Undefined (the "All" tab has no single category to hand down) falls back to "lunch", the
   // form's original default.
   initialCategory?: RecipeCategory;
+  // A parsed recipe from the import flow (prompt-120), used to PRE-FILL this form instead of
+  // starting blank. Deliberately not a separate "review imported recipe" screen: an import has
+  // to end up in exactly this dialog, under exactly this save gate, so an imported ingredient
+  // can never reach the database on terms a hand-typed one couldn't. Ignored in edit mode.
+  importData?: ImportedRecipe | null;
 }
 
 const CATEGORIES: RecipeCategory[] = ["breakfast", "lunch", "dinner", "snack", "dessert", "drink"];
@@ -541,6 +568,7 @@ export function NewRecipeDialog({
   onOpenChange,
   editId,
   initialCategory,
+  importData,
 }: NewRecipeDialogProps) {
   const isEdit = !!editId;
   const queryClient = useQueryClient();
@@ -572,6 +600,13 @@ export function NewRecipeDialog({
   const [diets, setDiets] = useState<DietTag[]>([]);
   const [allergens, setAllergens] = useState<string[]>([]);
   const [notes, setNotes] = useState("");
+  // Import provenance (prompt-120). sourceUrl is persisted on the Meal (meal.model.js) so an
+  // imported recipe can be attributed later; siteNutrition is NEVER persisted — it is shown
+  // once on the review step as a sanity check against the macros this app computes itself from
+  // the matched foods, and is dropped when the dialog closes.
+  const [sourceUrl, setSourceUrl] = useState<string | null>(null);
+  const [siteNutrition, setSiteNutrition] = useState<SiteNutrition | null>(null);
+  const [importWarnings, setImportWarnings] = useState<string[]>([]);
 
   const reset = () => {
     setStep(1);
@@ -584,6 +619,9 @@ export function NewRecipeDialog({
     setCookMin(15);
     setServings(1);
     setIngredients([blankIngredient()]);
+    setSourceUrl(null);
+    setSiteNutrition(null);
+    setImportWarnings([]);
     setMethodSteps([""]);
     setDiets([]);
     setAllergens([]);
@@ -670,6 +708,64 @@ export function NewRecipeDialog({
     setAllergens(editData.allergens);
     setNotes(editData.notes || "");
   }, [open, isEdit, editData]);
+
+  // Import hydration (prompt-120) — the same job the editData effect above does, from a parsed
+  // draft instead of a saved Meal. Everything it sets is ordinary form state, so from this
+  // point on an imported recipe is indistinguishable from one typed in by hand: same steps,
+  // same validation, same save gate, same isSavableIngredient() filter.
+  //
+  // Gated on !isEdit for the same reason the category effect is: opening this dialog to edit an
+  // existing recipe must never have a stale import overwrite it.
+  useEffect(() => {
+    if (!open || isEdit || !importData) return;
+
+    setName(importData.title);
+    if (importData.servings > 0) setServings(importData.servings);
+    setPrepMin(importData.prepTime);
+    setCookMin(importData.cookTime);
+    setMethodSteps(importData.steps.length ? importData.steps : [""]);
+    setPhotos(importData.photo ? [importData.photo] : []);
+    setSourceUrl(importData.source.kind === "url" ? importData.source.url : null);
+    setSiteNutrition(importData.siteNutrition);
+    setImportWarnings(importData.warnings);
+
+    setIngredients(
+      importData.ingredients.length
+        ? importData.ingredients.map((imported) => {
+            if (imported.isSection) {
+              return { ...blankSection(), name: imported.sectionTitle || imported.raw };
+            }
+            const row = blankIngredient();
+            // No matched food: leave the row exactly as a half-filled manual row looks — the
+            // parsed search term sits in the name/search box so one click opens the dropdown
+            // already showing candidates, and isSavableIngredient() keeps the row out of the
+            // save until a food is actually chosen. This is the deliberate behaviour for every
+            // ingredient the backend wasn't confident about; a guessed match would be worse,
+            // because a wrong food silently contributes wrong macros to a saved recipe.
+            if (!imported.food) {
+              return { ...row, name: imported.searchName || imported.raw, importedRaw: imported.raw };
+            }
+            // Matched: build the row through foods-api's own toFoodItem, so these fields are
+            // byte-for-byte what the search dropdown's onSelect would have set.
+            const item = importedFoodToItem(imported.food);
+            return {
+              ...row,
+              foodId: item.id,
+              name: item.name,
+              per100g: { ...item.macros, fiber: item.macros.fiber ?? 0 },
+              unitWeights: item.unitWeights,
+              commonServings: item.servings,
+              realMeasures: item.portions,
+              // Fall back to grams when the line stated no unit — the same default a blank row
+              // starts on, rather than inventing a measure the food may not support.
+              unit: imported.unit ?? "g",
+              quantity: imported.quantity ?? "",
+              importedRaw: imported.raw,
+            };
+          })
+        : [blankIngredient()],
+    );
+  }, [open, isEdit, importData]);
 
   // Rows that will actually be SAVED as ingredients — a row with no foodId has no food to
   // reference, so it can't be persisted as one. This gates submission and must keep that
@@ -1346,6 +1442,65 @@ export function NewRecipeDialog({
 
               {step === 5 && (
                 <div className="space-y-4">
+                  {/* Import provenance + the site's OWN stated nutrition (prompt-120).
+                      Read-only, and labelled as the source's numbers rather than this app's:
+                      the macros this recipe actually saves are computed by the backend from the
+                      matched foods (computeRecipeMacros), exactly as for a hand-entered recipe.
+                      Shown side by side purely as a sanity check — a wild disagreement usually
+                      means an ingredient matched the wrong food or a quantity needs a look. */}
+                  {sourceUrl && (
+                    <Card className="border-sky-200 bg-sky-50/60 p-3 dark:border-sky-900 dark:bg-sky-950/30">
+                      <div className="flex items-start gap-2">
+                        <LinkIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-700 dark:text-sky-300" />
+                        <div className="min-w-0 flex-1 space-y-2">
+                          <p className="text-xs text-sky-900 dark:text-sky-200">
+                            Imported from{" "}
+                            <a
+                              href={sourceUrl}
+                              target="_blank"
+                              rel="noreferrer noopener"
+                              className="font-medium underline underline-offset-2 break-all"
+                            >
+                              {sourceUrl}
+                            </a>
+                          </p>
+                          {siteNutrition && (
+                            <div className="space-y-1">
+                              <p className="text-[10px] font-semibold uppercase tracking-wider text-sky-800/80 dark:text-sky-300/80">
+                                Site&apos;s stated nutrition — not saved
+                              </p>
+                              <p className="text-[11px] text-sky-900/80 dark:text-sky-200/80">
+                                {[
+                                  siteNutrition.servingSize && `per ${siteNutrition.servingSize}`,
+                                  siteNutrition.calories,
+                                  siteNutrition.protein && `protein ${siteNutrition.protein}`,
+                                  siteNutrition.carbs && `carbs ${siteNutrition.carbs}`,
+                                  siteNutrition.fat && `fat ${siteNutrition.fat}`,
+                                  siteNutrition.fiber && `fiber ${siteNutrition.fiber}`,
+                                ]
+                                  .filter(Boolean)
+                                  .join(" · ")}
+                              </p>
+                              <p className="text-[10px] text-sky-800/70 dark:text-sky-300/70">
+                                Saved macros come from the matched foods below, not these.
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </Card>
+                  )}
+                  {importWarnings.length > 0 && (
+                    <Card className="border-amber-200 bg-amber-50/60 p-3 dark:border-amber-900 dark:bg-amber-950/30">
+                      <ul className="space-y-1">
+                        {importWarnings.map((w) => (
+                          <li key={w} className="text-xs text-amber-900 dark:text-amber-200">
+                            {w}
+                          </li>
+                        ))}
+                      </ul>
+                    </Card>
+                  )}
                   <Card className="overflow-hidden">
                     <div
                       className={cn(
@@ -1537,6 +1692,9 @@ export function NewRecipeDialog({
                     steps: validSteps,
                     notes: notes.trim() || undefined,
                     photos,
+                    // Attribution for an imported recipe (prompt-120); undefined for every
+                    // hand-entered one, which is what makes its absence meaningful.
+                    sourceUrl: sourceUrl || undefined,
                   };
                   if (isEdit && editId) {
                     await updateMeal(editId, payload);

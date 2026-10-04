@@ -110,6 +110,13 @@ const mealSchema = new mongoose.Schema(
     totalPhytate: { type: Number, default: null },
     verified: { type: Boolean, default: false },
     notes: { type: String },
+    // Where an imported recipe came from (prompt-120). Its own field rather than a line appended
+    // to `notes`: notes is dietitian-authored free text shown in the recipe form, and burying a
+    // URL in it would mean anything wanting the attribution back (an "Imported from
+    // recipetineats.com" link, a re-import, a duplicate check) would have to parse prose. Absent
+    // on every hand-entered recipe and on everything created before this field existed, which is
+    // exactly the signal "this was typed in by hand".
+    sourceUrl: { type: String, default: null },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   },
   { timestamps: true }

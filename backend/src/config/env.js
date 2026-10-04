@@ -28,6 +28,19 @@ export const env = {
   // Shared secret sent as X-Nutria-Secret on that call, so a leaked webhook URL alone can't
   // trigger real messages to real clients.
   N8N_OUTBOUND_SECRET: process.env.N8N_OUTBOUND_SECRET || "",
+  // Backend-initiated LLM calls (prompt-120, recipe import). Until now the only AI in this
+  // system lived inside the n8n WhatsApp workflow — lib/n8n.js just POSTs a webhook and has no
+  // model call of its own — so there was no provider config on this side at all. Recipe import
+  // is the first feature that needs the backend itself to talk to a model.
+  //
+  // All three are optional on purpose: unset means recipe import still works, falling back to
+  // the deterministic ingredient parser (see recipe-import/lib/ingredient-parser.js) rather
+  // than 503-ing. isAiConfigured() in lib/openrouter.js is the single check for "can we ask a
+  // model", and the import response reports which parser actually ran.
+  AI_PROVIDER: process.env.AI_PROVIDER || "openrouter",
+  OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY || "",
+  // Cheap + fast is the right trade here: the task is mechanical line-splitting, not reasoning.
+  OPENROUTER_MODEL: process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini",
   CHROME_PATH: process.env.CHROME_PATH || "",
   CORS_ORIGINS: process.env.CORS_ORIGINS || "",
   PORT: parseInt(process.env.PORT || "4000", 10),

@@ -3,13 +3,46 @@
 // New Client dialog's live preview before the client exists server-side; the backend's copy is
 // authoritative and is what actually gets saved via computeDriTargetsIfEligible. Source: National
 // Academies of Medicine DRI tables — see the backend file for exact citations.
+//
+// The DRI tables, age bands, band-resolution logic and console.warn behavior here are kept
+// identical to the backend copy. The ONE deliberate difference is this function's signature:
+// positional (age, sex, lifeStage) here vs a single options object on the backend, because the
+// two call sites were written against different APIs. That is intentional — don't "unify" it.
 import type { DriTargets, LifeStage } from "./clients-mock";
 
-type AgeBand = "9-13" | "14-18" | "19-30" | "31-50" | "51-70" | "70+";
+type AgeBand = "1-3" | "4-8" | "9-13" | "14-18" | "19-30" | "31-50" | "51-70" | "70+";
 type NutrientTable = Record<string, number>;
 
 const VITAMIN_DRI: Record<string, Partial<Record<AgeBand, NutrientTable>>> = {
   male: {
+    "1-3": {
+      vitaminA: 300,
+      vitaminC: 15,
+      vitaminD: 15,
+      vitaminE: 6,
+      vitaminK: 30,
+      vitaminB1: 0.5,
+      vitaminB2: 0.5,
+      vitaminB3: 6,
+      vitaminB6: 0.5,
+      folate: 150,
+      vitaminB12: 0.9,
+      vitaminB5: 2,
+    },
+    "4-8": {
+      vitaminA: 400,
+      vitaminC: 25,
+      vitaminD: 15,
+      vitaminE: 7,
+      vitaminK: 55,
+      vitaminB1: 0.6,
+      vitaminB2: 0.6,
+      vitaminB3: 8,
+      vitaminB6: 0.6,
+      folate: 200,
+      vitaminB12: 1.2,
+      vitaminB5: 3,
+    },
     "9-13": {
       vitaminA: 600,
       vitaminC: 45,
@@ -96,6 +129,34 @@ const VITAMIN_DRI: Record<string, Partial<Record<AgeBand, NutrientTable>>> = {
     },
   },
   female: {
+    "1-3": {
+      vitaminA: 300,
+      vitaminC: 15,
+      vitaminD: 15,
+      vitaminE: 6,
+      vitaminK: 30,
+      vitaminB1: 0.5,
+      vitaminB2: 0.5,
+      vitaminB3: 6,
+      vitaminB6: 0.5,
+      folate: 150,
+      vitaminB12: 0.9,
+      vitaminB5: 2,
+    },
+    "4-8": {
+      vitaminA: 400,
+      vitaminC: 25,
+      vitaminD: 15,
+      vitaminE: 7,
+      vitaminK: 55,
+      vitaminB1: 0.6,
+      vitaminB2: 0.6,
+      vitaminB3: 8,
+      vitaminB6: 0.6,
+      folate: 200,
+      vitaminB12: 1.2,
+      vitaminB5: 3,
+    },
     "9-13": {
       vitaminA: 600,
       vitaminC: 45,
@@ -279,6 +340,30 @@ const VITAMIN_DRI: Record<string, Partial<Record<AgeBand, NutrientTable>>> = {
 // Do not "restore" these to the source-table magnitude. Selenium IS mcg on both sides, correctly.
 const MINERAL_DRI: Record<string, Partial<Record<AgeBand, NutrientTable>>> = {
   male: {
+    "1-3": {
+      calcium: 700,
+      iron: 7,
+      magnesium: 80,
+      phosphorus: 460,
+      potassium: 2000,
+      sodium: 800,
+      zinc: 3,
+      copper: 0.34,
+      manganese: 1.2,
+      selenium: 20,
+    },
+    "4-8": {
+      calcium: 1000,
+      iron: 10,
+      magnesium: 130,
+      phosphorus: 500,
+      potassium: 2300,
+      sodium: 1000,
+      zinc: 5,
+      copper: 0.44,
+      manganese: 1.5,
+      selenium: 30,
+    },
     "9-13": {
       calcium: 1300,
       iron: 8,
@@ -353,6 +438,30 @@ const MINERAL_DRI: Record<string, Partial<Record<AgeBand, NutrientTable>>> = {
     },
   },
   female: {
+    "1-3": {
+      calcium: 700,
+      iron: 7,
+      magnesium: 80,
+      phosphorus: 460,
+      potassium: 2000,
+      sodium: 800,
+      zinc: 3,
+      copper: 0.34,
+      manganese: 1.2,
+      selenium: 20,
+    },
+    "4-8": {
+      calcium: 1000,
+      iron: 10,
+      magnesium: 130,
+      phosphorus: 500,
+      potassium: 2300,
+      sodium: 1000,
+      zinc: 5,
+      copper: 0.44,
+      manganese: 1.5,
+      selenium: 30,
+    },
     "9-13": {
       calcium: 1300,
       iron: 8,
@@ -504,17 +613,32 @@ const MINERAL_DRI: Record<string, Partial<Record<AgeBand, NutrientTable>>> = {
   },
 };
 
+// Standard bands cover age 1 and up; life-stage tables only cover 14-18/19-30/31-50 (see
+// getDriTargets). Ages under 1 (infants) clamp to the "1-3" band — the youngest this app's
+// tables go — rather than returning nothing; log a warning since it's outside the sourced
+// range. Infant DRIs (0-6mo, 7-12mo) are deliberately NOT modelled: this app tracks age in
+// whole years only, and splitting those two bands needs months-level age tracking first.
 const AGE_BANDS: { key: AgeBand; min: number; max: number }[] = [
+  { key: "1-3", min: 1, max: 3 },
+  { key: "4-8", min: 4, max: 8 },
   { key: "9-13", min: 9, max: 13 },
   { key: "14-18", min: 14, max: 18 },
   { key: "19-30", min: 19, max: 30 },
   { key: "31-50", min: 31, max: 50 },
+  // IOM/NAM source tables list this band as "51-70 y" and the next as "> 70 y" — i.e. age 70
+  // itself belongs to 51-70, and 70+ means strictly 71 and up.
   { key: "51-70", min: 51, max: 70 },
   { key: "70+", min: 71, max: Infinity },
 ];
 
 function getAgeBand(age: number): AgeBand {
-  if (age < AGE_BANDS[0].min) return "9-13";
+  if (age < AGE_BANDS[0].min) {
+    const youngest = AGE_BANDS[0].key;
+    console.warn(
+      `[dri] age ${age} is below the youngest sourced DRI band (${youngest}) — clamping.`,
+    );
+    return youngest;
+  }
   return AGE_BANDS.find((b) => age >= b.min && age <= b.max)?.key ?? "70+";
 }
 
@@ -523,15 +647,25 @@ export function getDriTargets(
   sex: "male" | "female",
   lifeStage: LifeStage = "none",
 ): DriTargets | null {
-  if (!age || age <= 0) return null;
+  if (age == null || Number.isNaN(age) || age < 0 || (sex !== "male" && sex !== "female"))
+    return null;
 
   const ageBand = getAgeBand(age);
   const wantsLifeStage =
     sex === "female" && (lifeStage === "pregnant" || lifeStage === "lactating");
 
   let table = sex as string;
-  if (wantsLifeStage && VITAMIN_DRI[lifeStage]?.[ageBand]) {
-    table = lifeStage;
+  if (wantsLifeStage) {
+    if (VITAMIN_DRI[lifeStage]?.[ageBand]) {
+      table = lifeStage;
+    } else {
+      console.warn(
+        `[dri] No ${lifeStage} DRI data for age band ${ageBand} (age ${age}) — the source ` +
+          `tables only cover 14-18/19-30/31-50 for pregnancy/lactation. Falling back to ` +
+          `standard female values for this band.`,
+      );
+      table = "female";
+    }
   }
 
   const vitamins = VITAMIN_DRI[table]?.[ageBand];

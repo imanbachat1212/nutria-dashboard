@@ -13,6 +13,7 @@ import appointmentsRoutes from "../modules/appointments/appointments.routes.js";
 import mealplansRoutes from "../modules/mealplans/mealplans.routes.js";
 import mealplantemplatesRoutes from "../modules/mealplantemplates/mealplantemplates.routes.js";
 import mealsRoutes from "../modules/meals/meals.routes.js";
+import recipeImportRoutes from "../modules/recipe-import/recipe-import.routes.js";
 import messagesRoutes from "../modules/messages/messages.routes.js";
 import reportsRoutes from "../modules/reports/reports.routes.js";
 import billingRoutes from "../modules/billing/billing.routes.js";
@@ -38,6 +39,9 @@ router.use("/appointments", appointmentsRoutes);
 router.use("/mealplans", mealplansRoutes);
 router.use("/meal-plan-templates", mealplantemplatesRoutes);
 router.use("/meals", mealsRoutes);
+// Recipe import (prompt-120) — fetch/parse only, writes no Meal; see the module for why it
+// is its own module rather than part of /meals.
+router.use("/recipe-import", recipeImportRoutes);
 // Gym Booking merged into /appointments (gym-machine / gym-class types). gym.routes.js is left
 // in place, unmounted, as scaffolding for a future Workout API — see workout.model.js.
 router.use("/messages", messagesRoutes);

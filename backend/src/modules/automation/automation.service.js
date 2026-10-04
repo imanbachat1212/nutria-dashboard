@@ -1,6 +1,7 @@
 import Client from "../clients/client.model.js";
 import JournalEntry from "../journal/journal-entry.model.js";
 import MealPlan from "../mealplans/meal-plan.model.js";
+import Meal from "../meals/meal.model.js";
 import { computeTotals } from "../journal/journal.service.js";
 import * as foodsService from "../foods/foods.service.js";
 import { normalizePhone } from "../../lib/phone.js";
@@ -166,9 +167,18 @@ function planSlotsForDay(plan, dayIndex) {
     }));
 }
 
-export async function getClientContext({ phone: rawPhone, now = new Date() }) {
+// Phone -> active client, shared by every automation read (extracted in prompt-121 so a second
+// endpoint cannot drift from the first). n8n STRING-MATCHES `code` on both failures, so these two
+// payloads are a contract: same codes, same fields, same HTTP statuses, wherever they're thrown.
+//
+// `select` narrows the projection for callers that need only part of the document. `archived` is
+// forced into every projection regardless — selecting it away would leave `client.archived`
+// undefined and make the 403 below silently stop firing, quietly handing an archived client's
+// data back out.
+async function resolveActiveClient(rawPhone, { select } = {}) {
   const phone = normalizePhone(rawPhone);
-  const client = phone ? await Client.findOne({ phone }).lean() : null;
+  const query = phone ? Client.findOne({ phone }) : null;
+  const client = query ? await (select ? query.select(`archived ${select}`) : query).lean() : null;
 
   // Same 404 shape the intake endpoint returns, so n8n branches on one convention.
   if (!client) {
@@ -188,6 +198,11 @@ export async function getClientContext({ phone: rawPhone, now = new Date() }) {
       clientId: String(client._id),
     });
   }
+  return client;
+}
+
+export async function getClientContext({ phone: rawPhone, now = new Date() }) {
+  const client = await resolveActiveClient(rawPhone);
 
   const day = localDayRange(now);
   const nowHHMM = localTimeHHMM(now);
@@ -326,6 +341,270 @@ export async function lookupFoods({ q, limit }) {
       // The dietitian's own real portions, so the AI can size "a plate of tabbouleh" against
       // something measured instead of inventing a gram weight.
       portions: (f.portions ?? []).map((p) => ({ description: p.description, grams: p.grams })),
+    })),
+  };
+}
+
+// ── Meal Library lookup for the coach (prompt-121) ───────────────────────────────────────────
+//
+// "Can you give me a recipe with shrimp?" used to go straight to the reply AI, which invented a
+// dish from general knowledge while the dietitian's own recipes sat unread in the Meal Library.
+// This is the same principle lookupFoods already applies to ingredient macros: HER data wins,
+// and the AI only invents when there is genuinely nothing to quote.
+//
+// There is NO model call anywhere in this function. Ranking is deterministic, so the same
+// question twice gets the same recipes, and nothing here can hallucinate a dish that isn't in
+// the library.
+
+// Queried straight off WhatsApp, so the string is written by an untrusted stranger.
+//
+// meals.service.js's listMeals interpolates its `search` argument into $regex UNESCAPED. That is
+// reachable only from the authenticated dashboard, where the "attacker" is the dietitian typing
+// in her own search box, so it is not a live hole — but this endpoint's input is a stranger's
+// chat message, and it deliberately does not inherit that pattern. Every token below is escaped
+// before it becomes a regex. (listMeals itself is left alone — see the report.)
+function escapeRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Filler a request arrives wrapped in. Only words that carry no food meaning: question verbs,
+// pronouns, articles, prepositions, and the recipe-request vocabulary itself ("recipe", "idea",
+// "something"). Nothing that could name or qualify a food — "light", "quick", "cold" and "sweet"
+// are deliberately NOT here, because they can legitimately hit a recipe name.
+const STOPWORDS = new Set([
+  "a", "an", "the", "and", "or", "of", "with", "without", "for", "from", "in", "on", "to", "at",
+  "by", "as", "is", "are", "am", "be", "was", "were", "do", "does", "did", "can", "could",
+  "would", "will", "shall", "should", "may", "might", "have", "has", "had", "get", "got", "give",
+  "gives", "send", "show", "tell", "make", "want", "need", "like", "love", "please", "pls", "thanks",
+  "thank", "hi", "hello", "hey", "i", "me", "my", "mine", "you", "your", "yours", "we", "us",
+  "our", "it", "its", "this", "that", "these", "those", "some", "any", "what", "which", "who",
+  "how", "when", "where", "why", "recipe", "recipes", "meal", "meals", "dish", "dishes", "food",
+  "foods", "idea", "ideas", "suggestion", "suggestions", "something", "anything", "eat", "eating",
+  "cook", "cooking", "today", "tonight", "now", "good", "nice", "best", "more", "much", "many",
+  "about", "there", "here", "also", "just", "maybe", "ok", "okay", "yes", "no", "not",
+]);
+
+// A chat message is a sentence, not a search box. Bounds the $or the filter builds.
+const MAX_TOKENS = 8;
+
+// Lowercase, split on anything that isn't a letter or a digit, drop filler.
+//
+// \p{L} rather than [a-z] so Arabic survives: meals carry `nameAr` ("تبولة") and a client may
+// well ask in Arabic. An [a-z]-based split would reduce an entire Arabic message to zero tokens.
+//
+// If stripping stopwords empties the list the UNFILTERED tokens are used instead. A bare "any
+// ideas?" then searches for "ideas" and honestly finds nothing, rather than searching for
+// nothing and returning a top-3 of arbitrary recipes — n8n reads an empty result as "the library
+// has nothing, invent something", and that has to mean what it says.
+function tokenize(q) {
+  const raw = String(q)
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((t) => t.length >= 2);
+  const meaningful = raw.filter((t) => !STOPWORDS.has(t));
+  const tokens = meaningful.length ? meaningful : raw;
+  return [...new Set(tokens)].slice(0, MAX_TOKENS);
+}
+
+// Scored OR, not AND — the judgement call this endpoint most depends on.
+//
+// AND reads better on paper ("chicken salad" should mean both) but on this library it returns
+// nothing: no recipe contains both "chicken" and "salad", so an AND query answers a perfectly
+// answerable question with silence and n8n falls through to the AI — even though "Pasta Bechamel
+// with chicken" and "Sweet potato salad" are both sitting right there. OR surfaces both, and
+// because the ranking below sorts on how MANY tokens each meal matched, a recipe that does hit
+// both still comes out on top. That is AND's precision where it matters (the first result) with
+// no empty-result cliff, which for a 3-result reply is the whole game.
+function buildFilter(tokens) {
+  return {
+    $or: tokens.flatMap((t) => {
+      const rx = { $regex: escapeRegex(t), $options: "i" };
+      return [
+        { name: rx },
+        { nameAr: rx },
+        // Section rows are titled dividers ("Batter", "For the glaze"), not foods — matching a
+        // query against one would be matching against the dietitian's formatting. `$ne` also
+        // matches documents where `type` is absent, which is every ingredient saved before
+        // prompt-97 added the field.
+        { ingredients: { $elemMatch: { name: rx, type: { $ne: "section" } } } },
+      ];
+    }),
+  };
+}
+
+// Allergen strings vs allergy strings — reconciled by WORD-SET INTERSECTION, after lowercasing.
+//
+// Both sides are picked from the one Settings-managed list (prompt-105 unified them: the New
+// Recipe dialog's allergen pills and the New Client dialog's allergy pills read the same
+// endpoint), so plain equality is already correct for every value those pills produce. Two
+// things make equality alone too weak to rely on:
+//   1. the client dialog lets the dietitian type a one-off allergy that was never on the list;
+//   2. the list ships compound labels — "Gluten/Wheat" — and a hand-typed "Gluten" has to match.
+// Word-set intersection handles both: {gluten,wheat} ∩ {gluten} hits, and "Tree nuts" ∩ "Nuts"
+// hits.
+//
+// Deliberately NOT raw substring matching, which matches on fragments: an "Egg" allergy would
+// exclude every "Eggplant" recipe. Whole words only. Where the two still disagree the error runs
+// in the safe direction — excluding a recipe that was fine is a worse reply, but serving one that
+// wasn't is a medical incident.
+function allergyWords(values) {
+  const out = new Set();
+  for (const v of values || []) {
+    for (const w of String(v).toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+      if (w) out.add(w);
+    }
+  }
+  return out;
+}
+
+function conflictsWithAllergies(mealAllergens, clientWords) {
+  if (!clientWords.size) return false;
+  for (const w of allergyWords(mealAllergens)) {
+    if (clientWords.has(w)) return true;
+  }
+  return false;
+}
+
+// total / servings. Meal.totalX is the WHOLE recipe as prepared (prompt-68), and a client asking
+// for a recipe is being told what one plate costs her.
+//
+// NOT recomputed from ingredients: computeRecipeMacros already did that at save time and is the
+// single source of truth. Recomputing here would be a second implementation free to disagree
+// with the number the dietitian sees on the recipe card.
+function perServing(meal) {
+  // Guards 0, null, undefined and negative alike. A recipe whose serving count was never set is
+  // treated as one serving, which is what the rest of the app does with it.
+  const servings = meal.servings > 0 ? meal.servings : 1;
+  return {
+    calories: Math.round((meal.totalCalories || 0) / servings),
+    protein: round1((meal.totalProtein || 0) / servings),
+    carbs: round1((meal.totalCarbs || 0) / servings),
+    fat: round1((meal.totalFat || 0) / servings),
+    fiber: round1((meal.totalFiber || 0) / servings),
+  };
+}
+
+export async function lookupMeals({ phone, q, limit }) {
+  // Narrow projection, but resolveActiveClient still forces `archived` in — see its comment.
+  const client = await resolveActiveClient(phone, {
+    select: "profile.allergies profile.dietaryPreferences",
+  });
+
+  const tokens = tokenize(q);
+  const profile = client.profile || {};
+  const allergyTokens = allergyWords(profile.allergies);
+  const prefs = new Set((profile.dietaryPreferences || []).map((p) => String(p).toLowerCase()));
+
+  // Projected tightly: no photos, no coverHue/icon, no createdBy, and none of the 22
+  // micronutrient totals — a WhatsApp reply has no use for any of it, and this is polled per
+  // message. `createdAt` comes along only as the final tie-break.
+  //
+  // Unbounded on purpose at this scale (one dietitian's recipe library — 16 documents today, and
+  // the filter has already narrowed to meals matching at least one token). If that library ever
+  // grows into the thousands, the fix is the text index on name/nameAr that meal.model.js
+  // already declares, not a LIMIT here: cutting the candidate set before ranking would silently
+  // drop the best match rather than the worst.
+  const candidates = tokens.length
+    ? await Meal.find(buildFilter(tokens))
+        .select(
+          "name nameAr category cuisine servings prepTime cookTime verified dietTags allergens " +
+            "ingredients steps totalCalories totalProtein totalCarbs totalFat totalFiber createdAt",
+        )
+        .lean()
+    : [];
+
+  const scored = [];
+  for (const meal of candidates) {
+    // Allergy exclusion happens HERE, server-side, before anything is scored or returned — not
+    // left to n8n or described to the AI in a prompt. A prompt instruction is a request; a
+    // recipe that never leaves the building is a guarantee.
+    if (conflictsWithAllergies(meal.allergens, allergyTokens)) continue;
+
+    const haystackName = `${meal.name || ""} ${meal.nameAr || ""}`.toLowerCase();
+    const ingredientNames = (meal.ingredients || [])
+      .filter((i) => i.type !== "section")
+      .map((i) => String(i.name || "").toLowerCase());
+
+    let nameHits = 0;
+    let ingredientHits = 0;
+    for (const t of tokens) {
+      if (haystackName.includes(t)) nameHits += 1;
+      else if (ingredientNames.some((n) => n.includes(t))) ingredientHits += 1;
+    }
+    // The Mongo filter matched this document on name, nameAr or a non-section ingredient. If
+    // neither counter fired, the only thing that matched was a section row, which is not a food.
+    if (nameHits === 0 && ingredientHits === 0) continue;
+
+    scored.push({
+      meal,
+      nameHits,
+      totalHits: nameHits + ingredientHits,
+      dietMatch: (meal.dietTags || []).some((tag) => prefs.has(String(tag).toLowerCase())) ? 1 : 0,
+      verified: meal.verified ? 1 : 0,
+    });
+  }
+
+  // Lexicographic, in exactly the priority order the contract states, rather than a single
+  // weighted score — weights would need justifying and would let a big enough bonus in one tier
+  // quietly outrank the tier above it.
+  //   1. a name match beats an ingredient-only match
+  //   2. more matched tokens beats fewer
+  //   3. verified beats unverified
+  //   4. a diet-tag match beats none
+  //   5. newest first, then _id — so the order is fully determined even when every tier ties,
+  //      and the same question never returns the same recipes in a different order.
+  scored.sort(
+    (a, b) =>
+      b.nameHits - a.nameHits ||
+      b.totalHits - a.totalHits ||
+      b.verified - a.verified ||
+      b.dietMatch - a.dietMatch ||
+      new Date(b.meal.createdAt) - new Date(a.meal.createdAt) ||
+      String(a.meal._id).localeCompare(String(b.meal._id)),
+  );
+
+  return {
+    query: q,
+    // What was actually searched on, after filler removal — so n8n (and a human reading the
+    // logs) can see that "can you give me a recipe with shrimp" became ["shrimp"].
+    matchedTerms: tokens,
+    // Every eligible match, not just the returned page: lets a reply say "I have 4 of these"
+    // while quoting 3. Already net of allergy exclusions — an excluded recipe is not a match the
+    // client is allowed to hear about, so counting it here would leak its existence.
+    total: scored.length,
+    meals: scored.slice(0, limit).map(({ meal, nameHits }) => ({
+      id: String(meal._id),
+      name: meal.name,
+      nameAr: meal.nameAr ?? null,
+      category: meal.category ?? null,
+      cuisine: meal.cuisine ?? null,
+      servings: meal.servings ?? null,
+      prepTime: meal.prepTime ?? null,
+      cookTime: meal.cookTime ?? null,
+      verified: !!meal.verified,
+      dietTags: meal.dietTags ?? [],
+      // Returned even though conflicting recipes are already gone: "contains no allergen you
+      // react to" and "contains nothing at all" are different statements, and the reply may well
+      // want to name what IS in it.
+      allergens: meal.allergens ?? [],
+      perServing: perServing(meal),
+      // Section rows are dropped rather than kept as headings. The row shape here has no field
+      // that distinguishes a heading from a food, so "For the glaze" would arrive as an
+      // ingredient with a null quantity — precisely the kind of thing a language model reads out
+      // as an item on the list. Keeping them would also push the filtering back onto n8n's
+      // prompt, which is the job this endpoint exists to take off it.
+      ingredients: (meal.ingredients || [])
+        .filter((i) => i.type !== "section")
+        .map((i) => ({
+          name: i.name,
+          quantity: i.quantity ?? null,
+          unit: i.unit ?? null,
+          // The dietitian's own wording ("3 pitted dates") where she picked a real measure —
+          // same display-string reasoning as planSlotsForDay above.
+          measureLabel: i.measureLabel ?? null,
+        })),
+      steps: meal.steps ?? [],
+      matchedOn: nameHits > 0 ? "name" : "ingredient",
     })),
   };
 }

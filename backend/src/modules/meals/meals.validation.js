@@ -73,6 +73,8 @@ export const createMealSchema = z.object({
     totalSelenium: z.number().min(0).nullable().optional(),
     verified: z.boolean().optional(),
     notes: z.string().optional(),
+    // Set only by the recipe-import flow (prompt-120); hand-entered recipes omit it.
+    sourceUrl: z.string().url().max(2048).nullish().or(z.literal("")),
   }),
 });
 
@@ -122,6 +124,8 @@ export const updateMealSchema = z.object({
     totalSelenium: z.number().min(0).nullable().optional(),
     verified: z.boolean().optional(),
     notes: z.string().optional(),
+    // Set only by the recipe-import flow (prompt-120); hand-entered recipes omit it.
+    sourceUrl: z.string().url().max(2048).nullish().or(z.literal("")),
   }),
 });
 

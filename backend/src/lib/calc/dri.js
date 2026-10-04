@@ -19,6 +19,8 @@
 
 const VITAMIN_DRI = {
   male: {
+    "1-3": { vitaminA: 300, vitaminC: 15, vitaminD: 15, vitaminE: 6, vitaminK: 30, vitaminB1: 0.5, vitaminB2: 0.5, vitaminB3: 6, vitaminB6: 0.5, folate: 150, vitaminB12: 0.9, vitaminB5: 2 },
+    "4-8": { vitaminA: 400, vitaminC: 25, vitaminD: 15, vitaminE: 7, vitaminK: 55, vitaminB1: 0.6, vitaminB2: 0.6, vitaminB3: 8, vitaminB6: 0.6, folate: 200, vitaminB12: 1.2, vitaminB5: 3 },
     "9-13": { vitaminA: 600, vitaminC: 45, vitaminD: 15, vitaminE: 11, vitaminK: 60, vitaminB1: 0.9, vitaminB2: 0.9, vitaminB3: 12, vitaminB6: 1.0, folate: 300, vitaminB12: 1.8, vitaminB5: 4 },
     "14-18": { vitaminA: 900, vitaminC: 75, vitaminD: 15, vitaminE: 15, vitaminK: 75, vitaminB1: 1.2, vitaminB2: 1.3, vitaminB3: 16, vitaminB6: 1.3, folate: 400, vitaminB12: 2.4, vitaminB5: 5 },
     "19-30": { vitaminA: 900, vitaminC: 90, vitaminD: 15, vitaminE: 15, vitaminK: 120, vitaminB1: 1.2, vitaminB2: 1.3, vitaminB3: 16, vitaminB6: 1.3, folate: 400, vitaminB12: 2.4, vitaminB5: 5 },
@@ -27,6 +29,8 @@ const VITAMIN_DRI = {
     "70+": { vitaminA: 900, vitaminC: 90, vitaminD: 20, vitaminE: 15, vitaminK: 120, vitaminB1: 1.2, vitaminB2: 1.3, vitaminB3: 16, vitaminB6: 1.7, folate: 400, vitaminB12: 2.4, vitaminB5: 5 },
   },
   female: {
+    "1-3": { vitaminA: 300, vitaminC: 15, vitaminD: 15, vitaminE: 6, vitaminK: 30, vitaminB1: 0.5, vitaminB2: 0.5, vitaminB3: 6, vitaminB6: 0.5, folate: 150, vitaminB12: 0.9, vitaminB5: 2 },
+    "4-8": { vitaminA: 400, vitaminC: 25, vitaminD: 15, vitaminE: 7, vitaminK: 55, vitaminB1: 0.6, vitaminB2: 0.6, vitaminB3: 8, vitaminB6: 0.6, folate: 200, vitaminB12: 1.2, vitaminB5: 3 },
     "9-13": { vitaminA: 600, vitaminC: 45, vitaminD: 15, vitaminE: 11, vitaminK: 60, vitaminB1: 0.9, vitaminB2: 0.9, vitaminB3: 12, vitaminB6: 1.0, folate: 300, vitaminB12: 1.8, vitaminB5: 4 },
     "14-18": { vitaminA: 700, vitaminC: 65, vitaminD: 15, vitaminE: 15, vitaminK: 75, vitaminB1: 1.0, vitaminB2: 1.0, vitaminB3: 14, vitaminB6: 1.2, folate: 400, vitaminB12: 2.4, vitaminB5: 5 },
     "19-30": { vitaminA: 700, vitaminC: 75, vitaminD: 15, vitaminE: 15, vitaminK: 90, vitaminB1: 1.1, vitaminB2: 1.1, vitaminB3: 14, vitaminB6: 1.3, folate: 400, vitaminB12: 2.4, vitaminB5: 5 },
@@ -56,6 +60,8 @@ const VITAMIN_DRI = {
 // Do not "restore" these to the source-table magnitude. Selenium IS mcg on both sides, correctly.
 const MINERAL_DRI = {
   male: {
+    "1-3": { calcium: 700, iron: 7, magnesium: 80, phosphorus: 460, potassium: 2000, sodium: 800, zinc: 3, copper: 0.34, manganese: 1.2, selenium: 20 },
+    "4-8": { calcium: 1000, iron: 10, magnesium: 130, phosphorus: 500, potassium: 2300, sodium: 1000, zinc: 5, copper: 0.44, manganese: 1.5, selenium: 30 },
     "9-13": { calcium: 1300, iron: 8, magnesium: 240, phosphorus: 1250, potassium: 2500, sodium: 1200, zinc: 8, copper: 0.7, manganese: 1.9, selenium: 40 },
     "14-18": { calcium: 1300, iron: 11, magnesium: 410, phosphorus: 1250, potassium: 3000, sodium: 1500, zinc: 11, copper: 0.89, manganese: 2.2, selenium: 55 },
     "19-30": { calcium: 1000, iron: 8, magnesium: 400, phosphorus: 700, potassium: 3400, sodium: 1500, zinc: 11, copper: 0.9, manganese: 2.3, selenium: 55 },
@@ -64,6 +70,8 @@ const MINERAL_DRI = {
     "70+": { calcium: 1200, iron: 8, magnesium: 420, phosphorus: 700, potassium: 3400, sodium: 1500, zinc: 11, copper: 0.9, manganese: 2.3, selenium: 55 },
   },
   female: {
+    "1-3": { calcium: 700, iron: 7, magnesium: 80, phosphorus: 460, potassium: 2000, sodium: 800, zinc: 3, copper: 0.34, manganese: 1.2, selenium: 20 },
+    "4-8": { calcium: 1000, iron: 10, magnesium: 130, phosphorus: 500, potassium: 2300, sodium: 1000, zinc: 5, copper: 0.44, manganese: 1.5, selenium: 30 },
     "9-13": { calcium: 1300, iron: 8, magnesium: 240, phosphorus: 1250, potassium: 2300, sodium: 1200, zinc: 8, copper: 0.7, manganese: 1.6, selenium: 40 },
     "14-18": { calcium: 1300, iron: 15, magnesium: 360, phosphorus: 1250, potassium: 2300, sodium: 1500, zinc: 9, copper: 0.89, manganese: 1.6, selenium: 55 },
     "19-30": { calcium: 1000, iron: 18, magnesium: 310, phosphorus: 700, potassium: 2600, sodium: 1500, zinc: 8, copper: 0.9, manganese: 1.8, selenium: 55 },
@@ -83,10 +91,14 @@ const MINERAL_DRI = {
   },
 };
 
-// Standard bands cover the full lifespan (9y+); life-stage tables only cover 14-18/19-30/31-50
-// (see getDriTargets). Ages under 9 clamp to the "9-13" band — the youngest this app's tables
-// go — rather than returning nothing; log a warning since it's outside the sourced range.
+// Standard bands cover age 1 and up; life-stage tables only cover 14-18/19-30/31-50 (see
+// getDriTargets). Ages under 1 (infants) clamp to the "1-3" band — the youngest this app's
+// tables go — rather than returning nothing; log a warning since it's outside the sourced
+// range. Infant DRIs (0-6mo, 7-12mo) are deliberately NOT modelled: this app tracks age in
+// whole years only, and splitting those two bands needs months-level age tracking first.
 const AGE_BANDS = [
+  { key: "1-3", min: 1, max: 3 },
+  { key: "4-8", min: 4, max: 8 },
   { key: "9-13", min: 9, max: 13 },
   { key: "14-18", min: 14, max: 18 },
   { key: "19-30", min: 19, max: 30 },
@@ -99,8 +111,9 @@ const AGE_BANDS = [
 
 export function getAgeBand(age) {
   if (age < AGE_BANDS[0].min) {
-    console.warn(`[dri] age ${age} is below the youngest sourced DRI band (9-13) — clamping.`);
-    return "9-13";
+    const youngest = AGE_BANDS[0].key;
+    console.warn(`[dri] age ${age} is below the youngest sourced DRI band (${youngest}) — clamping.`);
+    return youngest;
   }
   const band = AGE_BANDS.find((b) => age >= b.min && age <= b.max);
   return band ? band.key : "70+";
@@ -111,7 +124,8 @@ export function getAgeBand(age) {
 // missing. Amino acids, omega-3/6, oxalate, and phytate are never included in the result —
 // callers should treat a missing key as "no DRI target set", not coerce it to 0.
 export function getDriTargets({ age, sex, lifeStage = "none" }) {
-  if (age == null || age < 0 || (sex !== "male" && sex !== "female")) return null;
+  if (age == null || Number.isNaN(age) || age < 0 || (sex !== "male" && sex !== "female"))
+    return null;
 
   const ageBand = getAgeBand(age);
   const wantsLifeStage = sex === "female" && (lifeStage === "pregnant" || lifeStage === "lactating");

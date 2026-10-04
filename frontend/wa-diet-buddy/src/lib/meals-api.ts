@@ -267,6 +267,8 @@ export interface CreateMealPayload {
   steps: string[];
   notes?: string;
   photos?: PhotoItem[];
+  // Where an imported recipe came from (prompt-120); absent on hand-entered recipes.
+  sourceUrl?: string;
 }
 
 export async function createMeal(data: CreateMealPayload): Promise<Recipe> {

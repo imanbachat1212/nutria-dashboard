@@ -35,9 +35,22 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
 
   const json = await res.json();
   if (!res.ok) {
-    throw new Error(json.error || `Request failed (${res.status})`);
+    // The backend's error envelope is { error, details? } (middleware/error.js). The message
+    // alone can't tell a caller WHICH failure happened, so `details` and the status ride along
+    // on the Error for callers that need to branch — recipe import distinguishes "that site
+    // blocked us" from "that page has no recipe data" this way. Purely additive: every existing
+    // `catch (e) { e.message }` behaves exactly as before.
+    const err = new Error(json.error || `Request failed (${res.status})`) as ApiRequestError;
+    err.status = res.status;
+    err.details = json.details;
+    throw err;
   }
   return json.data as T;
+}
+
+export interface ApiRequestError extends Error {
+  status?: number;
+  details?: unknown;
 }
 
 export const api = {
