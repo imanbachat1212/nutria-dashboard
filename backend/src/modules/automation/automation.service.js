@@ -561,7 +561,23 @@ export async function getRecentMessages({ phone, limit, before, sinceHours }) {
   return { total: messages.length, messages };
 }
 
-export async function lookupMeals({ phone, q, limit }) {
+// Lowercase, strip accents/punctuation, collapse spaces — so "Apple Cinnamon Baked Oatmeal" in a
+// WhatsApp reply matches the stored "Apple Cinnamon Baked Oatmeal Recipe".
+function normalizeForSeen(str) {
+  return ` ${String(str || "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()} `;
+}
+
+// Trailing "recipe" is a naming habit in imported titles, not part of what the coach would say.
+function mealNameForSeen(name) {
+  return normalizeForSeen(name).trim().replace(/ recipe$/, "");
+}
+
+export async function lookupMeals({ phone, q, limit, seen }) {
   // Narrow projection, but resolveActiveClient still forces `archived` in — see its comment.
   const client = await resolveActiveClient(phone, {
     select: "profile.allergies profile.dietaryPreferences",
@@ -590,8 +606,22 @@ export async function lookupMeals({ phone, q, limit }) {
         .lean()
     : [];
 
+  const seenText = seen ? normalizeForSeen(seen) : "";
+  let excluded = 0;
+
   const scored = [];
   for (const meal of candidates) {
+    // Already suggested earlier in this conversation: drop it before ranking/limit so the page we
+    // return is made of unseen recipes only. Counted separately so n8n can tell "no matches at
+    // all" from "every match has already been suggested".
+    if (seenText) {
+      const nm = mealNameForSeen(meal.name);
+      if (nm.length >= 3 && seenText.includes(` ${nm} `)) {
+        excluded += 1;
+        continue;
+      }
+    }
+
     // Allergy exclusion happens HERE, server-side, before anything is scored or returned — not
     // left to n8n or described to the AI in a prompt. A prompt instruction is a request; a
     // recipe that never leaves the building is a guarantee.
@@ -658,6 +688,8 @@ export async function lookupMeals({ phone, q, limit }) {
     // while quoting 3. Already net of allergy exclusions — an excluded recipe is not a match the
     // client is allowed to hear about, so counting it here would leak its existence.
     total: scored.length,
+    // Eligible matches skipped because the client has already been shown them (see `seen`).
+    alreadySuggested: excluded,
     meals: scored.slice(0, limit).map(({ meal, matchedOn }) => ({
       id: String(meal._id),
       name: meal.name,

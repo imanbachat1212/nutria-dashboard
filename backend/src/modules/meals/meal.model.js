@@ -51,7 +51,9 @@ const mealSchema = new mongoose.Schema(
     cuisine: {
       type: String,
       enum: ["lebanese", "mediterranean", "levantine", "international", "asian", "italian"],
-      default: "lebanese",
+      // No default on purpose: a recipe stays unset until the dietitian picks a cuisine. A silent
+      // "lebanese" default labelled every imported recipe as Lebanese, which polluted the
+      // WhatsApp coach's cuisine-based meal-library search.
     },
     servings: { type: Number, default: 1 },
     prepTime: { type: Number, default: 0 },

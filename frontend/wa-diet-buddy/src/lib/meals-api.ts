@@ -255,7 +255,7 @@ export interface CreateMealPayload {
   name: string;
   nameAr?: string;
   category: RecipeCategory;
-  cuisine: RecipeCuisine;
+  cuisine?: RecipeCuisine;
   servings: number;
   prepTime: number;
   cookTime: number;
@@ -366,7 +366,7 @@ export interface EditableMeal {
   name: string;
   nameAr?: string;
   category: RecipeCategory;
-  cuisine: RecipeCuisine;
+  cuisine?: RecipeCuisine;
   servings: number;
   prepTime: number;
   cookTime: number;

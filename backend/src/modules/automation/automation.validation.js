@@ -26,6 +26,11 @@ export const mealLookupSchema = z.object({
     // Feeds ONE chat reply, so the ceiling is deliberately much lower than food-lookup's 25:
     // a WhatsApp message listing five full recipes is not a message anyone reads.
     limit: z.coerce.number().int().positive().max(5).default(3),
+    // Free text the client has already been shown (the coach's earlier replies in this chat).
+    // Any recipe whose name appears in it is skipped BEFORE ranking and the limit are applied, so
+    // "another suggestion" gets the next-best unseen recipe instead of an already-used top page.
+    // Free text rather than a name list because n8n only has the sent messages, not recipe names.
+    seen: z.string().max(3000).optional(),
   }),
 });
 

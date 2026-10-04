@@ -578,7 +578,7 @@ export function NewRecipeDialog({
   const [name, setName] = useState("");
   const [arabicName, setArabicName] = useState("");
   const [category, setCategory] = useState<RecipeCategory>("lunch");
-  const [cuisine, setCuisine] = useState<RecipeCuisine>("lebanese");
+  const [cuisine, setCuisine] = useState<RecipeCuisine | "">("");
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -613,7 +613,7 @@ export function NewRecipeDialog({
     setName("");
     setArabicName("");
     setCategory("lunch");
-    setCuisine("lebanese");
+    setCuisine("");
     setPhotos([]);
     setPrepMin(10);
     setCookMin(15);
@@ -669,7 +669,7 @@ export function NewRecipeDialog({
     setName(editData.name);
     setArabicName(editData.nameAr || "");
     setCategory(editData.category);
-    setCuisine(editData.cuisine);
+    setCuisine(editData.cuisine ?? "");
     setPhotos(editData.photos);
     setPrepMin(editData.prepTime);
     setCookMin(editData.cookTime);
@@ -1026,7 +1026,7 @@ export function NewRecipeDialog({
                       <Label>Cuisine</Label>
                       <Select value={cuisine} onValueChange={(v) => setCuisine(v as RecipeCuisine)}>
                         <SelectTrigger>
-                          <SelectValue />
+                          <SelectValue placeholder="Not set" />
                         </SelectTrigger>
                         <SelectContent>
                           {CUISINES.map((c) => (
@@ -1533,9 +1533,11 @@ export function NewRecipeDialog({
                           <Badge variant="secondary" className="text-[10px] capitalize">
                             {meta.emoji} {category}
                           </Badge>
-                          <Badge variant="outline" className="text-[10px] capitalize">
-                            {cuisine}
-                          </Badge>
+                          {cuisine && (
+                            <Badge variant="outline" className="text-[10px] capitalize">
+                              {cuisine}
+                            </Badge>
+                          )}
                         </div>
                         <h3 className="font-display text-lg font-semibold">
                           {name || "Untitled recipe"}
@@ -1644,7 +1646,7 @@ export function NewRecipeDialog({
                     name: name.trim(),
                     nameAr: arabicName.trim() || undefined,
                     category,
-                    cuisine,
+                    cuisine: cuisine || undefined,
                     servings: numServings,
                     prepTime: numPrepMin,
                     cookTime: numCookMin,

@@ -598,7 +598,7 @@ function RecipeCard({ recipe, onOpen }: { recipe: Recipe; onOpen: () => void }) 
             <Users className="h-3 w-3" />
             {recipe.servings}
           </span>
-          <span className="capitalize">{recipe.cuisine}</span>
+          {recipe.cuisine && <span className="capitalize">{recipe.cuisine}</span>}
         </div>
 
         <div className="grid grid-cols-4 gap-1.5 text-center">
@@ -812,7 +812,7 @@ function RecipeDrawer({
                   <Users className="h-4 w-4" />
                   {recipe.servings} serving{recipe.servings > 1 ? "s" : ""}
                 </span>
-                <span className="capitalize">{recipe.cuisine}</span>
+                {recipe.cuisine && <span className="capitalize">{recipe.cuisine}</span>}
               </div>
 
               {/* Macros */}

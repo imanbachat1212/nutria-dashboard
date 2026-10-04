@@ -65,7 +65,7 @@ export interface Recipe {
   name: string;
   arabicName?: string;
   category: RecipeCategory;
-  cuisine: RecipeCuisine;
+  cuisine?: RecipeCuisine;
   image: string; // emoji placeholder
   coverHue: string; // tailwind bg class for card cover
   photoUrl?: string; // uploaded cover photo URL — always photos[0], kept separate for the
