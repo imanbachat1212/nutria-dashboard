@@ -33,6 +33,12 @@ import { Switch } from "@/components/ui/switch";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import {
   fetchConversations,
@@ -486,6 +492,9 @@ function ConversationThread({
 }
 
 function MessageBubble({ message }: { message: ChatMessage }) {
+  // Per-bubble, so each photo opens itself. Cheap: the Dialog is only mounted for a message that
+  // actually has an image.
+  const [photoOpen, setPhotoOpen] = useState(false);
   const isOut = message.direction === "out";
   const isSystem = message.kind === "system";
 
@@ -530,14 +539,57 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           </div>
         )}
 
-        {message.kind === "image" && (
+        {/* The real photo (prompt-123). Keyed off attachmentUrl rather than kind === "image":
+            if n8n ever sends the bytes without tagging the kind, the photo should still show,
+            and a kind of "image" with nothing stored should still explain itself. */}
+        {message.attachmentUrl && (
+          <>
+            <button
+              type="button"
+              onClick={() => setPhotoOpen(true)}
+              className="mb-1.5 block overflow-hidden rounded-md ring-offset-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              title="View full size"
+            >
+              <img
+                src={message.attachmentUrl}
+                // The label is a filename ("lunch.jpg") — useless to a screen reader, so the
+                // alt describes what the image IS. Empty alt would hide a photo that is often
+                // the entire content of the message.
+                alt={`Photo sent in this message${message.attachmentLabel ? `: ${message.attachmentLabel}` : ""}`}
+                loading="lazy"
+                className="max-h-60 w-full max-w-[240px] cursor-zoom-in object-cover transition-opacity hover:opacity-90"
+              />
+            </button>
+            <Dialog open={photoOpen} onOpenChange={setPhotoOpen}>
+              <DialogContent className="max-w-3xl">
+                <DialogHeader>
+                  <DialogTitle className="text-sm font-medium">
+                    {message.attachmentLabel ?? "Photo"}
+                  </DialogTitle>
+                </DialogHeader>
+                {/* Capped against the viewport, not a fixed size: a portrait phone photo would
+                    otherwise run off the bottom of the dialog with no way to see the rest. */}
+                <img
+                  src={message.attachmentUrl}
+                  alt={`Photo sent in this message${message.attachmentLabel ? `: ${message.attachmentLabel}` : ""}`}
+                  className="max-h-[75vh] w-auto rounded-md object-contain"
+                />
+              </DialogContent>
+            </Dialog>
+          </>
+        )}
+
+        {/* No stored image: every message logged before prompt-123, and any whose upload
+            failed. Unchanged from what the inbox showed before — minus the "Tap to view full
+            size" line, which promised something that never worked. */}
+        {!message.attachmentUrl && message.kind === "image" && (
           <div className="mb-1.5 flex items-center gap-2 rounded-md bg-background/40 px-2 py-2 text-xs">
             <div className="flex h-14 w-14 items-center justify-center rounded-md bg-muted text-muted-foreground">
               <ImageIcon className="h-5 w-5" />
             </div>
             <div className="flex-1">
               <p className="font-medium">{message.attachmentLabel ?? "photo.jpg"}</p>
-              <p className="text-[10px] opacity-70">Tap to view full size</p>
+              <p className="text-[10px] opacity-70">Photo not stored</p>
             </div>
           </div>
         )}

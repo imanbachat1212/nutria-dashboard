@@ -22,6 +22,14 @@ export interface ChatMessage {
   text: string;
   at: string;
   attachmentLabel: string | null;
+  /**
+   * The photo itself, in this app's storage (prompt-123) — render it directly.
+   *
+   * null is the ordinary case, not a failure: text messages, voice notes, every message logged
+   * before photos were stored, and any photo whose upload failed. `attachmentLabel` is the
+   * fallback to show in all of those.
+   */
+  attachmentUrl: string | null;
   status: MessageStatus;
   error: string | null;
 }
@@ -35,6 +43,8 @@ export interface ConversationSummary {
   avatarInitials: string;
   tag: string | null;
   lastSnippet: string;
+  /** Photo on the conversation's NEWEST message, if it has one — the snippet's companion. */
+  attachmentUrl: string | null;
   lastAtIso: string;
   // "inbound messages since the last reply", i.e. awaiting a response — NOT read receipts.
   unread: number;
@@ -43,7 +53,10 @@ export interface ConversationSummary {
   messageCount: number;
 }
 
-export interface Thread extends Omit<ConversationSummary, "lastSnippet" | "lastAtIso" | "unread" | "awaitingDietitian" | "messageCount"> {
+// attachmentUrl is omitted alongside the other "last message" fields: on a thread the photos
+// live on the individual messages, and a thread-level copy of the newest one would be a second
+// source of truth for the same image.
+export interface Thread extends Omit<ConversationSummary, "lastSnippet" | "attachmentUrl" | "lastAtIso" | "unread" | "awaitingDietitian" | "messageCount"> {
   messages: ChatMessage[];
 }
 

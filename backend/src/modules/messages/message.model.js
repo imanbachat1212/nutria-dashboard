@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { imageSchema } from "../../lib/imageSchema.js";
 
 // One WhatsApp (or SMS/email) message, inbound or outbound (prompt-96).
 //
@@ -27,9 +28,21 @@ const messageSchema = new mongoose.Schema(
       default: "text",
     },
     // Filename or short descriptor for a non-text message ("lunch.jpg"), so the inbox can show
-    // something meaningful without the media itself. The media lives wherever n8n put it; this
-    // is a label, not a URL.
+    // something meaningful even when there is no media to render — an older message, a voice
+    // note, or a photo whose upload failed. Kept alongside `attachment` rather than replaced by
+    // it: it is the caption/fallback, not the image.
     attachmentLabel: { type: String, default: null },
+
+    // The actual media, in this app's own storage (prompt-123). Until now the inbox could only
+    // say the word "Photo": n8n held the image on WhatsApp's CDN behind a short-lived token, so
+    // there was nothing the dashboard could render. The log-inbound endpoint now takes the bytes
+    // and puts them in R2 under `messages/`, which is the same `{url,key,width,height}` shape
+    // every other image in the schema uses (clients, foods, meals, journal entries).
+    //
+    // null is the normal case, not an error: every message logged before this field existed,
+    // every text message, every voice note, and any photo whose upload failed — the text is
+    // logged regardless, see logMessage.
+    attachment: { type: imageSchema, default: null },
 
     source: { type: String, enum: ["dashboard", "whatsapp", "automation"], default: "dashboard" },
 
