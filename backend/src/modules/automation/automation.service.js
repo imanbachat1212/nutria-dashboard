@@ -321,29 +321,167 @@ export async function getClientContext({ phone: rawPhone, now = new Date() }) {
 // practice's FDC API quota, and the full paginated dump of the library. This returns only what
 // a "name -> macros" lookup needs, from foodsService.listFoods — the same search the dashboard
 // uses, not a second implementation.
-export async function lookupFoods({ q, limit }) {
-  const { foods, total } = await foodsService.listFoods({ page: 1, limit, search: q });
-  return {
-    query: q,
-    total,
-    foods: foods.map((f) => ({
-      id: String(f._id),
-      name: f.name,
-      nameAr: f.nameAr ?? null,
-      source: f.source,
-      verified: !!f.verified,
-      per100g: {
-        calories: f.calories,
-        protein: f.protein,
-        carbs: f.carbs,
-        fat: f.fat,
-        fiber: f.fiber ?? null,
-      },
-      // The dietitian's own real portions, so the AI can size "a plate of tabbouleh" against
-      // something measured instead of inventing a gram weight.
-      portions: (f.portions ?? []).map((p) => ({ description: p.description, grams: p.grams })),
-    })),
+//
+// ── Phrase relaxation (prompt-122) ──────────────────────────────────────────────────────────
+//
+// listFoods ANDs every word of the search: "grilled chicken breast" becomes three clauses that
+// must ALL hit one food's name, so it returns nothing even though "Chicken breast, baked,
+// broiled, or roasted" is sitting in the library. A dietitian typing in the dashboard just
+// deletes a word and tries again; a WhatsApp client cannot, and the coach fell back to inventing
+// macros from general knowledge — the exact failure this endpoint exists to prevent.
+//
+// So: the strict search runs FIRST and unchanged, and only a zero-result multi-word query is
+// retried with fewer words. A query that works today takes the same single query it takes today
+// and returns byte-identical output.
+
+// Verbatim the list in the brief. These describe what was DONE to a food, not which food it is,
+// which is why they're dropped before any word that might be the food's actual name.
+const METHOD_WORDS = new Set([
+  "grilled", "fried", "baked", "boiled", "roasted", "steamed", "raw", "cooked", "homemade", "fresh",
+]);
+
+// The SAME split buildFoodFilter uses on its `search` argument (/[\s,]+/), so "chicken,breast"
+// counts as two words here exactly as it becomes two AND clauses there. A different split would
+// make this function's idea of "2+ words" disagree with what the query actually does.
+function splitWords(q) {
+  return String(q)
+    .split(/[\s,]+/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+}
+
+// foodLookupSchema caps `q` at min 2 chars but has NO maximum, and this route is polled once per
+// inbound message, so the ladder has to be bounded rather than left to grow with whatever length
+// of message someone sends.
+//
+// Bounded by WORDS, keeping the LAST ones. Both halves of that were measured, not guessed:
+//
+//   - Capping the RUNGS instead chops the ladder off at its most useful end. Rungs are generated
+//     longest-first (most specific first), so a rung cap deletes the SHORT rungs — precisely the
+//     ones that match. With rungs capped at 6, "can you tell me macros for grilled chicken
+//     breast" stopped matching anything at all, where the word cap had it matching "chicken".
+//   - Keeping the FIRST words truncated that same phrase before "breast" and matched the much
+//     vaguer "chicken" (44 foods). In a natural phrase the filler leads and the food trails, so
+//     the tail is the half worth keeping. Keeping the tail gets "chicken breast".
+//
+// 8 words is 15 rungs worst case, all issued concurrently (see below), and only ever on a query
+// that returns nothing today.
+const MAX_LADDER_WORDS = 8;
+
+// The rungs to retry, in order, first match wins. Everything here is derived from the words
+// themselves, so the same phrase always produces the same ladder and the same result.
+//
+// The brief's ordering is "methods first, then drop the first word, then the last". Read
+// strictly that is one chain that narrows by a word at a time and would never try, say, "chicken
+// grilled" -> "chicken". This builds the fuller ladder instead — tail-first narrowing, then
+// head-first — because it is a superset of the strict reading (so it can only find more) and
+// still bounded and deterministic. Rungs are de-duplicated, and the full phrase is pre-seeded as
+// already-tried so a query with no method words never re-runs the search step 1 just ran.
+function relaxationLadder(words, alreadySearched) {
+  const ladder = [];
+  // Seeded with what step 1 ALREADY ran — passed in rather than derived from `words`, because
+  // `words` may be a truncated tail, and that tail is a query nobody has tried yet. Deriving the
+  // key here would skip the most specific rung in exactly the case it matters most.
+  const seen = new Set([alreadySearched]);
+  const push = (ws) => {
+    if (!ws.length) return;
+    const key = ws.join(" ").toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    ladder.push(ws);
   };
+
+  // 1. Cooking methods out.
+  const noMethod = words.filter((w) => !METHOD_WORDS.has(w.toLowerCase()));
+  push(noMethod);
+
+  // Narrow whatever survived that. `noMethod` can be empty ("grilled baked"), in which case
+  // there is no food word to keep and the original words are narrowed instead.
+  const work = noMethod.length ? noMethod : words;
+
+  // 2. Drop the first word, progressively — the qualifier usually leads ("fettuccine pasta").
+  for (let i = 1; i < work.length; i += 1) push(work.slice(i));
+  // 3. Then the last, progressively. Both loops stop at one word, never zero.
+  for (let j = work.length - 1; j >= 1; j -= 1) push(work.slice(0, j));
+
+  return ladder;
+}
+
+// NOTHING here escapes anything, and that is correct: buildFoodFilter already runs every token
+// through its own escapeRegex before it reaches $regex (foods.service.js), so this path has no
+// injection hole to close. Escaping the words here as well would DOUBLE-escape them — "(" would
+// go to "\(" and then to "\\\(", which stops matching a food whose name really contains a
+// bracket. The words are passed through exactly as the client typed them. See the report.
+function toLookupFood(f) {
+  return {
+    id: String(f._id),
+    name: f.name,
+    nameAr: f.nameAr ?? null,
+    source: f.source,
+    verified: !!f.verified,
+    per100g: {
+      calories: f.calories,
+      protein: f.protein,
+      carbs: f.carbs,
+      fat: f.fat,
+      fiber: f.fiber ?? null,
+    },
+    // The dietitian's own real portions, so the AI can size "a plate of tabbouleh" against
+    // something measured instead of inventing a gram weight.
+    portions: (f.portions ?? []).map((p) => ({ description: p.description, grams: p.grams })),
+  };
+}
+
+export async function lookupFoods({ q, limit }) {
+  // Step 1, exactly as before. `limit` is applied by listFoods' own .limit(), on this call and
+  // on every retry below, so no rung can ever return more than `limit` foods.
+  const exact = await foodsService.listFoods({ page: 1, limit, search: q });
+  if (exact.foods.length) {
+    // Returned unchanged — no `matchedQuery` at all. Its ABSENCE is how n8n knows the phrase
+    // matched as sent; adding it here as a copy of `q` would make the relaxed case harder to
+    // detect, not easier.
+    return { query: q, total: exact.total, foods: exact.foods.map(toLookupFood) };
+  }
+
+  const words = splitWords(q);
+  // A single word has nothing to relax: there is no shorter query that isn't the empty one.
+  if (words.length < 2) {
+    return { query: q, total: exact.total, foods: [] };
+  }
+
+  const rungs = relaxationLadder(words.slice(-MAX_LADDER_WORDS), words.join(" ").toLowerCase());
+
+  // Fired CONCURRENTLY, not one after another. Each listFoods call is an unindexed regex scan
+  // plus a countDocuments plus a usage aggregation over ~1,400 foods — about 600 ms — so walking
+  // the ladder sequentially took up to 12 SECONDS on a phrase that matched no rung at all
+  // (measured on the live collection, not estimated). That is far too long for a reply path n8n
+  // polls on every inbound message, and longer than many HTTP clients would wait. Together they
+  // cost one round trip of latency instead of sixteen.
+  //
+  // This is pure latency, not a behaviour change: the winner is still picked by LADDER POSITION
+  // below, never by whichever query happened to return first, so the chosen rung is identical to
+  // what the sequential version chose.
+  const results = await Promise.all(
+    rungs.map((rung) => foodsService.listFoods({ page: 1, limit, search: rung.join(" ") })),
+  );
+
+  for (let i = 0; i < rungs.length; i += 1) {
+    if (!results[i].foods.length) continue;
+    return {
+      query: q,
+      // The words actually searched on. Present ONLY on a relaxed match, so n8n can say "I
+      // found chicken breast" rather than implying the library had "grilled chicken breast".
+      matchedQuery: rungs[i].join(" "),
+      // Counts the RELAXED query, consistent with `foods` beside it — "pasta" legitimately
+      // has more matches in the library than "fettuccine pasta" had.
+      total: results[i].total,
+      foods: results[i].foods.map(toLookupFood),
+    };
+  }
+
+  // Every rung missed. The original empty result, shape unchanged, HTTP 200 — n8n reads an empty
+  // list as "not in the library, estimate it", and that must stay distinguishable from an error.
+  return { query: q, total: exact.total, foods: [] };
 }
 
 // ── Meal Library lookup for the coach (prompt-121) ───────────────────────────────────────────
