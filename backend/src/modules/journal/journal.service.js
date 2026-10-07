@@ -154,7 +154,7 @@ export async function getReviewQueue({ from, to, status, q }) {
   // Same date handling as listEntries, including the end-of-day stretch on `to`, so a given
   // from/to pair selects the same entries through either endpoint.
   const match = {};
-  if (status) match.status = status;
+  if (status && status !== "all") match.status = status;
   if (from || to) {
     match.date = {};
     if (from) match.date.$gte = new Date(from);
@@ -178,6 +178,8 @@ export async function getReviewQueue({ from, to, status, q }) {
         // everyone by construction — without this the whole queue would read "0". See the report.
         entryCount: { $sum: 1 },
         pending: { $sum: { $cond: [isPending, 1, 0] } },
+        // Per-client approved count, so the Approved tab can list only clients who have one.
+        approved: { $sum: { $cond: [{ $eq: ["$status", "approved"] }, 1, 0] } },
         flagged: {
           $sum: { $cond: [{ $and: [isPending, { $gt: [flagCount, 0] }] }, 1, 0] },
         },
@@ -232,6 +234,7 @@ export async function getReviewQueue({ from, to, status, q }) {
     ...nameAndInitials(r.client?.profile),
     entryCount: r.entryCount,
     pending: r.pending,
+    approved: r.approved,
     flagged: r.flagged,
     lowConf: r.lowConf,
     cleanPending: r.cleanPending,

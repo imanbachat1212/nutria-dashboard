@@ -84,7 +84,9 @@ export const listQueueSchema = z.object({
     to:     z.string().optional(),
     // Defaults to the queue's actual job: what still needs review. The other statuses are
     // reachable for symmetry with listEntries, not because the page uses them.
-    status: z.enum(["pending", "approved", "edited", "rejected"]).default("pending"),
+    // "all" = every status, so the page's All tab (and its tab counts) can list every client
+    // instead of only those with something pending.
+    status: z.enum(["pending", "approved", "edited", "rejected", "all"]).default("pending"),
     // Client-name search. Matched against the joined first/last name in the service.
     q:      z.string().max(200).optional(),
   }),

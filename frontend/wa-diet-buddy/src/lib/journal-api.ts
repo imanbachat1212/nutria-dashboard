@@ -179,6 +179,8 @@ export interface JournalQueueClient {
   /** Every entry this client has in the window — what the queue badge shows on the Approved tab. */
   entryCount:      number;
   pending:         number;
+  /** Approved entries this client has in the window. */
+  approved:        number;
   /** Pending entries carrying at least one flag. */
   flagged:         number;
   /** Pending entries the AI marked low-confidence. */
@@ -213,7 +215,8 @@ export interface JournalQueue {
 export async function fetchJournalQueue(params?: {
   from?: string;
   to?: string;
-  status?: JournalStatus;
+  /** "all" = no status filter (every client with any entry in the window). */
+  status?: JournalStatus | "all";
   /** Client-name search, applied server-side to the joined profile name. */
   q?: string;
 }): Promise<JournalQueue> {

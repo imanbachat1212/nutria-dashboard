@@ -15,6 +15,7 @@ import {
   Clock,
   Flame,
   ChevronRight,
+  ChevronDown,
   Dumbbell,
   Utensils,
   Plus,
@@ -101,6 +102,7 @@ interface ClientGroup {
   initials: string;
   entryCount: number;
   pending: number;
+  approved: number;
   flagged: number;
   lowConf: number;
   cleanPending: number;
@@ -116,6 +118,7 @@ function toGroup(c: JournalQueueClient): ClientGroup {
     initials: c.clientInitials,
     entryCount: c.entryCount,
     pending: c.pending,
+    approved: c.approved,
     flagged: c.flagged,
     lowConf: c.lowConf,
     cleanPending: c.cleanPending,
@@ -148,16 +151,19 @@ function JournalReviewPage() {
   const [confirmAllOpen, setConfirmAllOpen] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
   const lastIdxRef = useRef(0);
+  // Per-day open/closed overrides, keyed "<client>|<day>". A day with no override falls back to
+  // a default (see dayDefaultOpen): the newest day, or any day that still has pending entries.
+  const [dayOpen, setDayOpen] = useState<Record<string, boolean>>({});
 
   const from = defaultFrom();
   const trimmedQuery = query.trim();
 
-  // Which status the queue and the per-client fetch are looking at.
-  //
-  // The queue endpoint's `status` is a single enum with no "all" member, so the All tab falls
-  // back to "pending" for the QUEUE while the per-client entry fetch below passes no status and
-  // genuinely spans every one. See the report: this is the one tab whose left-hand list narrows.
-  const queueStatus: JournalStatus = tab === "approved" ? "approved" : "pending";
+  // The queue is always fetched with status "all": every client with an entry in the window,
+  // each row carrying its pending / flagged / approved counts. The tabs then just filter those
+  // rows, so switching tabs needs no refetch and the tab counts stay right on every tab (a
+  // status-filtered queue made the Pending and Flagged counts read 0 on the Approved tab, and
+  // hid clients without pending entries from the All tab).
+  const queueStatus = "all" as const;
   const entryStatus: JournalStatus | undefined =
     tab === "approved" ? "approved" : tab === "all" ? undefined : "pending";
 
@@ -270,7 +276,13 @@ function JournalReviewPage() {
   // subset of it rather than a separate status.
   const groups = useMemo(() => {
     const rows = (queue?.clients ?? []).map(toGroup);
-    return tab === "flagged" ? rows.filter((g) => g.flagged > 0) : rows;
+    if (tab === "pending") return rows.filter((g) => g.pending > 0);
+    if (tab === "flagged") return rows.filter((g) => g.flagged > 0);
+    if (tab === "approved") {
+      // Most recently active first; the server order is built for the pending queue.
+      return rows.filter((g) => g.approved > 0).sort((a, b) => b.lastMs - a.lastMs);
+    }
+    return rows; // All: everyone, server order (flagged / longest-waiting first)
   }, [queue, tab]);
 
   // Keep a client selected. When the selected one drops out (their last pending entry was
@@ -339,6 +351,20 @@ function JournalReviewPage() {
     return out;
   }, [activeGroup, activeVisible]);
 
+  const dayDefaultOpen = (
+    day: { entries: JournalEntry[] },
+    index: number,
+  ) => index === 0 || day.entries.some((e) => e.status === "pending");
+
+  function setAllDays(open: boolean) {
+    if (!activeGroup) return;
+    setDayOpen((prev) => {
+      const next = { ...prev };
+      for (const d of days) next[`${activeGroup.key}|${d.key}`] = open;
+      return next;
+    });
+  }
+
   function goNextClient() {
     if (groups.length < 2) return;
     const idx = groups.findIndex((g) => g.key === selectedKey);
@@ -378,37 +404,6 @@ function JournalReviewPage() {
           </div>
         }
       />
-
-      {/* Stats */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4 mb-5">
-        <StatCard
-          icon={<Clock className="h-4 w-4" />}
-          label="Pending review"
-          value={stats.pending.toString()}
-          hint="awaiting your eyes"
-        />
-        <StatCard
-          icon={<AlertTriangle className="h-4 w-4" />}
-          label="Flagged"
-          value={stats.flagged.toString()}
-          hint="needs attention"
-          accent="warn"
-        />
-        <StatCard
-          icon={<Sparkles className="h-4 w-4" />}
-          label="Low confidence"
-          value={stats.lowConf.toString()}
-          hint="AI < 70% sure"
-          accent="info"
-        />
-        <StatCard
-          icon={<CheckCircle2 className="h-4 w-4" />}
-          label="Approved today"
-          value={stats.approved.toString()}
-          hint="in client charts"
-          accent="success"
-        />
-      </div>
 
       {/* Tabs + search */}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
@@ -516,7 +511,13 @@ function JournalReviewPage() {
                   key={g.key}
                   g={g}
                   active={g.key === activeGroup?.key}
-                  showPending={tab !== "approved"}
+                  badge={
+                    tab === "approved"
+                      ? { n: g.approved, title: "Approved" }
+                      : tab === "all"
+                        ? { n: g.entryCount, title: "Entries" }
+                        : { n: g.pending, title: "Pending" }
+                  }
                   onSelect={() => setSelectedKey(g.key)}
                 />
               ))}
@@ -598,40 +599,88 @@ function JournalReviewPage() {
                 </Card>
               ) : null}
 
-              {days.map((day) => (
-                <section key={day.key}>
-                  <div className="mb-2 flex items-center gap-2 px-1 text-xs">
-                    <span className="font-semibold text-foreground">{day.label}</span>
-                    {day.kcal > 0 && (
-                      <span className="flex items-center gap-1 text-muted-foreground">
-                        <Flame className="h-3 w-3 text-orange-500" />
-                        {Math.round(day.kcal)} kcal logged
-                      </span>
-                    )}
-                    <span className="text-muted-foreground">
-                      · {day.entries.length} {day.entries.length === 1 ? "entry" : "entries"}
-                    </span>
-                  </div>
-                  <div className="space-y-2.5">
-                    {day.entries.map((log) => (
-                      <LogRow
-                        key={log.id}
-                        log={log}
-                        hideClient
-                        onOpen={() => setOpenLog(log)}
-                        onApprove={() => approveMutation.mutate(log.id)}
-                        onReject={() => rejectMutation.mutate(log.id)}
-                        approving={
-                          approveMutation.isPending && approveMutation.variables === log.id
-                        }
-                        rejecting={
-                          rejectMutation.isPending && rejectMutation.variables === log.id
-                        }
+              {days.length > 1 && (
+                <div className="flex justify-end gap-1 px-1">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => setAllDays(true)}
+                  >
+                    Expand all
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => setAllDays(false)}
+                  >
+                    Collapse all
+                  </Button>
+                </div>
+              )}
+
+              {days.map((day, i) => {
+                const id = `${activeGroup.key}|${day.key}`;
+                const open = dayOpen[id] ?? dayDefaultOpen(day, i);
+                const pendingInDay = day.entries.filter((e) => e.status === "pending").length;
+                return (
+                  <section key={day.key}>
+                    <button
+                      type="button"
+                      aria-expanded={open}
+                      onClick={() => setDayOpen((prev) => ({ ...prev, [id]: !open }))}
+                      className="mb-2 flex w-full items-center gap-2 rounded-md px-1 py-1.5 text-left text-xs transition hover:bg-muted/50"
+                    >
+                      <ChevronDown
+                        className={cn(
+                          "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
+                          !open && "-rotate-90",
+                        )}
                       />
-                    ))}
-                  </div>
-                </section>
-              ))}
+                      <span className="font-semibold text-foreground">{day.label}</span>
+                      {day.kcal > 0 && (
+                        <span className="flex items-center gap-1 text-muted-foreground">
+                          <Flame className="h-3 w-3 text-orange-500" />
+                          {Math.round(day.kcal)} kcal logged
+                        </span>
+                      )}
+                      <span className="text-muted-foreground">
+                        · {day.entries.length} {day.entries.length === 1 ? "entry" : "entries"}
+                      </span>
+                      {/* Visible while collapsed too, so a closed day can't hide unreviewed work. */}
+                      {pendingInDay > 0 && (
+                        <Badge
+                          variant="outline"
+                          className="ml-auto rounded-md border-amber-200 bg-amber-50 px-1.5 text-[10px] text-amber-700"
+                        >
+                          {pendingInDay} pending
+                        </Badge>
+                      )}
+                    </button>
+                    {open && (
+                      <div className="space-y-2.5">
+                        {day.entries.map((log) => (
+                          <LogRow
+                            key={log.id}
+                            log={log}
+                            hideClient
+                            onOpen={() => setOpenLog(log)}
+                            onApprove={() => approveMutation.mutate(log.id)}
+                            onReject={() => rejectMutation.mutate(log.id)}
+                            approving={
+                              approveMutation.isPending && approveMutation.variables === log.id
+                            }
+                            rejecting={
+                              rejectMutation.isPending && rejectMutation.variables === log.id
+                            }
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </section>
+                );
+              })}
             </div>
           )}
         </div>
@@ -706,12 +755,12 @@ function JournalReviewPage() {
 function ClientQueueRow({
   g,
   active,
-  showPending,
+  badge,
   onSelect,
 }: {
   g: ClientGroup;
   active: boolean;
-  showPending: boolean;
+  badge: { n: number; title: string };
   onSelect: () => void;
 }) {
   const sinceIso =
@@ -749,8 +798,8 @@ function ClientQueueRow({
             {g.flagged}
           </Badge>
         )}
-        <Badge variant="secondary" className="px-1.5 text-[10px]" title={showPending ? "Pending" : "Entries"}>
-          {showPending ? g.pending : g.entryCount}
+        <Badge variant="secondary" className="px-1.5 text-[10px]" title={badge.title}>
+          {badge.n}
         </Badge>
       </div>
     </button>
@@ -769,40 +818,6 @@ function CountBadge({ n, tone }: { n: number; tone?: "warn" }) {
     >
       {n}
     </Badge>
-  );
-}
-
-function StatCard({
-  icon,
-  label,
-  value,
-  hint,
-  accent,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  hint: string;
-  accent?: "success" | "warn" | "info";
-}) {
-  return (
-    <Card className="p-4">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-muted-foreground">{label}</span>
-        <span
-          className={cn(
-            "flex h-7 w-7 items-center justify-center rounded-md bg-muted text-muted-foreground",
-            accent === "success" && "bg-emerald-100 text-emerald-700",
-            accent === "warn" && "bg-amber-100  text-amber-700",
-            accent === "info" && "bg-blue-100   text-blue-700",
-          )}
-        >
-          {icon}
-        </span>
-      </div>
-      <div className="mt-2 font-display text-2xl font-semibold tracking-tight">{value}</div>
-      <div className="mt-0.5 text-xs text-muted-foreground">{hint}</div>
-    </Card>
   );
 }
 
