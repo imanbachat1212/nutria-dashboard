@@ -72,6 +72,24 @@ export const listEntriesSchema = z.object({
   }),
 });
 
+// Review queue (prompt-124). Same date contract as listEntriesSchema above — deliberately the
+// same loose z.string(), parsed by `new Date()` in the service, so the two endpoints accept
+// exactly the same inputs and the page can pass one `from` to both.
+//
+// No `limit`: this returns one row per CLIENT, not per entry, which is what makes it immune to
+// the 200-row truncation it exists to fix. Capping it would reintroduce the same bug one level up.
+export const listQueueSchema = z.object({
+  query: z.object({
+    from:   z.string().optional(),
+    to:     z.string().optional(),
+    // Defaults to the queue's actual job: what still needs review. The other statuses are
+    // reachable for symmetry with listEntries, not because the page uses them.
+    status: z.enum(["pending", "approved", "edited", "rejected"]).default("pending"),
+    // Client-name search. Matched against the joined first/last name in the service.
+    q:      z.string().max(200).optional(),
+  }),
+});
+
 export const entryParamsSchema = z.object({
   params: z.object({ id: z.string().min(1) }),
 });

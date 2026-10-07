@@ -8,6 +8,7 @@ import {
   createEntrySchema,
   updateEntrySchema,
   listEntriesSchema,
+  listQueueSchema,
   entryParamsSchema,
 } from "./journal.validation.js";
 
@@ -28,6 +29,19 @@ router.get(
   requirePermission("journal.read"),
   validate(listEntriesSchema),
   ctrl.list
+);
+
+// Per-client review queue (prompt-124). MUST stay above "/:id" — Express matches in
+// declaration order, so registering it after would make "queue" an :id and send the request to
+// getEntryById, which would 404 on a journal entry whose id is the string "queue".
+//
+// Same middleware as the list route: a read of the same entries by the same people, so it
+// carries journal.read and nothing more. Not audited — reads never are here.
+router.get(
+  "/queue",
+  requirePermission("journal.read"),
+  validate(listQueueSchema),
+  ctrl.queue,
 );
 
 router.get(

@@ -11,6 +11,11 @@ export const list = asyncHandler(async (req, res) => {
   res.json({ data: entries });
 });
 
+export const queue = asyncHandler(async (req, res) => {
+  const data = await svc.getReviewQueue(req.validated.query);
+  res.json({ data });
+});
+
 export const getOne = asyncHandler(async (req, res) => {
   const entry = await svc.getEntryById(req.params.id);
   res.json({ data: entry });

@@ -163,6 +163,70 @@ export async function fetchJournalEntry(id: string): Promise<JournalEntry> {
   return toEntry(raw);
 }
 
+// ── Review queue (prompt-124) ──────────────────────────────────────────────
+//
+// One row per CLIENT with server-computed counts, plus grand totals. The page used to derive
+// both from `fetchJournalEntries({ from, limit: 200 })`, but that endpoint sorts newest-first
+// and the backend caps `limit` at 200 — so past 200 entries in the window the rows that silently
+// vanished were the OLDEST pending ones, i.e. exactly the entries that had waited longest, and
+// every count above the queue was short by the same amount.
+
+/** One client's standing in the review queue. Counts are of PENDING entries. */
+export interface JournalQueueClient {
+  clientId:        string;
+  clientName:      string;
+  clientInitials:  string;
+  /** Every entry this client has in the window — what the queue badge shows on the Approved tab. */
+  entryCount:      number;
+  pending:         number;
+  /** Pending entries carrying at least one flag. */
+  flagged:         number;
+  /** Pending entries the AI marked low-confidence. */
+  lowConf:         number;
+  /** Pending, unflagged, and not low-confidence — the bulk-approvable set. */
+  cleanPending:    number;
+  /** Oldest pending entry's timestamp; null when this client has nothing pending. */
+  oldestPendingAt: string | null;
+  lastEntryAt:     string | null;
+}
+
+/**
+ * Totals across the whole window — NOT across the returned rows, which the `q` search narrows.
+ * This mirrors how the page already behaved: the stat cards describe the queue, the search box
+ * filters only the list beneath them.
+ */
+export interface JournalQueueTotals {
+  pending:      number;
+  flagged:      number;
+  lowConf:      number;
+  cleanPending: number;
+  /** Number of clients with at least one pending entry. */
+  clients:      number;
+  approved:     number;
+}
+
+export interface JournalQueue {
+  clients: JournalQueueClient[];
+  totals:  JournalQueueTotals;
+}
+
+export async function fetchJournalQueue(params?: {
+  from?: string;
+  to?: string;
+  status?: JournalStatus;
+  /** Client-name search, applied server-side to the joined profile name. */
+  q?: string;
+}): Promise<JournalQueue> {
+  const qs = new URLSearchParams();
+  if (params?.from)   qs.set("from", params.from);
+  if (params?.to)     qs.set("to", params.to);
+  if (params?.status) qs.set("status", params.status);
+  if (params?.q)      qs.set("q", params.q);
+  const q = qs.toString();
+  // No `limit`: the response is one row per client, so there is nothing to truncate.
+  return api.get<JournalQueue>(`/api/journal/queue${q ? `?${q}` : ""}`);
+}
+
 export interface CreateEntryPayload {
   client:     string;
   date:       string;

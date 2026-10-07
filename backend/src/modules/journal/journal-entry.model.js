@@ -103,5 +103,16 @@ const journalEntrySchema = new mongoose.Schema(
 );
 
 journalEntrySchema.index({ client: 1, date: -1 });
+// The review queue's aggregation (prompt-124): $match on status + date, $group by client.
+// Leading with `status` because that is the equality predicate — the queue looks at pending
+// entries and nothing else by default, which is the most selective field here (4 of 23 rows
+// today, and the ratio only improves as approved entries accumulate). `client` next so the
+// $group can walk the index in order, `date: -1` last to serve the range bound and the
+// oldest/newest-per-client extremes without a separate sort.
+//
+// Distinct from { client: 1, date: -1 } above rather than replacing it: that one serves
+// listEntries' per-client reads, which do not filter on status and so cannot use an index whose
+// first key is status.
+journalEntrySchema.index({ status: 1, client: 1, date: -1 });
 
 export default mongoose.model("JournalEntry", journalEntrySchema);

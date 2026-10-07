@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, createFileRoute } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Search,
@@ -21,6 +21,9 @@ import {
   Minus,
   Send,
   Loader2,
+  Users,
+  ArrowRight,
+  ExternalLink,
 } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
@@ -33,9 +36,20 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import {
   fetchJournalEntries,
+  fetchJournalQueue,
   updateJournalEntry,
   FLAG_LABEL,
   SOURCE_LABEL,
@@ -44,6 +58,8 @@ import {
   type JournalEntry,
   type JournalConfidence,
   type JournalSource,
+  type JournalStatus,
+  type JournalQueueClient,
 } from "@/lib/journal-api";
 import { NewJournalEntryDialog } from "@/components/new-journal-entry-dialog";
 
@@ -70,48 +86,170 @@ function defaultFrom() {
   return d.toISOString().split("T")[0];
 }
 
+type ViewMode = "client" | "timeline";
+
+// One row of the client queue: everything Sura needs to decide who to open next.
+//
+// Comes from GET /api/journal/queue now (prompt-124), not from grouping a page of entries, so
+// the counts are over EVERY entry in the window rather than over whichever 200 the list endpoint
+// returned. It deliberately carries no `entries` array — the selected client's entries are
+// fetched on their own, so opening a client no longer depends on them having survived that cap.
+interface ClientGroup {
+  key: string;
+  clientId: string;
+  name: string;
+  initials: string;
+  entryCount: number;
+  pending: number;
+  flagged: number;
+  lowConf: number;
+  cleanPending: number;
+  oldestPendingMs: number | null;
+  lastMs: number;
+}
+
+function toGroup(c: JournalQueueClient): ClientGroup {
+  return {
+    key: c.clientId,
+    clientId: c.clientId,
+    name: c.clientName,
+    initials: c.clientInitials,
+    entryCount: c.entryCount,
+    pending: c.pending,
+    flagged: c.flagged,
+    lowConf: c.lowConf,
+    cleanPending: c.cleanPending,
+    oldestPendingMs: c.oldestPendingAt ? new Date(c.oldestPendingAt).getTime() : null,
+    lastMs: c.lastEntryAt ? new Date(c.lastEntryAt).getTime() : 0,
+  };
+}
+
+// "Clean" = safe to approve without looking: pending, nothing flagged, AI not unsure.
+const isClean = (e: JournalEntry) =>
+  e.status === "pending" && e.flags.length === 0 && e.confidence !== "low";
+
+function dayLabel(d: Date): string {
+  const today = new Date();
+  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diffDays = Math.round((startOf(today) - startOf(d)) / 86_400_000);
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  return d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+}
+
 function JournalReviewPage() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<Tab>("pending");
   const [query, setQuery] = useState("");
   const [openLog, setOpenLog] = useState<JournalEntry | null>(null);
   const [newOpen, setNewOpen] = useState(false);
+  const [view, setView] = useState<ViewMode>("client");
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [confirmAllOpen, setConfirmAllOpen] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const lastIdxRef = useRef(0);
 
-  const { data: entries = [], isLoading } = useQuery({
-    queryKey: ["journal"],
-    queryFn: () => fetchJournalEntries({ from: defaultFrom(), limit: 200 }),
+  const from = defaultFrom();
+  const trimmedQuery = query.trim();
+
+  // Which status the queue and the per-client fetch are looking at.
+  //
+  // The queue endpoint's `status` is a single enum with no "all" member, so the All tab falls
+  // back to "pending" for the QUEUE while the per-client entry fetch below passes no status and
+  // genuinely spans every one. See the report: this is the one tab whose left-hand list narrows.
+  const queueStatus: JournalStatus = tab === "approved" ? "approved" : "pending";
+  const entryStatus: JournalStatus | undefined =
+    tab === "approved" ? "approved" : tab === "all" ? undefined : "pending";
+
+  // The queue + the four stat cards. One row per client, so nothing here is truncated.
+  const { data: queue, isLoading: queueLoading } = useQuery({
+    queryKey: ["journal-queue", from, queueStatus, trimmedQuery],
+    queryFn: () => fetchJournalQueue({ from, status: queueStatus, q: trimmedQuery || undefined }),
   });
+
+  // Timeline only. This is the old capped fetch, now behind `enabled` so the by-client view —
+  // where everything is server-counted — doesn't pay for 200 rows it no longer reads.
+  const { data: entries = [], isLoading: timelineLoading } = useQuery({
+    queryKey: ["journal", "timeline", from],
+    queryFn: () => fetchJournalEntries({ from, limit: 200 }),
+    enabled: view === "timeline",
+  });
+
+  // Both caches, after every write: ["journal"] covers the timeline fetch and the per-client
+  // fetch below (react-query matches by key prefix), ["journal-queue"] covers the counts.
+  function invalidateAll() {
+    qc.invalidateQueries({ queryKey: ["journal"] });
+    qc.invalidateQueries({ queryKey: ["journal-queue"] });
+  }
 
   const approveMutation = useMutation({
     mutationFn: (id: string) => updateJournalEntry(id, { status: "approved" }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["journal"] }),
+    onSuccess: invalidateAll,
   });
 
   const rejectMutation = useMutation({
     mutationFn: (id: string) => updateJournalEntry(id, { status: "rejected" }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["journal"] }),
+    onSuccess: invalidateAll,
   });
 
-  async function approveAllClean() {
-    const clean = entries.filter(
-      (e) => e.status === "pending" && e.flags.length === 0 && e.confidence !== "low",
-    );
-    await Promise.all(clean.map((e) => updateJournalEntry(e.id, { status: "approved" })));
-    qc.invalidateQueries({ queryKey: ["journal"] });
+  // Approve in small batches so 100+ entries don't fire 100 requests at once.
+  async function approveMany(list: JournalEntry[]) {
+    if (!list.length) return;
+    setBulkBusy(true);
+    try {
+      await approveIds(list.map((e) => e.id));
+    } finally {
+      setBulkBusy(false);
+      invalidateAll();
+    }
   }
 
-  const stats = useMemo(
-    () => ({
-      pending: entries.filter((e) => e.status === "pending").length,
-      flagged: entries.filter((e) => e.status === "pending" && e.flags.length > 0).length,
-      approved: entries.filter((e) => e.status === "approved").length,
-      lowConf: entries.filter((e) => e.status === "pending" && e.confidence === "low").length,
-    }),
-    [entries],
-  );
+  async function approveIds(ids: string[]) {
+    for (let i = 0; i < ids.length; i += 10) {
+      await Promise.all(
+        ids.slice(i, i + 10).map((id) => updateJournalEntry(id, { status: "approved" })),
+      );
+    }
+  }
 
+  // "Approve all clean" asks the SERVER which entries are clean rather than approving whatever
+  // happens to be loaded — the loaded page is capped at 200 and the oldest pending entries are
+  // the first to fall off it, so the old version could quietly skip the ones waiting longest.
+  //
+  // Loops because the fetch is still capped: each pass approves the clean entries it can see,
+  // which removes them from `status=pending`, so the next pass sees further back. It stops when a
+  // pass finds nothing clean. The guard bounds a single press at 20 × 200 entries; if anything
+  // clean remains after that the count beside the button simply stays non-zero and she can press
+  // again — the button reflects the server's number, so it can't claim to have finished when it
+  // hasn't.
+  async function approveAllClean() {
+    setBulkBusy(true);
+    try {
+      for (let pass = 0; pass < 20; pass += 1) {
+        const page = await fetchJournalEntries({ from, status: "pending", limit: 200 });
+        const ids = page.filter(isClean).map((e) => e.id);
+        if (!ids.length) break;
+        await approveIds(ids);
+      }
+    } finally {
+      setBulkBusy(false);
+      invalidateAll();
+    }
+  }
+
+  // Server-computed, so they describe every entry in the window rather than a page of it.
+  const stats = {
+    pending: queue?.totals.pending ?? 0,
+    flagged: queue?.totals.flagged ?? 0,
+    lowConf: queue?.totals.lowConf ?? 0,
+    approved: queue?.totals.approved ?? 0,
+    cleanPending: queue?.totals.cleanPending ?? 0,
+    clients: queue?.totals.clients ?? 0,
+  };
+
+  // Timeline rows only — the by-client view no longer reads this.
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = trimmedQuery.toLowerCase();
     return entries.filter((e) => {
       if (tab === "pending" && e.status !== "pending") return false;
       if (tab === "flagged" && !(e.status === "pending" && e.flags.length)) return false;
@@ -123,7 +261,89 @@ function JournalReviewPage() {
         e.items.some((i) => i.label.toLowerCase().includes(q))
       );
     });
-  }, [tab, query, entries]);
+  }, [tab, trimmedQuery, entries]);
+
+  // ── By-client view ───────────────────────────────────────────────────────
+  // Straight from the queue endpoint: already counted over the whole window, already name-
+  // searched, and already ordered (flagged desc, then longest-waiting). The Flagged tab narrows
+  // to clients who actually have one — the server returns the pending queue, and "flagged" is a
+  // subset of it rather than a separate status.
+  const groups = useMemo(() => {
+    const rows = (queue?.clients ?? []).map(toGroup);
+    return tab === "flagged" ? rows.filter((g) => g.flagged > 0) : rows;
+  }, [queue, tab]);
+
+  // Keep a client selected. When the selected one drops out (their last pending entry was
+  // approved), land on whoever now sits in their place in the queue — i.e. the next client.
+  useEffect(() => {
+    if (view !== "client" || groups.length === 0) return;
+    const idx = groups.findIndex((g) => g.key === selectedKey);
+    if (idx >= 0) {
+      lastIdxRef.current = idx;
+      return;
+    }
+    setSelectedKey(groups[Math.min(lastIdxRef.current, groups.length - 1)].key);
+  }, [groups, selectedKey, view]);
+
+  const activeGroup = groups.find((g) => g.key === selectedKey) ?? null;
+
+  // The selected client's entries, fetched for that client alone (prompt-124). Previously these
+  // were filtered out of the global 200-row page, so a client whose entries had been pushed past
+  // the cap opened to a queue row that said "6 pending" above an empty panel.
+  const { data: activeEntries = [], isLoading: activeLoading } = useQuery({
+    queryKey: ["journal", "client", activeGroup?.clientId, from, entryStatus ?? "all"],
+    queryFn: () =>
+      fetchJournalEntries({ client: activeGroup!.clientId, from, status: entryStatus, limit: 200 }),
+    enabled: view === "client" && !!activeGroup?.clientId,
+  });
+
+  // The queue search is a client-name match server-side; within an open client the same box
+  // still narrows by message text and item name, exactly as it did before.
+  const activeVisible = useMemo(() => {
+    const q = trimmedQuery.toLowerCase();
+    return activeEntries.filter((e) => {
+      if (tab === "flagged" && !(e.status === "pending" && e.flags.length)) return false;
+      if (!q) return true;
+      return (
+        e.clientName.toLowerCase().includes(q) ||
+        (e.rawMessage || "").toLowerCase().includes(q) ||
+        e.items.some((i) => i.label.toLowerCase().includes(q))
+      );
+    });
+  }, [activeEntries, tab, trimmedQuery]);
+
+  const activeClean = useMemo(() => activeEntries.filter(isClean), [activeEntries]);
+
+  // Clients holding at least one clean pending entry — for the confirm dialog's "across N
+  // clients". Counted from the queue rows, which are server-computed, so it stays correct past
+  // the 200-entry page the old version counted from.
+  const cleanClientCount = (queue?.clients ?? []).filter((c) => c.cleanPending > 0).length;
+
+  const days = useMemo(() => {
+    if (!activeGroup) return [];
+    const sorted = [...activeVisible].sort(
+      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
+    );
+    const out: { key: string; label: string; kcal: number; entries: JournalEntry[] }[] = [];
+    for (const e of sorted) {
+      const d = new Date(e.date);
+      const k = d.toDateString();
+      let day = out.find((x) => x.key === k);
+      if (!day) {
+        day = { key: k, label: dayLabel(d), kcal: 0, entries: [] };
+        out.push(day);
+      }
+      day.entries.push(e);
+      if (e.kind === "meal" && e.status !== "rejected") day.kcal += e.totals.kcal;
+    }
+    return out;
+  }, [activeGroup, activeVisible]);
+
+  function goNextClient() {
+    if (groups.length < 2) return;
+    const idx = groups.findIndex((g) => g.key === selectedKey);
+    setSelectedKey(groups[(idx + 1) % groups.length].key);
+  }
 
   return (
     <div className="mx-auto max-w-350">
@@ -142,9 +362,18 @@ function JournalReviewPage() {
               <Plus className="h-4 w-4" />
               Log entry
             </Button>
-            <Button size="sm" className="gap-1.5" onClick={approveAllClean}>
-              <CheckCircle2 className="h-4 w-4" />
-              Approve all clean
+            <Button
+              size="sm"
+              className="gap-1.5"
+              disabled={bulkBusy}
+              onClick={() => setConfirmAllOpen(true)}
+            >
+              {bulkBusy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <CheckCircle2 className="h-4 w-4" />
+              )}
+              Approve all clean{stats.cleanPending > 0 ? ` (${stats.cleanPending})` : ""}
             </Button>
           </div>
         }
@@ -204,6 +433,18 @@ function JournalReviewPage() {
           </TabsList>
         </Tabs>
         <div className="flex items-center gap-2">
+          <Tabs value={view} onValueChange={(v) => setView(v as ViewMode)}>
+            <TabsList>
+              <TabsTrigger value="client" className="gap-1.5">
+                <Users className="h-3.5 w-3.5" />
+                By client
+              </TabsTrigger>
+              <TabsTrigger value="timeline" className="gap-1.5">
+                <Clock className="h-3.5 w-3.5" />
+                Timeline
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
           <div className="relative">
             <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -220,11 +461,26 @@ function JournalReviewPage() {
         </div>
       </div>
 
-      {isLoading ? (
+      {/* The by-client queue and the stat cards are server-counted now (prompt-124), so this no
+          longer applies to them and the `view === "timeline"` guard retires it there. It is NOT
+          removed outright: Timeline still renders the capped 200-row fetch, so for that view the
+          warning is still true, and deleting it would make Timeline quietly claim completeness it
+          doesn't have. The counts wording goes, since the counts above are no longer affected. */}
+      {view === "timeline" && entries.length >= 200 && (
+        <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            Timeline shows up to 200 entries from the last 30 days, newest first — older ones are
+            not listed here. Switch to By client for complete per-client counts.
+          </span>
+        </div>
+      )}
+
+      {(view === "client" ? queueLoading : timelineLoading) ? (
         <div className="flex justify-center py-16 text-muted-foreground">
           <Loader2 className="h-6 w-6 animate-spin" />
         </div>
-      ) : filtered.length === 0 ? (
+      ) : (view === "timeline" ? filtered.length === 0 : groups.length === 0) ? (
         <Card className="flex flex-col items-center gap-2 p-12 text-center">
           <CheckCircle2 className="h-8 w-8 text-emerald-500" />
           <p className="font-display text-lg font-semibold">All caught up</p>
@@ -232,7 +488,7 @@ function JournalReviewPage() {
             No logs match this view. Take a sip of coffee.
           </p>
         </Card>
-      ) : (
+      ) : view === "timeline" ? (
         <div className="space-y-2.5">
           {filtered.map((log) => (
             <LogRow
@@ -246,7 +502,184 @@ function JournalReviewPage() {
             />
           ))}
         </div>
+      ) : (
+        <div className="grid items-start gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+          {/* Client queue */}
+          <Card className="overflow-hidden p-0">
+            <div className="flex items-center gap-1.5 border-b px-3 py-2 text-xs font-medium text-muted-foreground">
+              <Users className="h-3.5 w-3.5" />
+              {groups.length} client{groups.length === 1 ? "" : "s"}
+            </div>
+            <div className="max-h-[calc(100vh-22rem)] min-h-40 divide-y overflow-y-auto">
+              {groups.map((g) => (
+                <ClientQueueRow
+                  key={g.key}
+                  g={g}
+                  active={g.key === activeGroup?.key}
+                  showPending={tab !== "approved"}
+                  onSelect={() => setSelectedKey(g.key)}
+                />
+              ))}
+            </div>
+          </Card>
+
+          {/* Selected client's logs */}
+          {activeGroup && (
+            <div className="min-w-0 space-y-4">
+              <Card className="p-4">
+                <div className="flex flex-wrap items-center gap-3">
+                  <Avatar className="h-11 w-11 shrink-0">
+                    <AvatarFallback className="bg-primary/10 text-primary text-sm font-medium">
+                      {activeGroup.initials}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <h2 className="truncate font-display text-lg font-semibold tracking-tight">
+                        {activeGroup.name}
+                      </h2>
+                      {activeGroup.clientId && (
+                        <Link
+                          to="/clients/$clientId"
+                          params={{ clientId: activeGroup.clientId }}
+                          className="text-muted-foreground hover:text-foreground"
+                          title="Open client profile"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </Link>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {activeGroup.pending} pending
+                      {activeGroup.flagged > 0 && ` · ${activeGroup.flagged} flagged`}
+                      {activeGroup.lowConf > 0 && ` · ${activeGroup.lowConf} low confidence`}
+                      {` · ${activeVisible.length} in this view`}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      className="gap-1.5"
+                      disabled={bulkBusy || activeClean.length === 0}
+                      onClick={() => approveMany(activeClean)}
+                    >
+                      {bulkBusy ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <CheckCircle2 className="h-4 w-4" />
+                      )}
+                      {activeClean.length > 0
+                        ? `Approve ${activeClean.length} clean`
+                        : "No clean entries"}
+                    </Button>
+                    {groups.length > 1 && (
+                      <Button size="sm" variant="outline" className="gap-1.5" onClick={goNextClient}>
+                        Next client
+                        <ArrowRight className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </Card>
+
+              {/* The selected client's entries load on their own now, so the panel can be
+                  fetching while the queue beside it is already drawn. */}
+              {activeLoading ? (
+                <div className="flex justify-center py-10 text-muted-foreground">
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                </div>
+              ) : days.length === 0 ? (
+                <Card className="flex flex-col items-center gap-1.5 p-8 text-center">
+                  <CheckCircle2 className="h-6 w-6 text-emerald-500" />
+                  <p className="text-sm font-medium">Nothing to review here</p>
+                  <p className="text-xs text-muted-foreground">
+                    No entries match this view for {activeGroup.name}.
+                  </p>
+                </Card>
+              ) : null}
+
+              {days.map((day) => (
+                <section key={day.key}>
+                  <div className="mb-2 flex items-center gap-2 px-1 text-xs">
+                    <span className="font-semibold text-foreground">{day.label}</span>
+                    {day.kcal > 0 && (
+                      <span className="flex items-center gap-1 text-muted-foreground">
+                        <Flame className="h-3 w-3 text-orange-500" />
+                        {Math.round(day.kcal)} kcal logged
+                      </span>
+                    )}
+                    <span className="text-muted-foreground">
+                      · {day.entries.length} {day.entries.length === 1 ? "entry" : "entries"}
+                    </span>
+                  </div>
+                  <div className="space-y-2.5">
+                    {day.entries.map((log) => (
+                      <LogRow
+                        key={log.id}
+                        log={log}
+                        hideClient
+                        onOpen={() => setOpenLog(log)}
+                        onApprove={() => approveMutation.mutate(log.id)}
+                        onReject={() => rejectMutation.mutate(log.id)}
+                        approving={
+                          approveMutation.isPending && approveMutation.variables === log.id
+                        }
+                        rejecting={
+                          rejectMutation.isPending && rejectMutation.variables === log.id
+                        }
+                      />
+                    ))}
+                  </div>
+                </section>
+              ))}
+            </div>
+          )}
+        </div>
       )}
+
+      <AlertDialog open={confirmAllOpen} onOpenChange={setConfirmAllOpen}>
+        <AlertDialogContent>
+          {stats.cleanPending > 0 ? (
+            <>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Approve all clean entries?</AlertDialogTitle>
+                {/* Counts come from the server's totals, so they describe every clean pending
+                    entry in the window — not just the ones on the loaded page. */}
+                <AlertDialogDescription>
+                  This approves {stats.cleanPending}{" "}
+                  {stats.cleanPending === 1 ? "entry" : "entries"} across {cleanClientCount} client
+                  {cleanClientCount === 1 ? "" : "s"} without opening them individually. Only
+                  entries with no flags and AI confidence above "low" are included
+                  {stats.pending > stats.cleanPending &&
+                    `; the other ${stats.pending - stats.cleanPending} pending need a manual look`}
+                  . To review one client at a time, cancel and use "Approve clean" on that client
+                  instead.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={approveAllClean}>
+                  Approve {stats.cleanPending}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </>
+          ) : (
+            <>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Nothing to approve automatically</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {stats.pending === 0
+                    ? "There are no pending entries right now."
+                    : `All ${stats.pending} pending ${stats.pending === 1 ? "entry needs" : "entries need"} a manual look — each one is either flagged (${stats.flagged}) or has low AI confidence (${stats.lowConf}), so they are never approved in bulk. Open the Flagged tab to review them one by one.`}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Close</AlertDialogCancel>
+              </AlertDialogFooter>
+            </>
+          )}
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Sheet open={!!openLog} onOpenChange={(o) => !o && setOpenLog(null)}>
         <SheetContent className="w-full sm:max-w-xl overflow-y-auto">
@@ -269,6 +702,60 @@ function JournalReviewPage() {
 }
 
 // ── Sub-components ──────────────────────────────────────────────────────────
+
+function ClientQueueRow({
+  g,
+  active,
+  showPending,
+  onSelect,
+}: {
+  g: ClientGroup;
+  active: boolean;
+  showPending: boolean;
+  onSelect: () => void;
+}) {
+  const sinceIso =
+    g.oldestPendingMs !== null ? new Date(g.oldestPendingMs).toISOString() : new Date(g.lastMs).toISOString();
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={cn(
+        "flex w-full items-center gap-3 border-l-2 border-transparent px-3 py-2.5 text-left transition hover:bg-muted/50",
+        active && "border-primary bg-primary/5",
+      )}
+    >
+      <Avatar className="h-9 w-9 shrink-0">
+        <AvatarFallback className="bg-primary/10 text-primary text-xs font-medium">
+          {g.initials}
+        </AvatarFallback>
+      </Avatar>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm font-medium">{g.name}</div>
+        <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+          <Clock className="h-3 w-3" />
+          {g.oldestPendingMs !== null ? "waiting " : "last entry "}
+          <TimeAgo iso={sinceIso} />
+        </div>
+      </div>
+      <div className="flex shrink-0 items-center gap-1">
+        {g.flagged > 0 && (
+          <Badge
+            variant="outline"
+            className="gap-1 rounded-md border-amber-200 bg-amber-50 px-1.5 text-[10px] text-amber-700"
+            title={`${g.flagged} flagged`}
+          >
+            <AlertTriangle className="h-3 w-3" />
+            {g.flagged}
+          </Badge>
+        )}
+        <Badge variant="secondary" className="px-1.5 text-[10px]" title={showPending ? "Pending" : "Entries"}>
+          {showPending ? g.pending : g.entryCount}
+        </Badge>
+      </div>
+    </button>
+  );
+}
 
 function CountBadge({ n, tone }: { n: number; tone?: "warn" }) {
   if (!n) return null;
@@ -416,6 +903,7 @@ function LogRow({
   onReject,
   approving,
   rejecting,
+  hideClient,
 }: {
   log: JournalEntry;
   onOpen: () => void;
@@ -423,6 +911,7 @@ function LogRow({
   onReject: () => void;
   approving: boolean;
   rejecting: boolean;
+  hideClient?: boolean;
 }) {
   return (
     <Card
@@ -433,15 +922,17 @@ function LogRow({
       )}
     >
       <div className="flex items-start gap-3">
-        <Avatar className="h-10 w-10 shrink-0">
-          <AvatarFallback className="bg-primary/10 text-primary text-xs font-medium">
-            {log.clientInitials}
-          </AvatarFallback>
-        </Avatar>
+        {!hideClient && (
+          <Avatar className="h-10 w-10 shrink-0">
+            <AvatarFallback className="bg-primary/10 text-primary text-xs font-medium">
+              {log.clientInitials}
+            </AvatarFallback>
+          </Avatar>
+        )}
 
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-medium text-sm">{log.clientName}</span>
+            {!hideClient && <span className="font-medium text-sm">{log.clientName}</span>}
             <SlotBadge log={log} />
             <Badge variant="outline" className="gap-1 rounded-md text-[10px]">
               <SourceIcon source={log.source} />

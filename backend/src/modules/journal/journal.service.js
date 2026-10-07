@@ -63,8 +63,12 @@ export function computeTotals(items) {
   };
 }
 
-function clientMeta(entry) {
-  const p = entry.client?.profile || {};
+// Display name + initials from a client's profile. Extracted from clientMeta (prompt-124) so the
+// review queue produces byte-identical names to the entry list: the queue groups by client and
+// the page shows both, and two copies of this would eventually disagree about someone with one
+// name or a missing surname.
+function nameAndInitials(profile) {
+  const p = profile || {};
   const name = [p.firstName, p.lastName].filter(Boolean).join(" ") || "Unknown";
   const initials = name
     .split(" ")
@@ -73,6 +77,10 @@ function clientMeta(entry) {
     .toUpperCase()
     .slice(0, 2);
   return { clientName: name, clientInitials: initials };
+}
+
+function clientMeta(entry) {
+  return nameAndInitials(entry.client?.profile);
 }
 
 function serialize(entry) {
@@ -124,6 +132,154 @@ export async function listEntries({ client, from, to, kind, status, limit }) {
     .lean();
 
   return entries.map(serialize);
+}
+
+// ── Review queue (prompt-124) ───────────────────────────────────────────────
+//
+// Journal Review groups its left-hand queue by client and shows four counts above it. Both were
+// built from GET /api/journal?from=<30d>&limit=200 — but listEntries sorts "-date" and the Zod
+// schema caps limit at 200, so the moment the practice logs more than 200 entries in 30 days the
+// rows that fall off the end are the OLDEST ones: exactly the entries that have been waiting
+// longest for review, silently missing from the queue and undercounted in the stat cards.
+//
+// This returns one row per CLIENT instead of one per entry, which is what makes it immune to
+// that truncation — the row count is bounded by the roster, not by the volume of logging. There
+// is deliberately no `limit`.
+//
+// NO client scoping, matching listEntries exactly: that function takes no actor and filters by
+// nothing but its query arguments, so every dietitian already sees every client's entries. This
+// endpoint does not quietly introduce a different rule — if scoping is wanted it belongs on both,
+// as one change.
+export async function getReviewQueue({ from, to, status, q }) {
+  // Same date handling as listEntries, including the end-of-day stretch on `to`, so a given
+  // from/to pair selects the same entries through either endpoint.
+  const match = {};
+  if (status) match.status = status;
+  if (from || to) {
+    match.date = {};
+    if (from) match.date.$gte = new Date(from);
+    if (to) match.date.$lte = new Date(new Date(to).setHours(23, 59, 59, 999));
+  }
+
+  // Every count is written as an explicit $cond on status rather than leaning on the $match
+  // above. With the default status="pending" they are equivalent, but the conditions then stay
+  // true to their names if `status` is widened or changed — "pending" in these fields means
+  // pending, not "whatever was matched".
+  const isPending = { $eq: ["$status", "pending"] };
+  const flagCount = { $size: { $ifNull: ["$flags", []] } };
+
+  const rows = await JournalEntry.aggregate([
+    { $match: match },
+    {
+      $group: {
+        _id: "$client",
+        // Every entry this client has in the matched window. Not in the brief's list, but the
+        // queue row's badge shows a count per client, and on the Approved tab `pending` is 0 for
+        // everyone by construction — without this the whole queue would read "0". See the report.
+        entryCount: { $sum: 1 },
+        pending: { $sum: { $cond: [isPending, 1, 0] } },
+        flagged: {
+          $sum: { $cond: [{ $and: [isPending, { $gt: [flagCount, 0] }] }, 1, 0] },
+        },
+        lowConf: {
+          $sum: { $cond: [{ $and: [isPending, { $eq: ["$confidence", "low"] }] }, 1, 0] },
+        },
+        // "Clean" is the bulk-approvable set: nothing flagged AND the AI was not unsure. $ne
+        // also counts a null confidence as clean, which is correct — a dashboard entry has no
+        // confidence at all, and absent is not the same as low.
+        cleanPending: {
+          $sum: {
+            $cond: [
+              { $and: [isPending, { $eq: [flagCount, 0] }, { $ne: ["$confidence", "low"] }] },
+              1,
+              0,
+            ],
+          },
+        },
+        // $min ignores the nulls this $cond emits for non-pending rows, so this is the oldest
+        // PENDING entry — null when the client has none waiting.
+        oldestPendingAt: { $min: { $cond: [isPending, "$date", null] } },
+        // Across everything matched, not just pending: it answers "when did I last hear from
+        // this client", which is the column the queue shows.
+        lastEntryAt: { $max: "$date" },
+      },
+    },
+    {
+      $lookup: {
+        from: "clients",
+        localField: "_id",
+        foreignField: "_id",
+        as: "client",
+        // Just the two name fields. A client document carries the clinical block, targets and
+        // the full profile; none of it belongs in a queue row, and some of it is
+        // permission-gated elsewhere (client.serializer.js strips `clinical` without
+        // clients.clinical.read). Projecting here means it is never read in the first place.
+        pipeline: [{ $project: { "profile.firstName": 1, "profile.lastName": 1 } }],
+      },
+    },
+    { $unwind: { path: "$client", preserveNullAndEmptyArrays: true } },
+  ]);
+
+  // Names, filtering and ordering happen here rather than in the pipeline, for one reason: the
+  // name is built by nameAndInitials() — the very function serialize() uses — so the queue and
+  // the entry list cannot disagree. Reimplementing "join the non-empty parts, else Unknown" in
+  // aggregation operators would be a second copy free to drift.
+  //
+  // Safe at this scale: one row per client with entries in the window, bounded by the roster
+  // (6 clients today), not by entry volume.
+  const all = rows.map((r) => ({
+    clientId: String(r._id),
+    ...nameAndInitials(r.client?.profile),
+    entryCount: r.entryCount,
+    pending: r.pending,
+    flagged: r.flagged,
+    lowConf: r.lowConf,
+    cleanPending: r.cleanPending,
+    oldestPendingAt: r.oldestPendingAt ?? null,
+    lastEntryAt: r.lastEntryAt ?? null,
+  }));
+
+  const needle = q?.trim().toLowerCase();
+  const clients = needle ? all.filter((c) => c.clientName.toLowerCase().includes(needle)) : all;
+
+  // Most-flagged first, then whoever has been waiting longest. Sorted here rather than with a
+  // $sort stage so null oldestPendingAt (a client with nothing pending) lands LAST instead of
+  // first — Mongo orders null below every date, which would put the clients who need nothing at
+  // the top of a review queue. The clientId tiebreak makes the order total, so a reload never
+  // reshuffles two otherwise-equal rows.
+  clients.sort(
+    (a, b) =>
+      b.flagged - a.flagged ||
+      (a.oldestPendingAt === null) - (b.oldestPendingAt === null) ||
+      new Date(a.oldestPendingAt ?? 0) - new Date(b.oldestPendingAt ?? 0) ||
+      a.clientId.localeCompare(b.clientId),
+  );
+
+  // Grand totals, so the stat cards stop being a sum over whatever 200 rows happened to load.
+  //
+  // Summed over the UNFILTERED set, not the `q` subset: the cards describe the whole queue, and
+  // today's page already computes them from the unsearched list while the search narrows only
+  // the rows. Keeping that split means adding this endpoint changes no visible behaviour.
+  const totals = all.reduce(
+    (acc, c) => ({
+      pending: acc.pending + c.pending,
+      flagged: acc.flagged + c.flagged,
+      lowConf: acc.lowConf + c.lowConf,
+      cleanPending: acc.cleanPending + c.cleanPending,
+      clients: acc.clients + (c.pending > 0 ? 1 : 0),
+    }),
+    { pending: 0, flagged: 0, lowConf: 0, cleanPending: 0, clients: 0 },
+  );
+
+  // `approved` is NOT part of the five totals in the brief, and is counted separately because it
+  // cannot come from the aggregation above: that pipeline $matches status="pending", so approved
+  // entries are not in it at all. Without this the page's fourth stat card ("Approved") would be
+  // the one card still summing the capped 200-row fetch — the exact dependency this endpoint
+  // exists to remove. One indexed count over the same window; see the report.
+  const approvedMatch = { ...match, status: "approved" };
+  totals.approved = await JournalEntry.countDocuments(approvedMatch);
+
+  return { clients, totals };
 }
 
 export async function getEntryById(id) {
