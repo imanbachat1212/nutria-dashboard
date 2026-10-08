@@ -1,5 +1,6 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useAuth } from "@/lib/auth-context";
+import { roleMeta } from "@/lib/team-mock";
 import {
   LayoutDashboard,
   Users,
@@ -82,7 +83,17 @@ const groups: { label: string; items: NavItem[] }[] = [
 export function AppSidebar() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const isActive = (url: string) => (url === "/" ? pathname === "/" : pathname.startsWith(url));
-  const { can } = useAuth();
+  const { can, user } = useAuth();
+  // The footer card used to be a hardcoded "Sura Hawli / Lead Dietitian" for everyone. It now shows
+  // whoever is actually signed in, with the role they hold.
+  const displayName = user?.name?.trim() || user?.email || "Signed in";
+  const initials =
+    displayName
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((w) => w[0]?.toUpperCase() ?? "")
+      .join("") || "?";
 
   // Drop items this user cannot use, then drop groups that end up empty — otherwise hiding the
   // only item in a group leaves its heading floating above nothing.
@@ -133,11 +144,13 @@ export function AppSidebar() {
       <SidebarFooter className="border-t border-sidebar-border">
         <div className="flex items-center gap-2.5 px-2 py-1.5 group-data-[collapsible=icon]:hidden">
           <div className="flex h-8 w-8 items-center justify-center rounded-full bg-accent text-accent-foreground text-xs font-semibold">
-            LD
+            {initials}
           </div>
-          <div className="flex flex-col leading-tight">
-            <span className="text-sm font-medium">Sura Hawli</span>
-            <span className="text-[11px] text-muted-foreground">Lead Dietitian</span>
+          <div className="flex min-w-0 flex-col leading-tight">
+            <span className="truncate text-sm font-medium">{displayName}</span>
+            <span className="text-[11px] text-muted-foreground">
+              {roleMeta(user?.role?.name).label}
+            </span>
           </div>
         </div>
       </SidebarFooter>

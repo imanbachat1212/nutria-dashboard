@@ -4,6 +4,7 @@ import { AlertCircle, CheckCircle2, Loader2, Stethoscope } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/password-input";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { useAuth } from "@/lib/auth-context";
@@ -157,9 +158,8 @@ function AcceptInvitePage() {
 
               <div className="space-y-1.5">
                 <Label htmlFor="invite-password">Password</Label>
-                <Input
+                <PasswordInput
                   id="invite-password"
-                  type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="At least 8 characters"
@@ -172,9 +172,8 @@ function AcceptInvitePage() {
 
               <div className="space-y-1.5">
                 <Label htmlFor="invite-confirm">Confirm password</Label>
-                <Input
+                <PasswordInput
                   id="invite-confirm"
-                  type="password"
                   value={confirm}
                   onChange={(e) => setConfirm(e.target.value)}
                   onKeyDown={(e) => {
