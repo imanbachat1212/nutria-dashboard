@@ -6,6 +6,23 @@ import { errorHandler } from "./middleware/error.js";
 
 const app = express();
 
+// req.ip behind a reverse proxy (prompt-125).
+//
+// Express reads req.ip from the socket unless told otherwise, so on Render — which terminates TLS
+// at its edge and forwards over HTTP — every audit row would record the proxy's address and every
+// rate-limit bucket would be shared by the whole internet. With this set, Express reads the
+// right-most untrusted address from X-Forwarded-For instead.
+//
+// `1`, not `true`: Render puts exactly ONE hop in front of the service. `true` trusts the entire
+// chain, which means a client can prepend any address it likes to X-Forwarded-For and Express
+// will believe it — spoofing both the audit trail and the login rate limiter. Trusting exactly
+// one hop takes the address Render itself appended and ignores anything the client claimed
+// before it.
+//
+// Locally there is no proxy, so nothing sends X-Forwarded-For and req.ip is the socket address
+// as before.
+app.set("trust proxy", 1);
+
 const corsOrigins = env.CORS_ORIGINS
   ? env.CORS_ORIGINS.split(",").map((o) => o.trim())
   : ["http://localhost:3000", "http://localhost:8081"];

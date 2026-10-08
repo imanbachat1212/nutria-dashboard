@@ -1,4 +1,5 @@
 import { Link, useRouterState } from "@tanstack/react-router";
+import { useAuth } from "@/lib/auth-context";
 import {
   LayoutDashboard,
   Users,
@@ -31,7 +32,15 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 
-type NavItem = { title: string; url: string; icon: React.ComponentType<{ className?: string }> };
+// `permission` gates the item (prompt-125). Items without one are visible to anyone signed in,
+// which is every item that existed before this — the sidebar had no gating at all, so Team &
+// Access was offered to every role and only 403'd once you clicked into it.
+type NavItem = {
+  title: string;
+  url: string;
+  icon: React.ComponentType<{ className?: string }>;
+  permission?: string;
+};
 
 const overview: NavItem[] = [{ title: "Overview", url: "/", icon: LayoutDashboard }];
 
@@ -58,7 +67,7 @@ const operations: NavItem[] = [
 
 const admin: NavItem[] = [
   { title: "Website / CMS", url: "/cms", icon: Globe },
-  { title: "Team & Access", url: "/team", icon: Shield },
+  { title: "Team & Access", url: "/team", icon: Shield, permission: "users.read" },
   { title: "Settings", url: "/settings", icon: Settings },
 ];
 
@@ -73,6 +82,13 @@ const groups: { label: string; items: NavItem[] }[] = [
 export function AppSidebar() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const isActive = (url: string) => (url === "/" ? pathname === "/" : pathname.startsWith(url));
+  const { can } = useAuth();
+
+  // Drop items this user cannot use, then drop groups that end up empty — otherwise hiding the
+  // only item in a group leaves its heading floating above nothing.
+  const visibleGroups = groups
+    .map((g) => ({ ...g, items: g.items.filter((i) => !i.permission || can(i.permission)) }))
+    .filter((g) => g.items.length > 0);
 
   return (
     <Sidebar collapsible="icon">
@@ -89,7 +105,7 @@ export function AppSidebar() {
       </SidebarHeader>
 
       <SidebarContent>
-        {groups.map((group, idx) => (
+        {visibleGroups.map((group, idx) => (
           <SidebarGroup key={idx}>
             {group.label && (
               <SidebarGroupLabel className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">

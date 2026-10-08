@@ -25,6 +25,7 @@ import { Route as CmsRouteImport } from './routes/cms'
 import { Route as ClientsRouteImport } from './routes/clients'
 import { Route as BillingRouteImport } from './routes/billing'
 import { Route as AppointmentsRouteImport } from './routes/appointments'
+import { Route as AcceptInviteRouteImport } from './routes/accept-invite'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as MealPlanTemplatesIndexRouteImport } from './routes/meal-plan-templates.index'
 import { Route as CmsIndexRouteImport } from './routes/cms.index'
@@ -113,6 +114,11 @@ const AppointmentsRoute = AppointmentsRouteImport.update({
   path: '/appointments',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AcceptInviteRoute = AcceptInviteRouteImport.update({
+  id: '/accept-invite',
+  path: '/accept-invite',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -152,6 +158,7 @@ const CmsPagesPageIdRoute = CmsPagesPageIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/accept-invite': typeof AcceptInviteRoute
   '/appointments': typeof AppointmentsRoute
   '/billing': typeof BillingRoute
   '/clients': typeof ClientsRouteWithChildren
@@ -177,6 +184,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/accept-invite': typeof AcceptInviteRoute
   '/appointments': typeof AppointmentsRoute
   '/billing': typeof BillingRoute
   '/food-database': typeof FoodDatabaseRoute
@@ -200,6 +208,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/accept-invite': typeof AcceptInviteRoute
   '/appointments': typeof AppointmentsRoute
   '/billing': typeof BillingRoute
   '/clients': typeof ClientsRouteWithChildren
@@ -227,6 +236,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/accept-invite'
     | '/appointments'
     | '/billing'
     | '/clients'
@@ -252,6 +262,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/accept-invite'
     | '/appointments'
     | '/billing'
     | '/food-database'
@@ -274,6 +285,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/accept-invite'
     | '/appointments'
     | '/billing'
     | '/clients'
@@ -300,6 +312,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AcceptInviteRoute: typeof AcceptInviteRoute
   AppointmentsRoute: typeof AppointmentsRoute
   BillingRoute: typeof BillingRoute
   ClientsRoute: typeof ClientsRouteWithChildren
@@ -432,6 +445,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppointmentsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/accept-invite': {
+      id: '/accept-invite'
+      path: '/accept-invite'
+      fullPath: '/accept-invite'
+      preLoaderRoute: typeof AcceptInviteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -524,6 +544,7 @@ const MealPlanTemplatesRouteWithChildren =
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AcceptInviteRoute: AcceptInviteRoute,
   AppointmentsRoute: AppointmentsRoute,
   BillingRoute: BillingRoute,
   ClientsRoute: ClientsRouteWithChildren,

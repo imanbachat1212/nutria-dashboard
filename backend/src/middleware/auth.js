@@ -72,6 +72,17 @@ export function authenticate(req, res, next) {
     .lean()
     .then((user) => {
       if (!user) throw new ApiError(401, "User not found");
+      // Suspension and removal take effect on the NEXT REQUEST, not whenever the token happens
+      // to expire (prompt-125).
+      //
+      // Tokens are signed for 7 days and carry no revocation list, so before this check
+      // suspending someone changed nothing they could feel: their existing JWT kept opening every
+      // route for up to a week. login() refused them a NEW token and that was the entire effect.
+      // Checking here is what makes the Team page's suspend button mean anything.
+      //
+      // Same 401 and same wording for suspended and removed users: the account is reachable
+      // neither way, and distinguishing them would tell whoever holds the token which it was.
+      if (user.active === false) throw new ApiError(401, "Account disabled");
       req.user = {
         _id: user._id,
         email: user.email,
@@ -79,7 +90,31 @@ export function authenticate(req, res, next) {
         role: user.role?.name,
         permissions: user.role?.permissions || [],
       };
+      touchLastActive(user);
       next();
     })
     .catch(next);
+}
+
+// How stale "last active" is allowed to get. Five minutes is well under the granularity the
+// column renders ("2h ago"), so nothing visible is lost.
+const LAST_ACTIVE_THROTTLE_MS = 5 * 60 * 1000;
+
+// Records that a user is still around, at most once per LAST_ACTIVE_THROTTLE_MS.
+//
+// The guard is the point: this runs on EVERY authenticated request, and an unconditional write
+// would turn every read in the app into a read plus a write — a permanent cost on every page
+// view to populate one informational column.
+//
+// Fire-and-forget, never awaited and never able to reject the request: if this write fails the
+// user is still authenticated, and a failed bookkeeping update must not 500 a working page. The
+// filter repeats the time condition so two concurrent requests can't both write.
+function touchLastActive(user) {
+  const now = Date.now();
+  const last = user.lastActiveAt ? new Date(user.lastActiveAt).getTime() : 0;
+  if (now - last < LAST_ACTIVE_THROTTLE_MS) return;
+  User.updateOne(
+    { _id: user._id, $or: [{ lastActiveAt: null }, { lastActiveAt: { $lt: new Date(now - LAST_ACTIVE_THROTTLE_MS) } }] },
+    { $set: { lastActiveAt: new Date(now) } },
+  ).catch(() => {});
 }

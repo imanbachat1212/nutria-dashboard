@@ -20,6 +20,17 @@ interface AuthContextValue {
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
+  /**
+   * Does the signed-in user hold this permission? (prompt-125)
+   *
+   * The permission list already arrives with /api/auth/me — it was simply never read, so every
+   * nav item and every page rendered for everyone regardless of role. This is the UI half of the
+   * gate ONLY: the backend enforces the same keys on every route, and a page hidden here is still
+   * refused there. Hiding a control the server would reject is a courtesy, not the control.
+   */
+  can: (permission: string) => boolean;
+  /** Signs a user in from an invite acceptance, which returns the same { token, user } as login. */
+  adoptSession: (token: string, user: AuthUser) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -55,8 +66,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }, []);
 
+  // Accepting an invite returns a token and a user exactly as login does; storing them through
+  // the same two calls means there is one definition of "signed in", not two that can drift.
+  const adoptSession = useCallback((token: string, nextUser: AuthUser) => {
+    setToken(token);
+    setUser(nextUser);
+  }, []);
+
+  const can = useCallback(
+    (permission: string) => {
+      const held = user?.role?.permissions;
+      if (!held) return false;
+      // "*" is the internal SERVICE_API_KEY's wildcard (middleware/auth.js). A human never has it,
+      // but honouring it here keeps this helper truthful about what the backend would allow.
+      return held.includes("*") || held.includes(permission);
+    },
+    [user],
+  );
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, can, adoptSession }}>
       {children}
     </AuthContext.Provider>
   );

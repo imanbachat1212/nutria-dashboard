@@ -11,6 +11,7 @@ import Meal from "./src/modules/meals/meal.model.js";
 import Setting from "./src/modules/settings/setting.model.js";
 import { calcTargets } from "./src/lib/calc/targets.js";
 import SEED_FOODS from "./src/modules/foods/foods.seed.js";
+import { ROLE_DEFINITIONS } from "./src/modules/users/role-definitions.js";
 
 const PERMISSION_KEYS = [
   "users.create", "users.read", "users.update", "users.delete",
@@ -60,26 +61,45 @@ async function seed() {
   }
   console.log(`Seeded ${PERMISSION_KEYS.length} permissions`);
 
-  // Dietitian role — all permissions
-  const dietitian = await Role.findOneAndUpdate(
-    { name: "dietitian" },
-    { name: "dietitian", permissions: PERMISSION_KEYS },
-    { upsert: true, new: true }
-  );
-  console.log("Seeded dietitian role");
+  // The five team roles, from the single source of truth (prompt-125).
+  //
+  // This used to build two roles inline and give "dietitian" EVERY permission, users.* included,
+  // which is why every account in the database can currently administer every other account.
+  //
+  // RE-RUNNING THIS IS NOT A NO-OP for an existing install: "dietitian" is upserted to its new,
+  // narrower permission list, so anyone on that role loses users.*, settings.update, billing
+  // writes and the rest. That is the intended correction, but it is also exactly how you lock
+  // yourself out if no owner exists yet — which is what migrate-team-roles.js is for. On a fresh
+  // database the admin account below is created as owner and there is no gap.
+  const roles = {};
+  for (const def of ROLE_DEFINITIONS) {
+    roles[def.name] = await Role.findOneAndUpdate(
+      { name: def.name },
+      { name: def.name, permissions: def.permissions },
+      { upsert: true, new: true }
+    );
+    console.log(`Seeded role: ${def.name} (${def.permissions.length} permissions)`);
+  }
+  const owner = roles.owner;
+  const dietitian = roles.dietitian;
 
-  // Assistant role — everything except clients.clinical.*
-  const assistantPerms = PERMISSION_KEYS.filter(
-    (k) => !k.startsWith("clients.clinical.")
-  );
-  const assistant = await Role.findOneAndUpdate(
-    { name: "assistant" },
-    { name: "assistant", permissions: assistantPerms },
-    { upsert: true, new: true }
-  );
-  console.log("Seeded assistant role");
+  // The old "assistant" role is retired (prompt-125) — it was "everything except clinical",
+  // which still included users.*. It is NOT deleted here: deleting a Role that a User still
+  // points at would leave that user with a dangling ref and no permissions at all. The migration
+  // script reports who holds it and remaps them; deletion is a deliberate step there, not a
+  // side effect of seeding.
+  const legacyAssistant = await Role.findOne({ name: "assistant" });
+  if (legacyAssistant) {
+    const holders = await User.countDocuments({ role: legacyAssistant._id });
+    console.log(
+      holders
+        ? `NOTE: legacy "assistant" role still held by ${holders} user(s) — run migrate-team-roles.js`
+        : `NOTE: legacy "assistant" role exists but nobody holds it — safe to drop`
+    );
+  }
 
-  // Admin user
+  // Admin user — seeded as OWNER, so a fresh install has exactly one account that can administer
+  // the team. Every other role deliberately lacks users.*.
   const adminEmail = "admin@nutri.app";
   const existing = await User.findOne({ email: adminEmail });
   if (!existing) {
@@ -88,11 +108,11 @@ async function seed() {
       email: adminEmail,
       password: hashed,
       name: "Admin",
-      role: dietitian._id,
+      role: owner._id,
     });
-    console.log(`Created admin user: ${adminEmail} / admin123`);
+    console.log(`Created admin user: ${adminEmail} / admin123 (owner)`);
   } else {
-    console.log("Admin user already exists");
+    console.log("Admin user already exists — role left as-is (migrate-team-roles.js promotes owners)");
   }
 
   // Staff directory — dietitians + trainers referenced by appointments.staffId.
@@ -118,6 +138,9 @@ async function seed() {
         email: s.email,
         password: hashed,
         name: s.name,
+        // Display accounts referenced by appointments.staffId; nobody logs into them. They keep
+        // the dietitian role so an appointment's staff still resolves to someone with clinical
+        // reach if one of these is ever turned into a real login.
         role: dietitian._id,
       });
       console.log(`Created staff user: ${s.name}`);

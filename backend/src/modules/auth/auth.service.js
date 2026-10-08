@@ -17,8 +17,14 @@ export async function login({ email, password }) {
     expiresIn: "7d",
   });
 
+  // Stamped here rather than in authenticate (prompt-125): "last login" means a password was
+  // presented, which happens exactly once per session. lastActiveAt is the per-request one.
+  // Fire-and-forget — a failed bookkeeping write must not cost someone their sign-in.
+  const now = new Date();
+  User.updateOne({ _id: user._id }, { $set: { lastLoginAt: now, lastActiveAt: now } }).catch(() => {});
+
   const { password: _, ...safe } = user.toObject();
-  return { token, user: safe };
+  return { token, user: { ...safe, lastLoginAt: now } };
 }
 
 export async function changePassword(userId, { currentPassword, newPassword }) {

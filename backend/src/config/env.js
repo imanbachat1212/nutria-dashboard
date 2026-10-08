@@ -37,6 +37,15 @@ export const env = {
   // the deterministic ingredient parser (see recipe-import/lib/ingredient-parser.js) rather
   // than 503-ing. isAiConfigured() in lib/openrouter.js is the single check for "can we ask a
   // model", and the import response reports which parser actually ran.
+  // Team invites (prompt-125). All optional: with none of them set, invites are still created
+  // and the link is returned for copying — only the email is skipped (emailSent:false).
+  RESEND_API_KEY: process.env.RESEND_API_KEY || "",
+  // The verified sender, e.g. "Nutria <team@nutria.health>".
+  MAIL_FROM: process.env.MAIL_FROM || "",
+  // Where the accept-invite link points. Falls back to the dev frontend so a local invite link is
+  // clickable without extra setup; MUST be set in production or emails will link to localhost.
+  APP_BASE_URL: process.env.APP_BASE_URL || "http://localhost:5173",
+
   AI_PROVIDER: process.env.AI_PROVIDER || "openrouter",
   OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY || "",
   // Cheap + fast is the right trade here: the task is mechanical line-splitting, not reasoning.

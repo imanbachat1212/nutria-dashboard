@@ -139,13 +139,18 @@ function AuthGate() {
   const { user, loading } = useAuth();
   const router = useRouter();
   const isLoginPage = !!useMatch({ from: "/login", shouldThrow: false });
+  // Accepting an invite happens BEFORE the person has an account, so it must render outside the
+  // authenticated shell exactly as /login does — otherwise the gate below would bounce the
+  // invitee to the login page they cannot yet use (prompt-125).
+  const isAcceptInvitePage = !!useMatch({ from: "/accept-invite", shouldThrow: false });
+  const isPublicPage = isLoginPage || isAcceptInvitePage;
 
   useEffect(() => {
     if (loading) return;
-    if (!user && !isLoginPage) {
+    if (!user && !isPublicPage) {
       router.navigate({ to: "/login" });
     }
-  }, [user, loading, isLoginPage, router]);
+  }, [user, loading, isPublicPage, router]);
 
   if (loading) {
     return (
@@ -155,7 +160,7 @@ function AuthGate() {
     );
   }
 
-  if (isLoginPage) {
+  if (isPublicPage) {
     return <Outlet />;
   }
 
