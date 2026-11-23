@@ -1,0 +1,187 @@
+{
+  "eyebrow": "الإدارة",
+  "title": "الفريق والصلاحيات",
+  "description": "ادعُ أعضاء الفريق، وعيّن الأدوار، وراجع كل ما تم تغييره.",
+  "inviteTeammate": "دعوة عضو",
+  "roles": {
+    "unknown": "غير معروف",
+    "owner": {
+      "label": "المالك",
+      "description": "صلاحية كاملة. الفواتير والفريق والإعدادات الحساسة."
+    },
+    "dietitian": {
+      "label": "اختصاصي/ة تغذية",
+      "description": "إدارة العملاء والخطط والمواعيد وسجل الطعام."
+    },
+    "intern": {
+      "label": "متدرب",
+      "description": "قراءة فقط لبيانات العملاء؛ يمكنه تحضير مسودات خطط للمراجعة."
+    },
+    "reception": {
+      "label": "الاستقبال",
+      "description": "الحجوزات واستبيانات الالتحاق وبيانات العملاء الأساسية فقط."
+    },
+    "accountant": {
+      "label": "المحاسب",
+      "description": "الفواتير والسندات والتقارير المالية."
+    },
+    "assistant": {
+      "label": "مساعد (دور قديم)",
+      "description": "دور متوقف — انقل هؤلاء المستخدمين إلى الاستقبال."
+    }
+  },
+  "status": {
+    "active": "نشط",
+    "suspended": "موقوف"
+  },
+  "stats": {
+    "members": "أعضاء الفريق",
+    "membersHint": "{{count}} نشط",
+    "pendingInvites": "دعوات معلّقة",
+    "expiredHint": "{{count}} منتهية",
+    "awaitingHint": "في انتظار القبول",
+    "roles": "الأدوار",
+    "rolesHint": "مجموعات الصلاحيات",
+    "owners": "المالكون",
+    "ownersHint": "يمكنهم إدارة الفريق"
+  },
+  "tabs": {
+    "members": "الأعضاء",
+    "invites": "الدعوات",
+    "roles": "الأدوار",
+    "audit": "سجل التغييرات"
+  },
+  "searchMembers": "ابحث في الأعضاء…",
+  "members": {
+    "loadFailed": "لم يتم تحميل بيانات الفريق: {{error}}",
+    "empty": "لا يوجد أعضاء مطابقون.",
+    "you": "أنت",
+    "noLogin": "لم يسجّل دخولًا",
+    "noLoginTitle": "هذا الحساب لم يسجّل الدخول أبدًا",
+    "activeAgo": "نشط {{when}}",
+    "neverActive": "لم ينشط أبدًا",
+    "joined": "انضم في {{date}}",
+    "selfRoleTitle": "لا يمكنك تغيير دورك الخاص",
+    "openMenu": "فتح إجراءات العضو",
+    "roleUpdated": "تم تحديث دور {{name}}",
+    "suspendAccess": "إيقاف الوصول",
+    "suspended": "تم إيقاف {{name}}",
+    "reactivate": "إعادة تنشيط",
+    "reactivated": "تمت إعادة تنشيط {{name}}",
+    "removeFromTeam": "إزالة من الفريق",
+    "removed": "تمت إزالة {{name}} من الفريق",
+    "removeTitle": "إزالة {{name}} من الفريق؟",
+    "removeBody": "سيفقد الوصول فورًا، بما في ذلك أي جلسة مفتوحة لديه. يُحفظ حسابه ولا يُحذف، لتبقى المواعيد السابقة ومدخلات سجل التغييرات دالّة على هويته، ويبقى بريده الإلكتروني محجوزًا.",
+    "removeConfirm": "إزالة"
+  },
+  "invites": {
+    "emptyTitle": "لا توجد دعوات معلّقة",
+    "emptyBody": "تظهر الدعوات هنا حتى يتم قبولها أو إلغاؤها.",
+    "invitedBy": "دعاه {{name}} · {{date}}",
+    "someone": "أحد الأعضاء",
+    "emailedAgo": " · أُرسلت {{when}}",
+    "notEmailed": " · لم تُرسل بالبريد",
+    "expiredAgo": "انتهت {{when}}",
+    "expiresOn": "تنتهي في {{date}}",
+    "copyLink": "نسخ الرابط",
+    "newLinkCopied": "تم نسخ رابط جديد",
+    "newLinkCopiedHint": "أي رابط سابق لهذه الدعوة لم يعد صالحًا.",
+    "renew": "تجديد",
+    "resend": "إعادة إرسال",
+    "renewed": "تم تجديد الدعوة",
+    "resent": "تم إرسال الدعوة مرة أخرى",
+    "newLinkIssued": "تم إصدار رابط جديد؛ الرابط السابق لم يعد صالحًا.",
+    "revoke": "إلغاء الدعوة",
+    "revoked": "تم إلغاء الدعوة"
+  },
+  "rolesTab": {
+    "retired": "متوقف",
+    "members_zero": "لا أعضاء",
+    "members_one": "عضو واحد",
+    "members_two": "عضوان",
+    "members_few": "{{count}} أعضاء",
+    "members_many": "{{count}} عضوًا",
+    "members_other": "{{count}} عضو",
+    "permissions_zero": "لا صلاحيات",
+    "permissions_one": "صلاحية واحدة",
+    "permissions_two": "صلاحيتان",
+    "permissions_few": "{{count}} صلاحيات",
+    "permissions_many": "{{count}} صلاحيةً",
+    "permissions_other": "{{count}} صلاحية",
+    "editPermissions": "تعديل الصلاحيات",
+    "viewPermissions": "عرض الصلاحيات"
+  },
+  "permissionsDialog": {
+    "title": "صلاحيات {{role}}",
+    "ownerLocked": "دور المالك يمتلك صلاحية كاملة دائمًا ولا يمكن تعديله — وإلا لأمكن للمالك أن يسلب نفسه القدرة على إدارة الفريق.",
+    "intro": "الصفوف هي الوحدات، والأعمدة هي ما يستطيع هذا الدور فعله. تُدرج فقط الصلاحيات التي ينفّذها النظام فعليًا.",
+    "module": "الوحدة",
+    "other": "أخرى",
+    "save": "حفظ الصلاحيات",
+    "updated": "تم تحديث صلاحيات {{role}}"
+  },
+  "action": {
+    "read": "قراءة",
+    "create": "إنشاء",
+    "update": "تعديل",
+    "delete": "حذف",
+    "write": "كتابة",
+    "upload": "تحميل",
+    "manage": "إدارة"
+  },
+  "permissionModule": {
+    "clients": "العملاء",
+    "clinical": "السجلات السريرية",
+    "foods": "قاعدة بيانات الأطعمة",
+    "meals": "مكتبة الوجبات",
+    "mealplans": "الخطط الغذائية",
+    "mealplantemplates": "قوالب الخطط",
+    "journal": "سجل الطعام",
+    "appointments": "المواعيد",
+    "messages": "الرسائل",
+    "intake": "استبيانات الالتحاق",
+    "leads": "عملاء محتملون",
+    "billing": "الفواتير",
+    "reports": "التقارير",
+    "cms": "الموقع الإلكتروني",
+    "settings": "الإعدادات",
+    "users": "الفريق والصلاحيات",
+    "audit": "سجل التغييرات",
+    "media": "ملفات الوسائط",
+    "integrations": "التكاملات"
+  },
+  "audit": {
+    "searchPlaceholder": "ابحث عن شخص أو كيان…",
+    "allEntities": "كل الكيانات",
+    "allActions": "كل الإجراءات",
+    "exported_zero": "لم تُصدَّر أي صفوف",
+    "exported_one": "تم تصدير صف واحد",
+    "exported_two": "تم تصدير صفين",
+    "exported_few": "تم تصدير {{count}} صفوف",
+    "exported_many": "تم تصدير {{count}} صفًا",
+    "exported_other": "تم تصدير {{count}} صف",
+    "exportRows": "تصدير {{count}} صف",
+    "emptyFiltered": "لا يوجد ما يطابق هذه التصفية.",
+    "system": "النظام",
+    "loadMore": "تحميل المزيد ({{loaded}} من {{total}})"
+  },
+  "inviteDialog": {
+    "title": "دعوة عضو إلى الفريق",
+    "email": "البريد الإلكتروني",
+    "role": "الدور",
+    "emailed": "تم إرسال الدعوة إلى {{email}}",
+    "created": "تم إنشاء دعوة لـ {{email}}",
+    "emailFailed": "تم إنشاء الدعوة، لكن لم يتم إرسال البريد الإلكتروني ({{error}}).",
+    "linkCopied": "تم نسخ الرابط",
+    "done": "تم",
+    "inviteHint": "سيحصل على رابط لاختيار كلمة مروره. تنتهي صلاحيته بعد 7 أيام ويمكن استخدامه مرة واحدة فقط.",
+    "emailPlaceholder": "name@practice.com",
+    "send": "إرسال الدعوة",
+    "emailNotConfigured": "البريد الإلكتروني غير مُهيّأ — انسخ الرابط وأرسله بنفسك.",
+    "linkTitle": "أرسل هذا الرابط إلى {{email}}",
+    "linkNotConfigured": "إرسال البريد الإلكتروني غير مُهيّأ على هذا السيرفر، لذا لم تُرسل الدعوة بالبريد.",
+    "linkCopyHint": "انسخ الرابط أدناه وأرسله بنفسك.",
+    "linkWarningBefore": "أي شخص يملك هذا الرابط يمكنه إنشاء حساب بصفة ",
+    "linkWarningAfter": ". أرسله فقط إلى {{email}}."
+  }
+}

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useTranslation } from "react-i18next";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,6 +13,7 @@ export const Route = createFileRoute("/login")({
 });
 
 function LoginPage() {
+  const { t } = useTranslation(["auth", "nav"]);
   const { login } = useAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
@@ -27,7 +29,9 @@ function LoginPage() {
       await login(email, password);
       navigate({ to: "/" });
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Login failed");
+      // The server's message is shown as the server sends it (English for now) — only our own
+      // fallback for a non-Error throw is localised.
+      setError(err instanceof Error ? err.message : t("auth:login.failed"));
     } finally {
       setLoading(false);
     }
@@ -38,14 +42,14 @@ function LoginPage() {
       <Card className="w-full max-w-sm border-border/70 shadow-soft">
         <CardHeader className="text-center">
           <CardTitle className="font-display text-2xl font-semibold tracking-tight">
-            Nutria
+            {t("nav:brand")}
           </CardTitle>
-          <CardDescription>Sign in to your account</CardDescription>
+          <CardDescription>{t("auth:login.subtitle")}</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="email">Email</Label>
+              <Label htmlFor="email">{t("auth:login.email")}</Label>
               <Input
                 id="email"
                 type="email"
@@ -54,15 +58,18 @@ function LoginPage() {
                 placeholder="admin@nutri.app"
                 required
                 autoFocus
+                // An email address is a Latin token: forced LTR so it is not right-aligned and
+                // re-ordered around the "@" when the page is Arabic.
+                dir="ltr"
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="password">Password</Label>
+              <Label htmlFor="password">{t("auth:login.password")}</Label>
               <PasswordInput
                 id="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Password"
+                placeholder={t("auth:login.passwordPlaceholder")}
                 required
               />
             </div>
@@ -70,7 +77,7 @@ function LoginPage() {
               <p className="text-sm text-destructive">{error}</p>
             )}
             <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? "Signing in…" : "Sign in"}
+              {loading ? t("auth:login.submitting") : t("auth:login.submit")}
             </Button>
           </form>
         </CardContent>

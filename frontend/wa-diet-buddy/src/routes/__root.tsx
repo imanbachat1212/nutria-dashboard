@@ -9,18 +9,28 @@ import {
   Scripts,
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 
 import "@fontsource/inter/400.css";
 import "@fontsource/inter/500.css";
 import "@fontsource/inter/600.css";
 import "@fontsource/fraunces/500.css";
 import "@fontsource/fraunces/600.css";
+// Arabic face, bundled the same way as the Latin ones above rather than fetched from Google —
+// one less origin to whitelist, and it cannot fail to arrive. Applied only under html[lang=ar]
+// (see styles.css), so English rendering is byte-for-byte unchanged.
+import "@fontsource/noto-sans-arabic/400.css";
+import "@fontsource/noto-sans-arabic/500.css";
+import "@fontsource/noto-sans-arabic/600.css";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 import { DashboardLayout } from "@/components/dashboard-layout";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
 import { Toaster } from "@/components/ui/sonner";
+import { dirFor } from "@/lib/i18n/config";
+import { detectLanguage } from "@/lib/i18n/detect";
+import { I18nProvider, useLanguage } from "@/lib/i18n/provider";
 
 function NotFoundComponent() {
   return (
@@ -109,8 +119,18 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 });
 
 function RootShell({ children }: { children: ReactNode }) {
+  // Resolved from the language cookie, and from the SAME cookie on both sides of hydration (see
+  // lib/i18n/detect.ts). That is what makes the first byte of HTML already carry dir="rtl" for
+  // an Arabic user instead of painting English and correcting it after JS boots.
+  //
+  // This component is rendered OUTSIDE the root route match by TanStack (see
+  // @tanstack/react-router Match.js), so it has no route context and cannot read the language
+  // from React state — hence the direct call, and hence the imperative lang/dir sync in
+  // I18nProvider for switches that happen after load.
+  const language = detectLanguage();
+
   return (
-    <html lang="en">
+    <html lang={language} dir={dirFor(language)}>
       <head>
         <HeadContent />
       </head>
@@ -127,15 +147,25 @@ function RootComponent() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <AuthGate />
-      </AuthProvider>
-      <Toaster />
+      <I18nProvider>
+        <AuthProvider>
+          <AuthGate />
+        </AuthProvider>
+        <LocalisedToaster />
+      </I18nProvider>
     </QueryClientProvider>
   );
 }
 
+/** Sonner positions and aligns its toasts from `dir`; it reads the DOM only at mount, so an
+ *  in-session language switch needs the prop. */
+function LocalisedToaster() {
+  const { dir } = useLanguage();
+  return <Toaster dir={dir} />;
+}
+
 function AuthGate() {
+  const { t } = useTranslation("common");
   const { user, loading } = useAuth();
   const router = useRouter();
   const isLoginPage = !!useMatch({ from: "/login", shouldThrow: false });
@@ -155,7 +185,7 @@ function AuthGate() {
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
-        <p className="text-sm text-muted-foreground">Loading…</p>
+        <p className="text-sm text-muted-foreground">{t("state.loading")}</p>
       </div>
     );
   }

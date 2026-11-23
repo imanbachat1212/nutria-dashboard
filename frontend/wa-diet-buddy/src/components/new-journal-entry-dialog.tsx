@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Minus, Search, Loader2, Check } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import {
   Dialog,
@@ -28,6 +29,7 @@ import { fetchFoods } from "@/lib/foods-api";
 import {
   createJournalEntry,
   SLOT_LABEL,
+  useJournalLabels,
   type JournalKind,
   type MealSlot,
 } from "@/lib/journal-api";
@@ -55,6 +57,8 @@ interface Props {
 }
 
 export function NewJournalEntryDialog({ open, onOpenChange }: Props) {
+  const { t } = useTranslation(["journal", "common"]);
+  const labels = useJournalLabels();
   const qc = useQueryClient();
 
   const [clientId, setClientId]   = useState("");
@@ -195,7 +199,7 @@ export function NewJournalEntryDialog({ open, onOpenChange }: Props) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg p-0 gap-0 overflow-hidden">
         <DialogHeader className="px-5 pt-5 pb-3 border-b">
-          <DialogTitle className="text-base">Log entry</DialogTitle>
+          <DialogTitle className="text-base">{t("journal:newEntry.title")}</DialogTitle>
         </DialogHeader>
 
         <ScrollArea className="max-h-[70vh]">
@@ -203,14 +207,16 @@ export function NewJournalEntryDialog({ open, onOpenChange }: Props) {
 
             {/* Client */}
             <div className="space-y-1.5">
-              <Label className="text-xs uppercase tracking-wide text-muted-foreground">Client</Label>
+              <Label className="text-xs uppercase tracking-wide text-muted-foreground">
+                {t("journal:newEntry.client")}
+              </Label>
               <div className="relative">
-                <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                <Search className="absolute start-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
                 <Input
                   value={clientSearch}
                   onChange={(e) => { setClientSearch(e.target.value); if (clientId) setClientId(""); }}
-                  placeholder="Search clients…"
-                  className="pl-8 h-9 text-sm"
+                  placeholder={t("journal:newEntry.searchClients")}
+                  className="ps-8 h-9 text-sm"
                 />
               </div>
               {clientSearch && !clientId && (
@@ -219,14 +225,16 @@ export function NewJournalEntryDialog({ open, onOpenChange }: Props) {
                     <button
                       key={c.id}
                       onClick={() => selectClient(c)}
-                      className="w-full text-left px-2.5 py-1.5 rounded text-sm hover:bg-muted/40 flex items-center gap-2"
+                      className="w-full text-start px-2.5 py-1.5 rounded text-sm hover:bg-muted/40 flex items-center gap-2"
                     >
                       <span className="flex-1">{c.name}</span>
                       {clientId === c.id && <Check className="h-3.5 w-3.5 text-primary" />}
                     </button>
                   ))}
                   {clients.length === 0 && (
-                    <p className="text-xs text-muted-foreground px-2.5 py-2">No clients found</p>
+                    <p className="text-xs text-muted-foreground px-2.5 py-2">
+                      {t("journal:newEntry.noClients")}
+                    </p>
                   )}
                 </div>
               )}
@@ -240,27 +248,35 @@ export function NewJournalEntryDialog({ open, onOpenChange }: Props) {
             {/* Kind + Slot + Date */}
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label className="text-xs uppercase tracking-wide text-muted-foreground">Kind</Label>
+                <Label className="text-xs uppercase tracking-wide text-muted-foreground">
+                  {t("journal:newEntry.kind")}
+                </Label>
                 <Select value={kind} onValueChange={(v) => setKind(v as JournalKind)}>
                   <SelectTrigger className="h-9">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="meal">Meal</SelectItem>
-                    <SelectItem value="exercise">Exercise</SelectItem>
+                    <SelectItem value="meal">{t("journal:kind.meal")}</SelectItem>
+                    <SelectItem value="exercise">{t("journal:kind.exercise")}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               {kind === "meal" && (
                 <div className="space-y-1.5">
-                  <Label className="text-xs uppercase tracking-wide text-muted-foreground">Slot</Label>
+                  <Label className="text-xs uppercase tracking-wide text-muted-foreground">
+                    {t("journal:newEntry.slot")}
+                  </Label>
                   <Select value={slot} onValueChange={(v) => setSlot(v as MealSlot)}>
                     <SelectTrigger className="h-9">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {(Object.entries(SLOT_LABEL) as [MealSlot, string][]).map(([k, v]) => (
-                        <SelectItem key={k} value={k}>{v}</SelectItem>
+                      {/* SLOT_LABEL is the key/order source; the text comes from the
+                          `journal.slot.*` keys via the shared label hook. */}
+                      {(Object.keys(SLOT_LABEL) as MealSlot[]).map((k) => (
+                        <SelectItem key={k} value={k}>
+                          {labels.slot(k)}
+                        </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -269,7 +285,9 @@ export function NewJournalEntryDialog({ open, onOpenChange }: Props) {
             </div>
 
             <div className="space-y-1.5">
-              <Label className="text-xs uppercase tracking-wide text-muted-foreground">Date & time</Label>
+              <Label className="text-xs uppercase tracking-wide text-muted-foreground">
+                {t("journal:newEntry.dateTime")}
+              </Label>
               <Input
                 type="datetime-local"
                 value={date}
@@ -282,9 +300,11 @@ export function NewJournalEntryDialog({ open, onOpenChange }: Props) {
             {kind === "meal" && (
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label className="text-xs uppercase tracking-wide text-muted-foreground">Items</Label>
+                  <Label className="text-xs uppercase tracking-wide text-muted-foreground">
+                    {t("journal:newEntry.items")}
+                  </Label>
                   <Button size="sm" variant="ghost" className="h-7 gap-1 text-xs" onClick={() => setItems((p) => [...p, blankItem()])}>
-                    <Plus className="h-3 w-3" /> Add item
+                    <Plus className="h-3 w-3" /> {t("journal:newEntry.addItem")}
                   </Button>
                 </div>
 
@@ -294,7 +314,7 @@ export function NewJournalEntryDialog({ open, onOpenChange }: Props) {
                       <Input
                         value={it.label}
                         onChange={(e) => updateItem(idx, { label: e.target.value })}
-                        placeholder='e.g. "½ manoushe" or search a food →'
+                        placeholder={t("journal:newEntry.itemPlaceholder")}
                         className="h-8 text-sm flex-1"
                       />
                       <Button
@@ -303,6 +323,7 @@ export function NewJournalEntryDialog({ open, onOpenChange }: Props) {
                         className="h-8 w-8 text-muted-foreground hover:text-rose-600 shrink-0"
                         onClick={() => setItems((p) => p.filter((_, i) => i !== idx))}
                         disabled={items.length === 1}
+                        aria-label={t("journal:newEntry.removeItem")}
                       >
                         <Minus className="h-3.5 w-3.5" />
                       </Button>
@@ -313,14 +334,16 @@ export function NewJournalEntryDialog({ open, onOpenChange }: Props) {
                       {it.food ? (
                         <div className="flex items-center gap-2 flex-1 text-xs">
                           <span className="text-primary font-medium truncate">{it.foodName}</span>
-                          <button onClick={() => clearFood(idx)} className="text-muted-foreground hover:text-rose-600 underline shrink-0">unlink</button>
+                          <button onClick={() => clearFood(idx)} className="text-muted-foreground hover:text-rose-600 underline shrink-0">
+                            {t("journal:newEntry.unlink")}
+                          </button>
                         </div>
                       ) : (
                         <button
                           className="text-xs text-muted-foreground hover:text-primary underline"
                           onClick={() => { setActiveFoodIdx(idx); setFoodSearch(""); }}
                         >
-                          + Link to food database
+                          {t("journal:newEntry.linkFood")}
                         </button>
                       )}
                       <div className="flex items-center gap-1 shrink-0">
@@ -328,20 +351,30 @@ export function NewJournalEntryDialog({ open, onOpenChange }: Props) {
                           type="number"
                           value={it.grams}
                           onChange={(e) => handleGramsChange(idx, e.target.value)}
-                          placeholder="grams"
-                          className="h-7 w-20 text-xs text-right"
+                          placeholder={t("journal:newEntry.gramsPlaceholder")}
+                          className="h-7 w-20 text-xs text-end"
                         />
-                        <span className="text-xs text-muted-foreground">g</span>
+                        <span className="text-xs text-muted-foreground">
+                          {t("common:units.gram")}
+                        </span>
                       </div>
                     </div>
 
                     {/* Macro preview */}
                     {it.previewKcal !== null && (
                       <div className="flex gap-3 text-[11px] tabular-nums text-muted-foreground">
-                        <span className="font-medium text-foreground">{it.previewKcal} kcal</span>
-                        <span>P {it.previewProtein}</span>
-                        <span>C {it.previewCarbs}</span>
-                        <span>F {it.previewFat}</span>
+                        <span className="font-medium text-foreground">
+                          {t("common:units.kcalValue", { value: it.previewKcal })}
+                        </span>
+                        <span>
+                          {t("common:macros.proteinShort")} {it.previewProtein}
+                        </span>
+                        <span>
+                          {t("common:macros.carbsShort")} {it.previewCarbs}
+                        </span>
+                        <span>
+                          {t("common:macros.fatShort")} {it.previewFat}
+                        </span>
                       </div>
                     )}
 
@@ -349,12 +382,12 @@ export function NewJournalEntryDialog({ open, onOpenChange }: Props) {
                     {activeFoodIdx === idx && (
                       <div className="border rounded-md">
                         <div className="relative">
-                          <Search className="absolute left-2.5 top-2.5 h-3 w-3 text-muted-foreground" />
+                          <Search className="absolute start-2.5 top-2.5 h-3 w-3 text-muted-foreground" />
                           <Input
                             value={foodSearch}
                             onChange={(e) => setFoodSearch(e.target.value)}
-                            placeholder="Search foods…"
-                            className="pl-7 h-8 text-xs border-0 border-b rounded-none rounded-t-md"
+                            placeholder={t("journal:newEntry.searchFoods")}
+                            className="ps-7 h-8 text-xs border-0 border-b rounded-none rounded-t-md"
                             autoFocus
                           />
                         </div>
@@ -362,23 +395,25 @@ export function NewJournalEntryDialog({ open, onOpenChange }: Props) {
                           {foodsLoading ? (
                             <div className="flex justify-center py-3"><Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" /></div>
                           ) : foods.length === 0 ? (
-                            <p className="text-xs text-muted-foreground px-2 py-2">No foods found</p>
+                            <p className="text-xs text-muted-foreground px-2 py-2">
+                              {t("journal:newEntry.noFoods")}
+                            </p>
                           ) : foods.map((f) => (
                             <button
                               key={f.id}
                               onClick={() => selectFood(idx, f)}
-                              className="w-full text-left px-2 py-1.5 rounded text-xs hover:bg-muted/40"
+                              className="w-full text-start px-2 py-1.5 rounded text-xs hover:bg-muted/40"
                             >
                               <span className="font-medium">{f.name}</span>
-                              <span className="text-muted-foreground ml-1.5 tabular-nums">
-                                {f.macros.kcal} kcal/100g
+                              <span className="text-muted-foreground ms-1.5 tabular-nums">
+                                {t("journal:newEntry.kcalPer100g", { kcal: f.macros.kcal })}
                               </span>
                             </button>
                           ))}
                         </div>
                         <div className="border-t p-1">
                           <button className="text-xs text-muted-foreground px-2 py-1 hover:text-foreground" onClick={() => setActiveFoodIdx(null)}>
-                            Cancel
+                            {t("common:actions.cancel")}
                           </button>
                         </div>
                       </div>
@@ -389,10 +424,19 @@ export function NewJournalEntryDialog({ open, onOpenChange }: Props) {
                 {/* Totals preview */}
                 {previewTotals && (previewTotals.kcal > 0) && (
                   <div className="rounded-md bg-muted/30 px-3 py-2 flex items-center gap-4 text-[11px] tabular-nums">
-                    <span className="font-semibold">{previewTotals.kcal} kcal</span>
-                    <span className="text-muted-foreground">P {Math.round(previewTotals.protein * 10) / 10}</span>
-                    <span className="text-muted-foreground">C {Math.round(previewTotals.carbs * 10) / 10}</span>
-                    <span className="text-muted-foreground">F {Math.round(previewTotals.fat * 10) / 10}</span>
+                    <span className="font-semibold">
+                      {t("common:units.kcalValue", { value: previewTotals.kcal })}
+                    </span>
+                    <span className="text-muted-foreground">
+                      {t("common:macros.proteinShort")}{" "}
+                      {Math.round(previewTotals.protein * 10) / 10}
+                    </span>
+                    <span className="text-muted-foreground">
+                      {t("common:macros.carbsShort")} {Math.round(previewTotals.carbs * 10) / 10}
+                    </span>
+                    <span className="text-muted-foreground">
+                      {t("common:macros.fatShort")} {Math.round(previewTotals.fat * 10) / 10}
+                    </span>
                   </div>
                 )}
               </div>
@@ -400,18 +444,20 @@ export function NewJournalEntryDialog({ open, onOpenChange }: Props) {
 
             {kind === "exercise" && (
               <p className="text-xs text-muted-foreground italic">
-                Exercise entries are stored with the note below. Macro impact is not tracked in this version.
+                {t("journal:newEntry.exerciseNote")}
               </p>
             )}
 
             <Separator />
 
             <div className="space-y-1.5">
-              <Label className="text-xs uppercase tracking-wide text-muted-foreground">Note (optional)</Label>
+              <Label className="text-xs uppercase tracking-wide text-muted-foreground">
+                {t("journal:newEntry.note")}
+              </Label>
               <Textarea
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
-                placeholder="Any context for this log…"
+                placeholder={t("journal:newEntry.notePlaceholder")}
                 className="min-h-15 text-sm"
               />
             </div>
@@ -420,11 +466,11 @@ export function NewJournalEntryDialog({ open, onOpenChange }: Props) {
 
         <DialogFooter className="px-5 py-3 border-t bg-muted/10 flex-row justify-between gap-2">
           <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)} disabled={saving}>
-            Cancel
+            {t("common:actions.cancel")}
           </Button>
           <Button size="sm" onClick={handleSubmit} disabled={!canSubmit || saving}>
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-            {saving ? "Saving…" : "Log entry"}
+            {saving ? t("common:actions.saving") : t("journal:newEntry.submit")}
           </Button>
         </DialogFooter>
       </DialogContent>

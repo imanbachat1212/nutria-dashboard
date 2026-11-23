@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+
 import { cn } from "@/lib/utils";
 import type { ServiceType } from "@/lib/clients-mock";
 import { SERVICE_TYPE_LABEL } from "@/lib/clients-mock";
@@ -9,6 +11,7 @@ const TONE: Record<ServiceType, string> = {
 };
 
 export function ServiceBadge({ types, className }: { types: string[]; className?: string }) {
+  const { t: translate } = useTranslation("clients");
   if (types.length === 0) {
     return (
       <span
@@ -31,7 +34,9 @@ export function ServiceBadge({ types, className }: { types: string[]; className?
             TONE[t as ServiceType] ?? "bg-muted text-muted-foreground border-border",
           )}
         >
-          {SERVICE_TYPE_LABEL[t as ServiceType] ?? t}
+          {/* `t` here is the service-type key from the API ("diet"), shadowing nothing —
+              the translator is `translate` to keep the two apart. */}
+          {SERVICE_TYPE_LABEL[t as ServiceType] ? translate(`serviceType.${t}`) : t}
         </span>
       ))}
     </div>

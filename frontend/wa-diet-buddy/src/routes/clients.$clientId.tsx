@@ -26,6 +26,9 @@ import {
   Pill,
 } from "lucide-react";
 
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
+
 import { PageHeader } from "@/components/page-header";
 import { ServiceBadge } from "@/components/service-badge";
 import { Button } from "@/components/ui/button";
@@ -43,6 +46,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useFormatters, type Formatters } from "@/lib/i18n/format";
 import {
   bmiBand,
   calcBMI,
@@ -59,26 +63,39 @@ export const Route = createFileRoute("/clients/$clientId")({
     meta: [{ title: "Client — Nutria" }],
   }),
   component: ClientDetailPage,
-  notFoundComponent: () => (
-    <div className="mx-auto max-w-3xl text-center py-20">
-      <h1 className="font-display text-2xl font-semibold">Client not found</h1>
-      <p className="text-muted-foreground mt-2 text-sm">
-        This client may have been removed or the link is incorrect.
-      </p>
-      <Button asChild className="mt-6">
-        <Link to="/clients">Back to clients</Link>
-      </Button>
-    </div>
-  ),
-  errorComponent: ({ error }) => (
-    <div className="mx-auto max-w-3xl text-center py-20">
-      <h1 className="font-display text-2xl font-semibold">Couldn't load client</h1>
-      <p className="text-muted-foreground mt-2 text-sm">{error.message}</p>
-    </div>
-  ),
+  // Named components rather than inline arrows: these render as siblings of ClientDetailPage,
+  // not inside it, so each needs its own useTranslation call.
+  notFoundComponent: ClientNotFound,
+  errorComponent: ClientLoadError,
 });
 
+function ClientNotFound() {
+  const { t } = useTranslation("clients");
+  return (
+    <div className="mx-auto max-w-3xl text-center py-20">
+      <h1 className="font-display text-2xl font-semibold">{t("detail.notFound")}</h1>
+      <p className="text-muted-foreground mt-2 text-sm">{t("detail.notFoundBody")}</p>
+      <Button asChild className="mt-6">
+        <Link to="/clients">{t("detail.backToClients")}</Link>
+      </Button>
+    </div>
+  );
+}
+
+function ClientLoadError({ error }: { error: Error }) {
+  const { t } = useTranslation("clients");
+  return (
+    <div className="mx-auto max-w-3xl text-center py-20">
+      <h1 className="font-display text-2xl font-semibold">{t("detail.loadFailed")}</h1>
+      {/* The server's own message, shown as the server sends it. */}
+      <p className="text-muted-foreground mt-2 text-sm">{error.message}</p>
+    </div>
+  );
+}
+
 function ClientDetailPage() {
+  const { t } = useTranslation(["clients", "common"]);
+  const fmt = useFormatters();
   const { clientId } = Route.useParams();
   const qc = useQueryClient();
   const [newPlanOpen, setNewPlanOpen] = useState(false);
@@ -130,7 +147,9 @@ function ClientDetailPage() {
                   <StatusPill status={client.status} />
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  {client.age} · {client.sex === "F" ? "Female" : "Male"} · {client.occupation}
+                  {client.age} ·{" "}
+                  {client.sex === "F" ? t("clients:detail.sexFemale") : t("clients:detail.sexMale")}{" "}
+                  · {client.occupation}
                 </p>
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground pt-1">
                   <span className="inline-flex items-center gap-1.5">
@@ -142,7 +161,8 @@ function ClientDetailPage() {
                     </span>
                   )}
                   <span className="inline-flex items-center gap-1.5">
-                    <Calendar className="h-3 w-3" /> Joined {formatDate(client.joinedAt)}
+                    <Calendar className="h-3 w-3" />{" "}
+                    {t("clients:detail.joined", { date: formatDate(client.joinedAt, fmt) })}
                   </span>
                 </div>
               </div>
@@ -150,10 +170,10 @@ function ClientDetailPage() {
 
             <div className="flex items-center gap-2">
               <Button variant="outline" size="sm">
-                <MessageSquare className="h-4 w-4" /> WhatsApp
+                <MessageSquare className="h-4 w-4" /> {t("clients:detail.whatsapp")}
               </Button>
               <Button size="sm" onClick={() => setNewPlanOpen(true)}>
-                <Plus className="h-4 w-4" /> New plan
+                <Plus className="h-4 w-4" /> {t("clients:detail.newPlan")}
               </Button>
               <Button variant="ghost" size="icon">
                 <MoreHorizontal className="h-4 w-4" />
@@ -164,15 +184,17 @@ function ClientDetailPage() {
           {/* At-a-glance metrics */}
           <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
             <Metric
-              label="Current weight"
+              label={t("clients:detail.metrics.currentWeight")}
               value={`${client.weightKg.toFixed(1)} kg`}
-              hint={`${weightDelta >= 0 ? "+" : ""}${weightDelta.toFixed(1)} kg from start`}
+              hint={t("clients:detail.metrics.fromStart", {
+                delta: `${weightDelta >= 0 ? "+" : ""}${weightDelta.toFixed(1)}`,
+              })}
               tone={weightDelta < 0 ? "success" : weightDelta > 0 ? "warning" : "neutral"}
             />
             <Metric
-              label="BMI"
+              label={t("clients:detail.metrics.bmi")}
               value={bmi.toFixed(1)}
-              hint={band.label}
+              hint={t(`clients:detail.bmiBand.${band.labelKey}`)}
               tone={
                 band.tone === "success"
                   ? "success"
@@ -184,26 +206,34 @@ function ClientDetailPage() {
               }
             />
             <Metric
-              label="To goal"
+              label={t("clients:detail.metrics.toGoal")}
               value={`${Math.abs(remainingKg).toFixed(1)} kg`}
-              hint={remainingKg > 0 ? "remaining" : "at or below target"}
+              hint={
+                remainingKg > 0
+                  ? t("clients:detail.metrics.remaining")
+                  : t("clients:detail.metrics.atOrBelow")
+              }
               tone="info"
             />
             <Metric
-              label="Daily target"
-              value={`${client.targets.calories.toLocaleString()} kcal`}
-              hint={`P ${client.targets.protein} · C ${client.targets.carbs} · F ${client.targets.fat}`}
+              label={t("clients:detail.metrics.dailyTarget")}
+              value={t("common:units.kcalValue", { value: fmt.number(client.targets.calories) })}
+              hint={t("clients:detail.metrics.macroHint", {
+                protein: client.targets.protein,
+                carbs: client.targets.carbs,
+                fat: client.targets.fat,
+              })}
               tone="primary"
             />
             <Metric
-              label="Adherence (30d)"
+              label={t("clients:detail.metrics.adherence")}
               value={`${client.adherencePct}%`}
               hint={
                 client.adherencePct >= 85
-                  ? "excellent"
+                  ? t("clients:detail.metrics.excellent")
                   : client.adherencePct >= 70
-                    ? "good"
-                    : "needs attention"
+                    ? t("clients:detail.metrics.good")
+                    : t("clients:detail.metrics.needsAttention")
               }
               tone={
                 client.adherencePct >= 85
@@ -220,18 +250,18 @@ function ClientDetailPage() {
       {/* Tabs */}
       <Tabs defaultValue="profile" className="mt-6">
         <TabsList className="h-auto flex-wrap justify-start gap-1 bg-muted/40 p-1">
-          <TabsTrigger value="profile">Profile</TabsTrigger>
+          <TabsTrigger value="profile">{t("clients:detail.tabs.profile")}</TabsTrigger>
           <TabsTrigger value="clinical">
             <Lock className="h-3 w-3" />
-            Clinical
+            {t("clients:detail.tabs.clinical")}
           </TabsTrigger>
-          <TabsTrigger value="nutrition">Daily nutrition</TabsTrigger>
-          <TabsTrigger value="journal">Journal</TabsTrigger>
-          <TabsTrigger value="plans">Plans</TabsTrigger>
-          <TabsTrigger value="goals">Goals & targets</TabsTrigger>
-          <TabsTrigger value="reports">Reports</TabsTrigger>
-          <TabsTrigger value="billing">Billing</TabsTrigger>
-          <TabsTrigger value="files">Files</TabsTrigger>
+          <TabsTrigger value="nutrition">{t("clients:detail.tabs.nutrition")}</TabsTrigger>
+          <TabsTrigger value="journal">{t("clients:detail.tabs.journal")}</TabsTrigger>
+          <TabsTrigger value="plans">{t("clients:detail.tabs.plans")}</TabsTrigger>
+          <TabsTrigger value="goals">{t("clients:detail.tabs.goals")}</TabsTrigger>
+          <TabsTrigger value="reports">{t("clients:detail.tabs.reports")}</TabsTrigger>
+          <TabsTrigger value="billing">{t("clients:detail.tabs.billing")}</TabsTrigger>
+          <TabsTrigger value="files">{t("clients:detail.tabs.files")}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="profile" className="mt-5">
@@ -278,6 +308,7 @@ function ClientDetailPage() {
 /* ---------- Reusable bits ---------- */
 
 function StatusPill({ status }: { status: ClientRecord["status"] }) {
+  const { t } = useTranslation("clients");
   const styles =
     status === "active"
       ? "bg-success/10 text-success border-success/30"
@@ -286,9 +317,10 @@ function StatusPill({ status }: { status: ClientRecord["status"] }) {
         : "bg-muted text-muted-foreground border-border";
   return (
     <span
-      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium capitalize ${styles}`}
+      // `capitalize` is gone with the raw enum it was there to tidy up.
+      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${styles}`}
     >
-      {status}
+      {t(`status.${status}`)}
     </span>
   );
 }
@@ -361,7 +393,7 @@ function KV({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-baseline justify-between gap-4 py-1.5 border-b border-border/60 last:border-0">
       <span className="text-xs text-muted-foreground">{label}</span>
-      <span className="text-sm font-medium text-right">{value}</span>
+      <span className="text-sm font-medium text-end">{value}</span>
     </div>
   );
 }
@@ -379,65 +411,92 @@ function TagList({ items, empty = "—" }: { items: string[]; empty?: string }) 
   );
 }
 
-function formatDate(iso: string) {
+// Was pinned to "en-US". Takes the active formatter so the Arabic page does not show English
+// month abbreviations in a dozen places.
+function formatDate(iso: string, fmt: Formatters) {
   if (!iso) return "—";
-  return new Date(iso).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+  return fmt.date(iso, { month: "short", day: "numeric", year: "numeric" });
 }
 
 /* ---------- Tabs ---------- */
 
 function ProfileTab({ c }: { c: ClientRecord }) {
+  const { t } = useTranslation(["clients", "common"]);
+  const fmt = useFormatters();
   return (
     <div className="grid gap-4 lg:grid-cols-2">
-      <SectionCard title="Anthropometrics" icon={Scale}>
+      <SectionCard title={t("clients:detail.profile.anthropometrics")} icon={Scale}>
         <div className="space-y-0">
-          <KV label="Height" value={`${c.heightCm} cm`} />
-          <KV label="Weight" value={`${c.weightKg.toFixed(1)} kg`} />
-          <KV label="Starting weight" value={`${c.startWeightKg.toFixed(1)} kg`} />
-          <KV label="Target weight" value={`${c.targetWeightKg.toFixed(1)} kg`} />
-          <KV label="BMI" value={`${calcBMI(c).toFixed(1)} · ${bmiBand(calcBMI(c)).label}`} />
+          <KV
+            label={t("clients:detail.profile.height")}
+            value={`${c.heightCm} ${t("common:units.cm")}`}
+          />
+          <KV
+            label={t("clients:detail.profile.weight")}
+            value={`${c.weightKg.toFixed(1)} ${t("common:units.kg")}`}
+          />
+          <KV
+            label={t("clients:detail.profile.startingWeight")}
+            value={`${c.startWeightKg.toFixed(1)} ${t("common:units.kg")}`}
+          />
+          <KV
+            label={t("clients:detail.profile.targetWeight")}
+            value={`${c.targetWeightKg.toFixed(1)} ${t("common:units.kg")}`}
+          />
+          <KV
+            label={t("clients:detail.metrics.bmi")}
+            value={`${calcBMI(c).toFixed(1)} · ${t(`clients:detail.bmiBand.${bmiBand(calcBMI(c)).labelKey}`)}`}
+          />
         </div>
       </SectionCard>
 
-      <SectionCard title="Lifestyle" icon={Activity}>
+      <SectionCard title={t("clients:detail.profile.lifestyle")} icon={Activity}>
         <div className="space-y-0">
-          <KV label="Occupation" value={c.occupation} />
-          <KV label="Activity factor" value={c.activityFactor.toFixed(3)} />
-          <KV label="Sleep" value={`${c.sleepHours} h / night`} />
-          <KV label="Joined" value={formatDate(c.joinedAt)} />
+          <KV label={t("clients:detail.profile.occupation")} value={c.occupation} />
+          <KV
+            label={t("clients:detail.profile.activityFactor")}
+            value={c.activityFactor.toFixed(3)}
+          />
+          <KV
+            label={t("clients:detail.profile.sleep")}
+            value={t("clients:detail.profile.sleepValue", { hours: c.sleepHours })}
+          />
+          <KV label={t("clients:detail.profile.joined")} value={formatDate(c.joinedAt, fmt)} />
         </div>
       </SectionCard>
 
-      <SectionCard title="Dietary preferences" icon={Utensils}>
-        <TagList items={c.dietaryPrefs} empty="No preferences recorded" />
+      <SectionCard title={t("clients:detail.profile.dietaryPrefs")} icon={Utensils}>
+        <TagList items={c.dietaryPrefs} empty={t("clients:detail.profile.noPrefs")} />
       </SectionCard>
 
-      <SectionCard title="Allergies & intolerances" icon={AlertTriangle}>
-        <TagList items={c.allergies} empty="None reported" />
+      <SectionCard title={t("clients:detail.profile.allergies")} icon={AlertTriangle}>
+        <TagList items={c.allergies} empty={t("clients:detail.profile.noAllergies")} />
       </SectionCard>
     </div>
   );
 }
 
 function ClinicalTab({ c }: { c: ClientRecord }) {
+  const { t } = useTranslation(["clients", "common"]);
+  const fmt = useFormatters();
   return (
     <div className="space-y-4">
       <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/5 p-3">
         <Lock className="h-4 w-4 text-warning-foreground mt-0.5 shrink-0" />
         <div className="text-xs text-muted-foreground">
-          <span className="font-medium text-foreground">Private — clinician view only.</span>{" "}
-          Visible to Lead Dietitian and Dietitian roles. Never shared with the client.
+          <span className="font-medium text-foreground">
+            {t("clients:detail.clinical.privateTitle")}
+          </span>{" "}
+          {t("clients:detail.clinical.privateBody")}
         </div>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <SectionCard title="Medical history" icon={FileText}>
+        <SectionCard title={t("clients:detail.clinical.medicalHistory")} icon={FileText}>
           {c.medicalHistory.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No significant history reported.</p>
+            <p className="text-sm text-muted-foreground">
+              {t("clients:detail.clinical.noHistory")}
+            </p>
           ) : (
             <ul className="space-y-2">
               {c.medicalHistory.map((m) => (
@@ -451,31 +510,35 @@ function ClinicalTab({ c }: { c: ClientRecord }) {
         </SectionCard>
 
         <SectionCard
-          title="Lab values"
+          title={t("clients:detail.clinical.labs")}
           icon={TestTube}
           action={
             <Button variant="ghost" size="sm">
-              Add
+              {t("clients:detail.clinical.addLab")}
             </Button>
           }
         >
           {c.labs.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No labs on file.</p>
+            <p className="text-sm text-muted-foreground">{t("clients:detail.clinical.noLabs")}</p>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
-                  <TableHead className="h-8 px-0">Marker</TableHead>
-                  <TableHead className="h-8 text-right">Value</TableHead>
-                  <TableHead className="h-8 text-right">Reference</TableHead>
+                  <TableHead className="h-8 px-0">{t("clients:detail.clinical.marker")}</TableHead>
+                  <TableHead className="h-8 text-end">
+                    {t("clients:detail.clinical.value")}
+                  </TableHead>
+                  <TableHead className="h-8 text-end">
+                    {t("clients:detail.clinical.reference")}
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {c.labs.map((l) => (
                   <TableRow key={l.name} className="hover:bg-transparent">
                     <TableCell className="px-0 py-2 font-medium">{l.name}</TableCell>
-                    <TableCell className="py-2 text-right tabular-nums">{l.value}</TableCell>
-                    <TableCell className="py-2 text-right text-xs text-muted-foreground">
+                    <TableCell className="py-2 text-end tabular-nums">{l.value}</TableCell>
+                    <TableCell className="py-2 text-end text-xs text-muted-foreground">
                       {l.reference}
                     </TableCell>
                   </TableRow>
@@ -485,27 +548,31 @@ function ClinicalTab({ c }: { c: ClientRecord }) {
           )}
         </SectionCard>
 
-        <SectionCard title="Nutrition diagnosis" description="PES-style statement" icon={FileText}>
+        <SectionCard
+          title={t("clients:detail.clinical.diagnosis")}
+          description={t("clients:detail.clinical.diagnosisHint")}
+          icon={FileText}
+        >
           <p className="text-sm leading-relaxed">{c.nutritionDiagnosis}</p>
         </SectionCard>
 
         <SectionCard
-          title="ADIME monitoring notes"
+          title={t("clients:detail.clinical.adime")}
           icon={FileText}
           action={
             <Button variant="ghost" size="sm">
-              Add note
+              {t("clients:detail.clinical.addNote")}
             </Button>
           }
         >
           {c.adimeNotes.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No notes yet.</p>
+            <p className="text-sm text-muted-foreground">{t("clients:detail.clinical.noNotes")}</p>
           ) : (
             <ul className="space-y-3">
               {c.adimeNotes.map((n) => (
-                <li key={n.date} className="border-l-2 border-primary/40 pl-3">
+                <li key={n.date} className="border-s-2 border-primary/40 ps-3">
                   <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                    {formatDate(n.date)}
+                    {formatDate(n.date, fmt)}
                   </p>
                   <p className="text-sm">{n.note}</p>
                 </li>
@@ -519,45 +586,58 @@ function ClinicalTab({ c }: { c: ClientRecord }) {
 }
 
 function NutritionTab({ c }: { c: ClientRecord }) {
+  const { t } = useTranslation(["clients", "common"]);
+  const fmt = useFormatters();
   const consumedPct =
     c.targets.calories === 0
       ? 0
       : Math.round((c.todayConsumed.calories / c.targets.calories) * 100);
   const macros = [
     {
-      label: "Protein",
+      label: t("common:macros.protein"),
       current: c.todayConsumed.protein,
       target: c.targets.protein,
       color: "bg-chart-1",
     },
     {
-      label: "Carbs",
+      label: t("common:macros.carbs"),
       current: c.todayConsumed.carbs,
       target: c.targets.carbs,
       color: "bg-chart-3",
     },
-    { label: "Fat", current: c.todayConsumed.fat, target: c.targets.fat, color: "bg-chart-4" },
+    {
+      label: t("common:macros.fat"),
+      current: c.todayConsumed.fat,
+      target: c.targets.fat,
+      color: "bg-chart-4",
+    },
   ];
 
   return (
     <div className="grid gap-4 lg:grid-cols-3">
-      <SectionCard title="Today" icon={Flame} description="Calories vs. target">
+      <SectionCard
+        title={t("clients:detail.nutrition.today")}
+        icon={Flame}
+        description={t("clients:detail.nutrition.todayHint")}
+      >
         <div className="flex items-baseline gap-2">
           <span className="font-display text-3xl font-semibold tabular-nums">
-            {c.todayConsumed.calories.toLocaleString()}
+            {fmt.number(c.todayConsumed.calories)}
           </span>
           <span className="text-sm text-muted-foreground">
-            / {c.targets.calories.toLocaleString()} kcal
+            {t("clients:detail.nutrition.ofTarget", { total: fmt.number(c.targets.calories) })}
           </span>
         </div>
         <Progress value={consumedPct} className="mt-3 h-2" />
         <p className="mt-2 text-xs text-muted-foreground">
-          {Math.max(c.targets.calories - c.todayConsumed.calories, 0)} kcal remaining ·{" "}
-          {consumedPct}% of target
+          {t("clients:detail.nutrition.remaining", {
+            kcal: fmt.number(Math.max(c.targets.calories - c.todayConsumed.calories, 0)),
+            percent: consumedPct,
+          })}
         </p>
       </SectionCard>
 
-      <SectionCard title="Macros today" icon={Utensils}>
+      <SectionCard title={t("clients:detail.nutrition.macrosToday")} icon={Utensils}>
         <div className="space-y-4">
           {macros.map((m) => {
             const pct = m.target === 0 ? 0 : Math.round((m.current / m.target) * 100);
@@ -566,7 +646,10 @@ function NutritionTab({ c }: { c: ClientRecord }) {
                 <div className="flex items-baseline justify-between text-sm">
                   <span className="font-medium">{m.label}</span>
                   <span className="text-xs text-muted-foreground tabular-nums">
-                    {m.current}g / {m.target}g
+                    {t("clients:detail.nutrition.macroProgress", {
+                      current: m.current,
+                      target: m.target,
+                    })}
                   </span>
                 </div>
                 <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-muted">
@@ -581,9 +664,11 @@ function NutritionTab({ c }: { c: ClientRecord }) {
         </div>
       </SectionCard>
 
-      <SectionCard title="Exercise today" icon={Dumbbell}>
+      <SectionCard title={t("clients:detail.nutrition.exerciseToday")} icon={Dumbbell}>
         {c.journal.filter((j) => j.kind === "exercise").length === 0 ? (
-          <p className="text-sm text-muted-foreground">No exercise logged today.</p>
+          <p className="text-sm text-muted-foreground">
+            {t("clients:detail.nutrition.noExercise")}
+          </p>
         ) : (
           <ul className="space-y-2">
             {c.journal
@@ -602,11 +687,13 @@ function NutritionTab({ c }: { c: ClientRecord }) {
 }
 
 function JournalTab({ c }: { c: ClientRecord }) {
+  const { t } = useTranslation(["clients", "common"]);
+  const fmt = useFormatters();
   if (c.journal.length === 0) {
     return (
       <Card className="border-dashed">
         <CardContent className="py-12 text-center text-sm text-muted-foreground">
-          No journal entries yet. Logs from WhatsApp will appear here automatically.
+          {t("clients:detail.journal.empty")}
         </CardContent>
       </Card>
     );
@@ -621,7 +708,7 @@ function JournalTab({ c }: { c: ClientRecord }) {
       {Object.entries(byDate).map(([date, entries]) => (
         <div key={date}>
           <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            {formatDate(date)}
+            {formatDate(date, fmt)}
           </h3>
           <Card className="border-border/70 shadow-soft">
             <CardContent className="p-0">
@@ -641,16 +728,19 @@ function JournalTab({ c }: { c: ClientRecord }) {
                             variant="outline"
                             className="border-warning/40 bg-warning/10 text-warning-foreground text-[10px]"
                           >
-                            <AlertTriangle className="h-2.5 w-2.5" /> Flagged
+                            <AlertTriangle className="h-2.5 w-2.5" />{" "}
+                            {t("clients:detail.journal.flagged")}
                           </Badge>
                         )}
                       </div>
                       <p className="text-xs text-muted-foreground">{e.detail}</p>
                     </div>
-                    <div className="text-right shrink-0">
+                    <div className="text-end shrink-0">
                       <p className="text-xs text-muted-foreground tabular-nums">{e.time}</p>
                       {e.kcal !== undefined && (
-                        <p className="text-sm font-semibold tabular-nums">{e.kcal} kcal</p>
+                        <p className="text-sm font-semibold tabular-nums">
+                          {t("common:units.kcalValue", { value: e.kcal })}
+                        </p>
                       )}
                     </div>
                   </li>
@@ -665,6 +755,8 @@ function JournalTab({ c }: { c: ClientRecord }) {
 }
 
 function PlansTab({ c }: { c: ClientRecord }) {
+  const { t } = useTranslation(["clients", "common"]);
+  const fmt = useFormatters();
   const { data, isLoading } = useQuery({
     queryKey: ["mealplans", "client", c.id],
     queryFn: () => fetchMealPlans({ client: c.id, limit: 100 }),
@@ -675,7 +767,7 @@ function PlansTab({ c }: { c: ClientRecord }) {
     <div className="space-y-3">
       <div className="flex justify-end">
         <Button size="sm">
-          <Plus className="h-4 w-4" /> Assign plan
+          <Plus className="h-4 w-4" /> {t("clients:detail.plans.assign")}
         </Button>
       </div>
       {isLoading ? (
@@ -685,7 +777,7 @@ function PlansTab({ c }: { c: ClientRecord }) {
       ) : plans.length === 0 ? (
         <Card className="border-dashed">
           <CardContent className="py-12 text-center text-sm text-muted-foreground">
-            No plans assigned yet.
+            {t("clients:detail.plans.empty")}
           </CardContent>
         </Card>
       ) : (
@@ -697,32 +789,34 @@ function PlansTab({ c }: { c: ClientRecord }) {
                   <div>
                     <p className="font-display text-lg font-semibold">{p.name}</p>
                     <p className="text-xs text-muted-foreground">
-                      {formatDate(p.startDate)}
-                      {p.endDate ? ` → ${formatDate(p.endDate)}` : ""}
+                      {formatDate(p.startDate, fmt)}
+                      {p.endDate ? ` → ${formatDate(p.endDate, fmt)}` : ""}
                     </p>
                   </div>
                   <Badge
                     variant="outline"
                     className={
                       p.status === "active"
-                        ? "border-success/30 bg-success/10 text-success capitalize"
+                        ? "border-success/30 bg-success/10 text-success"
                         : p.status === "draft"
-                          ? "border-info/30 bg-info/10 text-info capitalize"
-                          : "border-border bg-muted text-muted-foreground capitalize"
+                          ? "border-info/30 bg-info/10 text-info"
+                          : "border-border bg-muted text-muted-foreground"
                     }
                   >
-                    {p.status}
+                    {t(`clients:detail.plans.status.${p.status}`)}
                   </Badge>
                 </div>
                 <div className="mt-4 flex items-center justify-between">
                   <div>
-                    <p className="text-xs text-muted-foreground">Daily target</p>
+                    <p className="text-xs text-muted-foreground">
+                      {t("clients:detail.plans.dailyTarget")}
+                    </p>
                     <p className="font-display text-base font-semibold">
-                      {p.targets.kcal.toLocaleString()} kcal
+                      {t("common:units.kcalValue", { value: fmt.number(p.targets.kcal) })}
                     </p>
                   </div>
                   <Button variant="outline" size="sm">
-                    Open plan
+                    {t("clients:detail.plans.open")}
                   </Button>
                 </div>
               </CardContent>
@@ -735,34 +829,65 @@ function PlansTab({ c }: { c: ClientRecord }) {
 }
 
 function GoalsTab({ c }: { c: ClientRecord }) {
+  const { t } = useTranslation(["clients", "common"]);
+  const fmt = useFormatters();
   return (
     <div className="grid gap-4 lg:grid-cols-2">
-      <SectionCard title="Primary goal" icon={Target}>
+      <SectionCard title={t("clients:detail.goals.primary")} icon={Target}>
         <div className="space-y-0">
           <KV
-            label="Type"
-            value={<span className="capitalize">{c.goal.type.replace("-", " ")}</span>}
+            label={t("clients:detail.goals.type")}
+            // Was the raw enum with the hyphen swapped for a space and CSS capitalize.
+            value={t(`clients:detail.goalType.${c.goal.type}`)}
           />
           <KV
-            label="Target weight"
-            value={c.goal.targetWeight ? `${c.goal.targetWeight.toFixed(1)} kg` : "—"}
+            label={t("clients:detail.goals.targetWeight")}
+            value={
+              c.goal.targetWeight
+                ? `${c.goal.targetWeight.toFixed(1)} ${t("common:units.kg")}`
+                : "—"
+            }
           />
-          <KV label="Target date" value={c.goal.targetDate ? formatDate(c.goal.targetDate) : "—"} />
+          <KV
+            label={t("clients:detail.goals.targetDate")}
+            value={c.goal.targetDate ? formatDate(c.goal.targetDate, fmt) : "—"}
+          />
         </div>
       </SectionCard>
 
       <SectionCard
-        title="Energy targets"
+        title={t("clients:detail.goals.energy")}
         icon={Flame}
-        description="Mifflin-St Jeor × activity factor, editable"
+        description={t("clients:detail.goals.energyHint")}
       >
         <div className="space-y-0">
-          <KV label="BMR" value={`${c.bmr.toLocaleString()} kcal`} />
-          <KV label="Activity factor" value={c.activityFactor.toFixed(3)} />
-          <KV label="Daily target" value={`${c.targets.calories.toLocaleString()} kcal`} />
-          <KV label="Protein" value={`${c.targets.protein} g`} />
-          <KV label="Carbs" value={`${c.targets.carbs} g`} />
-          <KV label="Fat" value={`${c.targets.fat} g`} />
+          <KV
+            // Kept as the acronym in both languages — Lebanese dietitians use "BMR" in Arabic
+            // conversation too, and "معدل الأيض الأساسي" does not fit this label column. Listed
+            // for native review in GLOSSARY.md.
+            label={t("clients:detail.goals.bmr")}
+            value={t("common:units.kcalValue", { value: fmt.number(c.bmr) })}
+          />
+          <KV
+            label={t("clients:detail.profile.activityFactor")}
+            value={c.activityFactor.toFixed(3)}
+          />
+          <KV
+            label={t("clients:detail.metrics.dailyTarget")}
+            value={t("common:units.kcalValue", { value: fmt.number(c.targets.calories) })}
+          />
+          <KV
+            label={t("common:macros.protein")}
+            value={t("common:units.gramValue", { value: c.targets.protein })}
+          />
+          <KV
+            label={t("common:macros.carbs")}
+            value={t("common:units.gramValue", { value: c.targets.carbs })}
+          />
+          <KV
+            label={t("common:macros.fat")}
+            value={t("common:units.gramValue", { value: c.targets.fat })}
+          />
         </div>
         <Button variant="outline" size="sm" className="mt-4 w-full">
           Edit targets
@@ -770,9 +895,9 @@ function GoalsTab({ c }: { c: ClientRecord }) {
       </SectionCard>
 
       <SectionCard
-        title="DRI targets"
+        title={t("clients:detail.goals.dri")}
         icon={Pill}
-        description="NAM Dietary Reference Intakes — vitamins & minerals, based on age, sex, and life stage"
+        description={t("clients:detail.goals.driHint")}
         action={
           c.driTargets?.method === "manual" && (
             <Badge variant="outline" className="text-[10px]">
@@ -823,10 +948,27 @@ function GoalsTab({ c }: { c: ClientRecord }) {
 }
 
 function ReportsTab({ c }: { c: ClientRecord }) {
+  const { t } = useTranslation(["clients", "common"]);
+  const fmt = useFormatters();
   const items = [
-    { label: "This week", range: "Jun 10 – Jun 16", calories: 1442, adherence: c.adherencePct },
-    { label: "Last week", range: "Jun 3 – Jun 9", calories: 1521, adherence: 84 },
-    { label: "Month-to-date", range: "Jun 1 – Jun 17", calories: 1488, adherence: 86 },
+    {
+      label: t("clients:detail.reports.thisWeek"),
+      range: "Jun 10 – Jun 16",
+      calories: 1442,
+      adherence: c.adherencePct,
+    },
+    {
+      label: t("clients:detail.reports.lastWeek"),
+      range: "Jun 3 – Jun 9",
+      calories: 1521,
+      adherence: 84,
+    },
+    {
+      label: t("clients:detail.reports.monthToDate"),
+      range: "Jun 1 – Jun 17",
+      calories: 1488,
+      adherence: 86,
+    },
   ];
   return (
     <div className="space-y-3">
@@ -838,16 +980,20 @@ function ReportsTab({ c }: { c: ClientRecord }) {
               <p className="text-xs text-muted-foreground">{r.range}</p>
             </div>
             <div className="flex items-center gap-6">
-              <div className="text-right">
-                <p className="text-xs text-muted-foreground">Avg kcal</p>
-                <p className="font-semibold tabular-nums">{r.calories.toLocaleString()}</p>
+              <div className="text-end">
+                <p className="text-xs text-muted-foreground">
+                  {t("clients:detail.reports.avgKcal")}
+                </p>
+                <p className="font-semibold tabular-nums">{fmt.number(r.calories)}</p>
               </div>
-              <div className="text-right">
-                <p className="text-xs text-muted-foreground">Adherence</p>
+              <div className="text-end">
+                <p className="text-xs text-muted-foreground">
+                  {t("clients:detail.reports.adherence")}
+                </p>
                 <p className="font-semibold tabular-nums">{r.adherence}%</p>
               </div>
               <Button variant="outline" size="sm">
-                <Download className="h-4 w-4" /> PDF
+                <Download className="h-4 w-4" /> {t("clients:detail.reports.downloadPdf")}
               </Button>
             </div>
           </CardContent>
@@ -858,64 +1004,80 @@ function ReportsTab({ c }: { c: ClientRecord }) {
 }
 
 function BillingTab({ c }: { c: ClientRecord }) {
+  const { t } = useTranslation(["clients", "common"]);
+  const fmt = useFormatters();
   return (
     <div className="space-y-4">
       <div className="grid gap-3 md:grid-cols-3">
         <Metric
-          label="Outstanding"
+          label={t("clients:detail.billing.outstanding")}
           value={`$${c.outstandingBalanceUsd}`}
-          hint={c.outstandingBalanceUsd > 0 ? "due" : "all settled"}
+          hint={
+            c.outstandingBalanceUsd > 0
+              ? t("clients:detail.billing.due")
+              : t("clients:detail.billing.allSettled")
+          }
           tone={c.outstandingBalanceUsd > 0 ? "warning" : "success"}
         />
         <Metric
-          label="Last payment"
+          label={t("clients:detail.billing.lastPayment")}
           value={c.payments[0] ? `$${c.payments[0].amount}` : "—"}
-          hint={c.payments[0] ? formatDate(c.payments[0].date) : "no payments"}
+          hint={
+            c.payments[0]
+              ? formatDate(c.payments[0].date, fmt)
+              : t("clients:detail.billing.noPayments")
+          }
           tone="info"
         />
         <Metric
-          label="Active package"
+          label={t("clients:detail.billing.activePackage")}
           value={c.payments[0]?.package ?? "—"}
-          hint="auto-renews monthly"
+          hint={t("clients:detail.billing.autoRenews")}
           tone="primary"
         />
       </div>
 
       <Card className="border-border/70 shadow-soft">
         <CardHeader>
-          <CardTitle className="font-display text-base">Payment history</CardTitle>
+          <CardTitle className="font-display text-base">
+            {t("clients:detail.billing.history")}
+          </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
           {c.payments.length === 0 ? (
-            <p className="px-6 pb-6 text-sm text-muted-foreground">No payments on file.</p>
+            <p className="px-6 pb-6 text-sm text-muted-foreground">
+              {t("clients:detail.billing.noHistory")}
+            </p>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow className="bg-muted/40 hover:bg-muted/40">
-                  <TableHead>Date</TableHead>
-                  <TableHead>Package</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
-                  <TableHead className="text-right">Status</TableHead>
+                  <TableHead>{t("clients:detail.billing.date")}</TableHead>
+                  <TableHead>{t("clients:detail.billing.package")}</TableHead>
+                  <TableHead className="text-end">{t("clients:detail.billing.amount")}</TableHead>
+                  <TableHead className="text-end">
+                    {t("clients:detail.billing.statusColumn")}
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {c.payments.map((p) => (
                   <TableRow key={p.id}>
-                    <TableCell>{formatDate(p.date)}</TableCell>
+                    <TableCell>{formatDate(p.date, fmt)}</TableCell>
                     <TableCell>{p.package}</TableCell>
-                    <TableCell className="text-right tabular-nums">${p.amount}</TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="text-end tabular-nums">${p.amount}</TableCell>
+                    <TableCell className="text-end">
                       <Badge
                         variant="outline"
                         className={
                           p.status === "paid"
-                            ? "border-success/30 bg-success/10 text-success capitalize"
+                            ? "border-success/30 bg-success/10 text-success"
                             : p.status === "due"
-                              ? "border-warning/30 bg-warning/10 text-warning-foreground capitalize"
-                              : "border-destructive/30 bg-destructive/10 text-destructive capitalize"
+                              ? "border-warning/30 bg-warning/10 text-warning-foreground"
+                              : "border-destructive/30 bg-destructive/10 text-destructive"
                         }
                       >
-                        {p.status}
+                        {t(`clients:detail.billing.status.${p.status}`)}
                       </Badge>
                     </TableCell>
                   </TableRow>
@@ -930,11 +1092,13 @@ function BillingTab({ c }: { c: ClientRecord }) {
 }
 
 function FilesTab({ c }: { c: ClientRecord }) {
+  const { t } = useTranslation(["clients", "common"]);
+  const fmt = useFormatters();
   if (c.files.length === 0) {
     return (
       <Card className="border-dashed">
         <CardContent className="py-12 text-center text-sm text-muted-foreground">
-          No files uploaded yet.
+          {t("clients:detail.files.empty")}
         </CardContent>
       </Card>
     );
@@ -952,7 +1116,7 @@ function FilesTab({ c }: { c: ClientRecord }) {
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium truncate">{f.name}</p>
               <p className="text-xs text-muted-foreground">
-                {formatDate(f.uploadedAt)} · {Math.round(f.sizeKb)} KB
+                {formatDate(f.uploadedAt, fmt)} · {Math.round(f.sizeKb)} KB
               </p>
             </div>
             <Button variant="ghost" size="icon">

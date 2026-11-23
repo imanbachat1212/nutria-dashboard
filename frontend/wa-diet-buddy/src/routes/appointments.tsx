@@ -23,6 +23,8 @@ import {
   Loader2,
   Check,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -55,12 +57,9 @@ import {
   getStaff,
   TODAY_KEY,
   apptDateKey,
-  formatDayHeading,
-  formatMonthYear,
-  formatShortDay,
-  formatTime,
-  fmtRelative,
-  typeMeta,
+  useAppointmentFormatters,
+  useTypeMeta,
+  type AppointmentType,
   isCapacityType,
   type AppointmentRecord,
   type AppointmentStatus,
@@ -104,32 +103,29 @@ function utcKey(d: Date): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 }
 
+// Colour and icon only; the words come from `appointments.status.*`. The KEYS are the API's
+// own status values and stay English.
 const STATUS_META: Record<
   AppointmentStatus,
-  { label: string; className: string; icon: React.ComponentType<{ className?: string }> }
+  { className: string; icon: React.ComponentType<{ className?: string }> }
 > = {
   confirmed: {
-    label: "Confirmed",
     className: "bg-emerald-100 text-emerald-800 border-emerald-200",
     icon: CheckCircle2,
   },
   pending: {
-    label: "Pending",
     className: "bg-amber-100 text-amber-900 border-amber-200",
     icon: AlertCircle,
   },
   completed: {
-    label: "Completed",
     className: "bg-muted text-foreground border-border",
     icon: CheckCircle2,
   },
   "no-show": {
-    label: "No-show",
     className: "bg-destructive/10 text-destructive border-destructive/30",
     icon: XCircle,
   },
   cancelled: {
-    label: "Cancelled",
     className: "bg-muted text-muted-foreground border-border",
     icon: XCircle,
   },
@@ -153,13 +149,20 @@ function initialsOf(name: string): string {
 // gym-machine shows whoever's on it (same pattern as a 1:1 type like try-out) rather than
 // the generic resource name; gym-class keeps its title and gets the roster shown alongside
 // separately via attendeeNamesLine, since a class can have many attendees under one name.
-function displayName(a: AppointmentRecord): string {
+// Takes the label lookup rather than calling the module-level `typeMeta`, so the fallback name
+// of an untitled class is translated too. `a.name` and `a.client.name` are user data and are
+// always shown as entered.
+function displayName(
+  a: AppointmentRecord,
+  typeMeta: (t: AppointmentType) => { label: string },
+  t: TFunction,
+): string {
   if (a.type === "gym-machine") {
     const names = bookedAttendeeNames(a);
     return names.length > 0 ? names.join(", ") : a.name || typeMeta(a.type).label;
   }
   if (isCapacityType(a.type)) return a.name || typeMeta(a.type).label;
-  return a.client?.name || "Unknown";
+  return a.client?.name || t("common:state.unknown");
 }
 
 function displayInitials(a: AppointmentRecord): string {
@@ -183,6 +186,9 @@ function bookedCount(a: AppointmentRecord): number {
 }
 
 function AppointmentsPage() {
+  const { t } = useTranslation(["appointments", "common"]);
+  const typeMeta = useTypeMeta();
+  const fmtA = useAppointmentFormatters();
   const qc = useQueryClient();
   const [view, setView] = useState<ViewMode>("day");
   const [cursor, setCursor] = useState<Date>(new Date(`${TODAY_KEY}T00:00:00Z`));
@@ -205,8 +211,11 @@ function AppointmentsPage() {
   const filtered = useMemo(() => {
     if (!query) return appointments;
     const q = query.toLowerCase();
-    return appointments.filter((a) => displayName(a).toLowerCase().includes(q));
-  }, [appointments, query]);
+    return appointments.filter((a) => displayName(a, typeMeta, t).toLowerCase().includes(q));
+    // `t` and `typeMeta` ARE dependencies now that the search matches against the translated
+    // display name: without them a language switch would leave this filter comparing the query
+    // against the previous language's strings until something else invalidated the memo.
+  }, [appointments, query, typeMeta, t]);
 
   const todayAppts = useMemo(
     () => appointments.filter((a) => apptDateKey(a.startIso) === TODAY_KEY),
@@ -228,33 +237,43 @@ function AppointmentsPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Schedule"
-        title="Appointments"
-        description="Diet consultations and gym sessions in one unified calendar."
+        eyebrow={t("appointments:eyebrow")}
+        title={t("appointments:title")}
+        description={t("appointments:description")}
         actions={
           <Button size="sm" onClick={() => setNewOpen(true)}>
             <Plus className="h-4 w-4" />
-            New appointment
+            {t("appointments:newAppointment")}
           </Button>
         }
       />
 
       {/* Stats */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <StatCard label="Today" value={String(stats.total)} hint="scheduled" tone="primary" />
         <StatCard
-          label="Confirmed"
+          label={t("appointments:stats.today")}
+          value={String(stats.total)}
+          hint={t("appointments:stats.todayHint")}
+          tone="primary"
+        />
+        <StatCard
+          label={t("appointments:stats.confirmed")}
           value={String(stats.confirmed)}
-          hint="ready to go"
+          hint={t("appointments:stats.confirmedHint")}
           tone="emerald"
         />
         <StatCard
-          label="Pending"
+          label={t("appointments:stats.pending")}
           value={String(stats.pending)}
-          hint="awaiting reply"
+          hint={t("appointments:stats.pendingHint")}
           tone="amber"
         />
-        <StatCard label="No-shows" value={String(stats.noShow)} hint="follow up" tone="rose" />
+        <StatCard
+          label={t("appointments:stats.noShows")}
+          value={String(stats.noShow)}
+          hint={t("appointments:stats.noShowsHint")}
+          tone="rose"
+        />
       </div>
 
       {/* Toolbar */}
@@ -264,55 +283,56 @@ function AppointmentsPage() {
             variant="outline"
             size="icon"
             onClick={() => setCursor(addDays(cursor, view === "week" ? -7 : -1))}
-            aria-label="Previous"
+            aria-label={t("appointments:toolbar.previous")}
           >
-            <ChevronLeft className="h-4 w-4" />
+            {/* Calendar paging: "previous" is the start side, so the chevron mirrors. */}
+            <ChevronLeft className="h-4 w-4 rtl:rotate-180" />
           </Button>
           <Button
             variant="outline"
             size="sm"
             onClick={() => setCursor(new Date(`${TODAY_KEY}T00:00:00Z`))}
           >
-            Today
+            {t("appointments:toolbar.today")}
           </Button>
           <Button
             variant="outline"
             size="icon"
             onClick={() => setCursor(addDays(cursor, view === "week" ? 7 : 1))}
-            aria-label="Next"
+            aria-label={t("appointments:toolbar.next")}
           >
-            <ChevronRight className="h-4 w-4" />
+            <ChevronRight className="h-4 w-4 rtl:rotate-180" />
           </Button>
-          <div className="ml-2 flex items-center gap-2 text-sm font-medium">
+          <div className="ms-2 flex items-center gap-2 text-sm font-medium">
             <CalendarDays className="h-4 w-4 text-muted-foreground" />
             {view === "week"
-              ? `Week of ${formatMonthYear(startOfWeek(cursor))}`
-              : formatDayHeading(cursor)}
+              ? t("appointments:toolbar.weekOf", { month: fmtA.monthYear(startOfWeek(cursor)) })
+              : fmtA.dayHeading(cursor)}
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Search className="pointer-events-none absolute start-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
-              placeholder="Search client or class..."
+              placeholder={t("appointments:toolbar.searchPlaceholder")}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              className="h-8 w-48 pl-8 text-sm"
+              className="h-8 w-48 ps-8 text-sm"
             />
           </div>
           <Tabs value={group} onValueChange={(v) => setGroup(v as GroupFilter)}>
             <TabsList className="h-8">
               <TabsTrigger value="all" className="text-xs">
-                All
+                {t("appointments:toolbar.groupAll")}
               </TabsTrigger>
               <TabsTrigger value="diet" className="text-xs gap-1">
                 <Users className="h-3 w-3" />
-                Diet
+                {t("appointments:toolbar.groupDiet")}
               </TabsTrigger>
               <TabsTrigger value="gym" className="text-xs gap-1">
                 <Dumbbell className="h-3 w-3" />
-                Gym
+                {t("appointments:toolbar.groupGym")}
               </TabsTrigger>
             </TabsList>
           </Tabs>
@@ -321,7 +341,7 @@ function AppointmentsPage() {
             onChange={(e) => setStaffFilter(e.target.value)}
             className="h-8 rounded-md border bg-background px-2 text-xs"
           >
-            <option value="all">All staff</option>
+            <option value="all">{t("appointments:toolbar.allStaff")}</option>
             {ALL_STAFF.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.name}
@@ -331,13 +351,13 @@ function AppointmentsPage() {
           <Tabs value={view} onValueChange={(v) => setView(v as ViewMode)}>
             <TabsList className="h-8">
               <TabsTrigger value="day" className="text-xs">
-                Day
+                {t("appointments:toolbar.viewDay")}
               </TabsTrigger>
               <TabsTrigger value="week" className="text-xs">
-                Week
+                {t("appointments:toolbar.viewWeek")}
               </TabsTrigger>
               <TabsTrigger value="list" className="text-xs">
-                List
+                {t("appointments:toolbar.viewList")}
               </TabsTrigger>
             </TabsList>
           </Tabs>
@@ -375,13 +395,11 @@ function AppointmentsPage() {
             <CardContent className="space-y-3 p-4">
               <div className="flex items-center gap-2">
                 <Sparkles className="h-4 w-4 text-primary" />
-                <h3 className="text-sm font-semibold">Inbox</h3>
+                <h3 className="text-sm font-semibold">{t("appointments:sidebar.inbox")}</h3>
               </div>
-              <p className="text-xs text-muted-foreground">
-                Appointment reminders and AI-reviewed gym booking requests, in one feed.
-              </p>
+              <p className="text-xs text-muted-foreground">{t("appointments:sidebar.inboxHint")}</p>
               <ScrollArea className="h-90">
-                <div className="space-y-2 pr-2">
+                <div className="space-y-2 pe-2">
                   {SIDEBAR_FEED.map((item) =>
                     item.kind === "reminder" ? (
                       <ReminderRow key={item.id} item={item} />
@@ -396,7 +414,7 @@ function AppointmentsPage() {
 
           <Card>
             <CardContent className="space-y-3 p-4">
-              <h3 className="text-sm font-semibold">Staff</h3>
+              <h3 className="text-sm font-semibold">{t("appointments:sidebar.staff")}</h3>
               <div className="space-y-2">
                 {ALL_STAFF.map((s) => {
                   const count = appointments.filter(
@@ -412,7 +430,7 @@ function AppointmentsPage() {
                         </div>
                       </div>
                       <Badge variant="secondary" className="text-[11px]">
-                        {count} today
+                        {t("appointments:sidebar.countToday", { count })}
                       </Badge>
                     </div>
                   );
@@ -481,6 +499,7 @@ function ReminderRow({
 }: {
   item: { id: string; clientName: string; whenLabel: string; status: "confirmed" | "pending" };
 }) {
+  const { t } = useTranslation("appointments");
   return (
     <div className="flex items-center justify-between rounded-md border bg-muted/30 px-2.5 py-1.5">
       <div className="leading-tight">
@@ -496,7 +515,7 @@ function ReminderRow({
             : "border-amber-200 bg-amber-50 text-amber-900",
         )}
       >
-        {item.status}
+        {t(`status.${item.status}`)}
       </Badge>
     </div>
   );
@@ -517,6 +536,8 @@ function BookingRequestRow({
     status: "pending" | "auto-booked" | "declined";
   };
 }) {
+  const { t } = useTranslation("appointments");
+  const fmtA = useAppointmentFormatters();
   const ChIcon =
     item.channel === "whatsapp" ? MessageCircle : item.channel === "instagram" ? Instagram : Globe;
   return (
@@ -533,32 +554,37 @@ function BookingRequestRow({
           <p className="text-xs text-muted-foreground line-clamp-2">{item.preview}</p>
         </div>
         <span className="text-[10px] text-muted-foreground whitespace-nowrap">
-          {fmtRelative(item.receivedIso)}
+          {fmtA.relative(item.receivedIso)}
         </span>
       </div>
-      <div className="flex items-center gap-1.5 pl-9 text-[11px] text-muted-foreground">
+      <div className="flex items-center gap-1.5 ps-9 text-[11px] text-muted-foreground">
         <Dumbbell className="h-3 w-3" />
         <span className="truncate">{item.sessionName}</span>
       </div>
-      <div className="flex items-center justify-between pl-9">
+      <div className="flex items-center justify-between ps-9">
         <div className="flex items-center gap-1.5">
           <Sparkles className="h-3 w-3 text-primary" />
           <span className="text-[10px] text-muted-foreground">
-            AI {item.aiConfidence}% confident
+            {t("sidebar.aiConfident", { percent: item.aiConfidence })}
           </span>
         </div>
         {item.status === "auto-booked" ? (
           <Badge className="text-[10px] bg-emerald-100 text-emerald-900 border-emerald-200 hover:bg-emerald-100">
-            <CheckCircle2 className="h-3 w-3 mr-1" />
-            Auto-booked
+            <CheckCircle2 className="h-3 w-3 me-1" />
+            {t("sidebar.autoBooked")}
           </Badge>
         ) : (
           <div className="flex items-center gap-1">
-            <Button size="sm" variant="ghost" className="h-6 px-1.5 text-xs">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 px-1.5 text-xs"
+              aria-label={t("sidebar.decline")}
+            >
               <XCircle className="h-3.5 w-3.5" />
             </Button>
             <Button size="sm" className="h-6 px-2 text-xs">
-              Confirm
+              {t("sidebar.confirm")}
             </Button>
           </div>
         )}
@@ -580,6 +606,8 @@ function DayView({
   appts: AppointmentRecord[];
   onSelect: (id: string) => void;
 }) {
+  const { t } = useTranslation(["appointments", "common"]);
+  const fmtA = useAppointmentFormatters();
   const dayKey = utcKey(date);
   const dayAppts = appts.filter((a) => apptDateKey(a.startIso) === dayKey);
 
@@ -595,10 +623,13 @@ function DayView({
               const mins = d.getUTCHours() * 60 + d.getUTCMinutes();
               return mins >= slotStart && mins < slotEnd;
             });
-            const label = h === 12 ? "12 PM" : h > 12 ? `${h - 12} PM` : `${h} AM`;
+            // The hour gutter. Built from a real UTC date through Intl rather than string
+            // concatenation, so "9 AM" becomes "٩ ص"-style wording in Arabic (with Latin
+            // digits, per lib/i18n/format.ts) instead of a hardcoded English AM/PM.
+            const label = fmtA.time(`${TODAY_KEY}T${String(h).padStart(2, "0")}:00:00Z`);
             return (
               <div key={h} className="contents">
-                <div className="border-b border-r px-2 py-3 text-[11px] text-muted-foreground">
+                <div className="border-b border-e px-2 py-3 text-[11px] text-muted-foreground">
                   {label}
                 </div>
                 <div className="min-h-16 border-b p-2">
@@ -618,7 +649,7 @@ function DayView({
         </div>
         {dayAppts.length === 0 && (
           <div className="border-t p-6 text-center text-sm text-muted-foreground">
-            No appointments scheduled.
+            {t("appointments:day.empty")}
           </div>
         )}
       </CardContent>
@@ -633,6 +664,9 @@ function AppointmentBlock({
   appt: AppointmentRecord;
   onSelect: (id: string) => void;
 }) {
+  const { t } = useTranslation(["appointments", "common"]);
+  const typeMeta = useTypeMeta();
+  const fmtA = useAppointmentFormatters();
   const meta = typeMeta(appt.type);
   const staff = getStaff(appt.staffId);
   const isClass = isCapacityType(appt.type);
@@ -642,7 +676,7 @@ function AppointmentBlock({
       type="button"
       onClick={() => onSelect(appt.id)}
       className={cn(
-        "group w-full rounded-md border-l-4 bg-card px-3 py-2 text-left shadow-soft transition hover:shadow-md",
+        "group w-full rounded-md border-s-4 bg-card px-3 py-2 text-start shadow-soft transition hover:shadow-md",
         meta.tone,
       )}
     >
@@ -651,7 +685,7 @@ function AppointmentBlock({
           <Avatar className="h-6 w-6 shrink-0">
             <AvatarFallback className="text-[10px]">{displayInitials(appt)}</AvatarFallback>
           </Avatar>
-          <span className="truncate text-sm font-medium">{displayName(appt)}</span>
+          <span className="truncate text-sm font-medium">{displayName(appt, typeMeta, t)}</span>
           {isClass && (
             <Badge variant="outline" className="shrink-0 border-border text-[10px]">
               {bookedCount(appt)}/{appt.capacity}
@@ -659,7 +693,8 @@ function AppointmentBlock({
           )}
         </div>
         <div className="shrink-0 text-[11px] text-muted-foreground">
-          {formatTime(appt.startIso)} · {appt.durationMin}m
+          {fmtA.time(appt.startIso)} ·{" "}
+          {t("appointments:day.durationShort", { count: appt.durationMin })}
         </div>
       </div>
       {roster && <div className="mt-0.5 truncate text-[11px] text-muted-foreground">{roster}</div>}
@@ -689,13 +724,16 @@ function WeekView({
   setCursor: (d: Date) => void;
   setView: (v: ViewMode) => void;
 }) {
+  const { t } = useTranslation(["appointments", "common"]);
+  const typeMeta = useTypeMeta();
+  const fmtA = useAppointmentFormatters();
   const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
   return (
     <Card>
       <CardContent className="p-0">
         <div className="grid grid-cols-7 border-b bg-muted/30 text-center text-xs font-medium text-muted-foreground">
           {days.map((d) => {
-            const { weekday, date } = formatShortDay(d);
+            const { weekday, date } = fmtA.shortDay(d);
             const isToday = utcKey(d) === TODAY_KEY;
             return (
               <button
@@ -706,7 +744,7 @@ function WeekView({
                   setView("day");
                 }}
                 className={cn(
-                  "border-r px-2 py-2 last:border-r-0 transition hover:bg-muted",
+                  "border-e px-2 py-2 last:border-r-0 transition hover:bg-muted",
                   isToday && "bg-primary/10 text-primary",
                 )}
               >
@@ -723,7 +761,7 @@ function WeekView({
               .filter((a) => apptDateKey(a.startIso) === key)
               .sort((a, b) => a.startIso.localeCompare(b.startIso));
             return (
-              <div key={key} className="space-y-1.5 border-r p-2 last:border-r-0">
+              <div key={key} className="space-y-1.5 border-e p-2 last:border-r-0">
                 {dayAppts.length === 0 ? (
                   <div className="pt-6 text-center text-[11px] text-muted-foreground">—</div>
                 ) : (
@@ -736,12 +774,12 @@ function WeekView({
                         type="button"
                         onClick={() => onSelect(a.id)}
                         className={cn(
-                          "block w-full rounded-md border px-2 py-1.5 text-left text-[11px] transition hover:shadow-soft",
+                          "block w-full rounded-md border px-2 py-1.5 text-start text-[11px] transition hover:shadow-soft",
                           meta.tone,
                         )}
                       >
-                        <div className="font-medium">{formatTime(a.startIso)}</div>
-                        <div className="truncate">{displayName(a)}</div>
+                        <div className="font-medium">{fmtA.time(a.startIso)}</div>
+                        <div className="truncate">{displayName(a, typeMeta, t)}</div>
                         {roster && <div className="truncate opacity-70">{roster}</div>}
                       </button>
                     );
@@ -765,6 +803,9 @@ function ListView({
   appts: AppointmentRecord[];
   onSelect: (id: string) => void;
 }) {
+  const { t } = useTranslation(["appointments", "common"]);
+  const typeMeta = useTypeMeta();
+  const fmtA = useAppointmentFormatters();
   const sorted = [...appts].sort((a, b) => a.startIso.localeCompare(b.startIso));
   const groups = new Map<string, AppointmentRecord[]>();
   sorted.forEach((a) => {
@@ -782,8 +823,10 @@ function ListView({
           <Card key={key}>
             <CardContent className="p-0">
               <div className="flex items-center justify-between border-b bg-muted/30 px-4 py-2">
-                <span className="text-sm font-semibold">{formatDayHeading(d)}</span>
-                <span className="text-xs text-muted-foreground">{list.length} appointments</span>
+                <span className="text-sm font-semibold">{fmtA.dayHeading(d)}</span>
+                <span className="text-xs text-muted-foreground">
+                  {t("appointments:list.appointments", { count: list.length })}
+                </span>
               </div>
               <div className="divide-y">
                 {list.map((a) => {
@@ -796,11 +839,13 @@ function ListView({
                       key={a.id}
                       type="button"
                       onClick={() => onSelect(a.id)}
-                      className="flex w-full items-center gap-4 px-4 py-3 text-left transition hover:bg-muted/40"
+                      className="flex w-full items-center gap-4 px-4 py-3 text-start transition hover:bg-muted/40"
                     >
-                      <div className="w-20 text-right">
-                        <div className="text-sm font-semibold">{formatTime(a.startIso)}</div>
-                        <div className="text-[11px] text-muted-foreground">{a.durationMin} min</div>
+                      <div className="w-20 text-end">
+                        <div className="text-sm font-semibold">{fmtA.time(a.startIso)}</div>
+                        <div className="text-[11px] text-muted-foreground">
+                          {t("appointments:list.minutes", { count: a.durationMin })}
+                        </div>
                       </div>
                       <div className={cn("h-10 w-1 rounded-full", meta.tone.split(" ")[0])} />
                       <Avatar className="h-9 w-9">
@@ -808,7 +853,7 @@ function ListView({
                       </Avatar>
                       <div className="flex-1">
                         <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium">{displayName(a)}</span>
+                          <span className="text-sm font-medium">{displayName(a, typeMeta, t)}</span>
                           {isCapacityType(a.type) && (
                             <Badge variant="outline" className="text-[10px]">
                               {bookedCount(a)}/{a.capacity}
@@ -824,7 +869,7 @@ function ListView({
                           <span>{meta.label}</span>
                           <span>·</span>
                           <MapPin className="h-3 w-3" />
-                          <span>{a.room ?? "Clinic"}</span>
+                          <span>{a.room ?? t("appointments:list.defaultRoom")}</span>
                           {staff && (
                             <>
                               <span>·</span>
@@ -837,7 +882,7 @@ function ListView({
                         </div>
                       </div>
                       <Badge variant="outline" className={cn("text-[10px]", status.className)}>
-                        {status.label}
+                        {t(`appointments:status.${a.status}`)}
                       </Badge>
                     </button>
                   );
@@ -850,7 +895,7 @@ function ListView({
       {sorted.length === 0 && (
         <Card>
           <CardContent className="p-10 text-center text-sm text-muted-foreground">
-            No appointments match your filters.
+            {t("appointments:list.empty")}
           </CardContent>
         </Card>
       )}
@@ -861,6 +906,9 @@ function ListView({
 /* ----------------------------- 1:1 DETAIL DRAWER ----------------------------- */
 
 function AppointmentDetail({ appt }: { appt: AppointmentRecord }) {
+  const { t } = useTranslation(["appointments", "common"]);
+  const typeMeta = useTypeMeta();
+  const fmtA = useAppointmentFormatters();
   const meta = typeMeta(appt.type);
   const status = STATUS_META[appt.status];
   const staff = getStaff(appt.staffId);
@@ -882,8 +930,8 @@ function AppointmentDetail({ appt }: { appt: AppointmentRecord }) {
             {meta.label}
           </Badge>
           <Badge variant="outline" className={status.className}>
-            <StatusIcon className="mr-1 h-3 w-3" />
-            {status.label}
+            <StatusIcon className="me-1 h-3 w-3" />
+            {t(`appointments:status.${appt.status}`)}
           </Badge>
         </div>
       </SheetHeader>
@@ -891,25 +939,29 @@ function AppointmentDetail({ appt }: { appt: AppointmentRecord }) {
       <Separator className="my-4" />
 
       <div className="space-y-4 text-sm">
-        <DetailRow icon={Clock} label="When">
-          {formatDayHeading(new Date(appt.startIso))} · {formatTime(appt.startIso)} ·{" "}
-          {appt.durationMin} min
+        <DetailRow icon={Clock} label={t("appointments:detail.when")}>
+          {t("appointments:detail.whenValue", {
+            day: fmtA.dayHeading(new Date(appt.startIso)),
+            time: fmtA.time(appt.startIso),
+            minutes: appt.durationMin,
+          })}
         </DetailRow>
-        <DetailRow icon={MapPin} label="Location">
-          {appt.room ?? "Clinic"}
+        <DetailRow icon={MapPin} label={t("appointments:detail.location")}>
+          {appt.room ?? t("appointments:list.defaultRoom")}
         </DetailRow>
         {staff && (
-          <DetailRow icon={Users} label="With">
+          <DetailRow icon={Users} label={t("appointments:detail.with")}>
             <span className="flex items-center gap-1.5">
               <span className={cn("h-2 w-2 rounded-full", staff.color)} />
-              {staff.name} · {staff.role}
+              {/* Staff name and job title are seeded directory data, not UI copy. */}
+              {t("appointments:detail.withValue", { name: staff.name, role: staff.role })}
             </span>
           </DetailRow>
         )}
         {appt.notes && (
           <div className="rounded-md border bg-muted/30 p-3">
             <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-              Notes
+              {t("appointments:detail.notes")}
             </p>
             <p className="mt-1 text-sm">{appt.notes}</p>
           </div>
@@ -921,20 +973,20 @@ function AppointmentDetail({ appt }: { appt: AppointmentRecord }) {
       <div className="grid grid-cols-2 gap-2">
         <Button variant="outline" size="sm">
           <Phone className="h-4 w-4" />
-          Call
+          {t("appointments:detail.call")}
         </Button>
         <Button variant="outline" size="sm">
-          Send reminder
+          {t("appointments:detail.sendReminder")}
         </Button>
         <Button variant="outline" size="sm">
-          Reschedule
+          {t("appointments:detail.reschedule")}
         </Button>
         <Button variant="outline" size="sm" className="text-destructive hover:text-destructive">
-          Cancel
+          {t("appointments:detail.cancel")}
         </Button>
         <Button size="sm" className="col-span-2">
           <CheckCircle2 className="h-4 w-4" />
-          Mark completed
+          {t("appointments:detail.markCompleted")}
         </Button>
       </div>
     </>
@@ -965,15 +1017,20 @@ function DetailRow({
 
 /* ----------------------------- GYM-CLASS DETAIL DRAWER (real attendee roster) ----------------------------- */
 
-const ATTENDEE_STATUS_LABEL: Record<AttendeeStatus, string> = {
-  booked: "Booked",
-  waitlist: "Waitlist",
-  "checked-in": "Checked in",
-  "no-show": "No-show",
-  cancelled: "Cancelled",
-};
+// The order the Select offers them in. Values are API values; labels come from
+// `appointments.attendeeStatus.*`.
+const ATTENDEE_STATUSES: AttendeeStatus[] = [
+  "booked",
+  "waitlist",
+  "checked-in",
+  "no-show",
+  "cancelled",
+];
 
 function ClassDetail({ appt, onChanged }: { appt: AppointmentRecord; onChanged: () => void }) {
+  const { t } = useTranslation(["appointments", "common"]);
+  const typeMeta = useTypeMeta();
+  const fmtA = useAppointmentFormatters();
   const staff = getStaff(appt.staffId);
   const booked = bookedCount(appt);
   const meta = typeMeta(appt.type);
@@ -998,19 +1055,30 @@ function ClassDetail({ appt, onChanged }: { appt: AppointmentRecord; onChanged: 
         <Badge variant="outline" className={cn("w-fit text-[10px] border", meta.tone)}>
           {meta.label}
         </Badge>
-        <SheetTitle className="font-display text-2xl">{displayName(appt)}</SheetTitle>
+        <SheetTitle className="font-display text-2xl">{displayName(appt, typeMeta, t)}</SheetTitle>
         <SheetDescription>{appt.notes}</SheetDescription>
       </SheetHeader>
 
       <div className="grid grid-cols-2 gap-3 mt-5">
         <DetailStat
           icon={Clock}
-          label="Time"
-          value={`${formatTime(appt.startIso)} · ${appt.durationMin}m`}
+          label={t("appointments:class.time")}
+          value={t("appointments:class.timeValue", {
+            time: fmtA.time(appt.startIso),
+            minutes: appt.durationMin,
+          })}
         />
-        <DetailStat icon={MapPin} label="Room" value={appt.room || "—"} />
-        <DetailStat icon={Dumbbell} label="Trainer" value={staff?.name ?? "Unassigned"} />
-        <DetailStat icon={Users} label="Capacity" value={`${booked}/${appt.capacity}`} />
+        <DetailStat icon={MapPin} label={t("appointments:class.room")} value={appt.room || "—"} />
+        <DetailStat
+          icon={Dumbbell}
+          label={t("appointments:class.trainer")}
+          value={staff?.name ?? t("appointments:class.unassigned")}
+        />
+        <DetailStat
+          icon={Users}
+          label={t("appointments:class.capacity")}
+          value={`${booked}/${appt.capacity}`}
+        />
       </div>
 
       {statusMutation.isError && (
@@ -1024,7 +1092,7 @@ function ClassDetail({ appt, onChanged }: { appt: AppointmentRecord; onChanged: 
       <div className="space-y-5">
         {grouped["checked-in"].length > 0 && (
           <AttendeeGroup
-            title="Checked in"
+            title={t("appointments:class.groupCheckedIn")}
             tone="emerald"
             items={grouped["checked-in"]}
             onSetStatus={(clientId, status) => statusMutation.mutate({ clientId, status })}
@@ -1032,7 +1100,7 @@ function ClassDetail({ appt, onChanged }: { appt: AppointmentRecord; onChanged: 
         )}
         {grouped.booked.length > 0 && (
           <AttendeeGroup
-            title="Booked"
+            title={t("appointments:class.groupBooked")}
             tone="default"
             items={grouped.booked}
             onSetStatus={(clientId, status) => statusMutation.mutate({ clientId, status })}
@@ -1040,7 +1108,7 @@ function ClassDetail({ appt, onChanged }: { appt: AppointmentRecord; onChanged: 
         )}
         {grouped.waitlist.length > 0 && (
           <AttendeeGroup
-            title="Waitlist"
+            title={t("appointments:class.groupWaitlist")}
             tone="amber"
             items={grouped.waitlist}
             onSetStatus={(clientId, status) => statusMutation.mutate({ clientId, status })}
@@ -1048,7 +1116,7 @@ function ClassDetail({ appt, onChanged }: { appt: AppointmentRecord; onChanged: 
         )}
         {grouped.other.length > 0 && (
           <AttendeeGroup
-            title="No-show / cancelled"
+            title={t("appointments:class.groupOther")}
             tone="default"
             items={grouped.other}
             onSetStatus={(clientId, status) => statusMutation.mutate({ clientId, status })}
@@ -1056,7 +1124,7 @@ function ClassDetail({ appt, onChanged }: { appt: AppointmentRecord; onChanged: 
         )}
         {appt.attendees.length === 0 && (
           <p className="text-sm text-muted-foreground text-center py-6">
-            No attendees yet — add the first one below.
+            {t("appointments:class.noAttendees")}
           </p>
         )}
       </div>
@@ -1076,7 +1144,7 @@ function ClassDetail({ appt, onChanged }: { appt: AppointmentRecord; onChanged: 
       ) : (
         <Button className="w-full" onClick={() => setAddOpen(true)}>
           <UserCheck className="h-4 w-4" />
-          Add attendee
+          {t("appointments:class.addAttendee")}
         </Button>
       )}
     </>
@@ -1114,6 +1182,7 @@ function AttendeeGroup({
   items: AppointmentRecord["attendees"];
   onSetStatus: (clientId: string, status: AttendeeStatus) => void;
 }) {
+  const { t } = useTranslation("appointments");
   const dotCls =
     tone === "emerald"
       ? "bg-emerald-500"
@@ -1125,7 +1194,7 @@ function AttendeeGroup({
       <div className="flex items-center gap-2 mb-2">
         <span className={cn("h-2 w-2 rounded-full", dotCls)} />
         <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          {title} · {items.length}
+          {t("class.groupHeading", { title, count: items.length })}
         </h4>
       </div>
       <div className="space-y-1.5">
@@ -1148,7 +1217,8 @@ function AttendeeGroup({
               <span className="text-sm font-medium truncate">{a.name}</span>
               <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
                 {a.source === "whatsapp" && <MessageCircle className="h-3 w-3" />}
-                <span className="capitalize">{a.source}</span>
+                {/* Was the raw enum under a CSS `capitalize`. */}
+                <span>{t(`source.${a.source}`)}</span>
               </div>
             </div>
             <Select
@@ -1159,9 +1229,9 @@ function AttendeeGroup({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {(Object.keys(ATTENDEE_STATUS_LABEL) as AttendeeStatus[]).map((s) => (
-                  <SelectItem key={s} value={s} className="text-xs">
-                    {ATTENDEE_STATUS_LABEL[s]}
+                {ATTENDEE_STATUSES.map((status) => (
+                  <SelectItem key={status} value={status} className="text-xs">
+                    {t(`attendeeStatus.${status}`)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -1184,6 +1254,7 @@ function AddAttendeeForm({
   onDone: () => void;
   onCancel: () => void;
 }) {
+  const { t } = useTranslation(["appointments", "common"]);
   const [search, setSearch] = useState("");
   const { data } = useQuery({
     queryKey: ["clients", "attendee-picker", search],
@@ -1206,12 +1277,12 @@ function AddAttendeeForm({
   return (
     <div className="space-y-3">
       <div className="relative">
-        <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+        <Search className="absolute start-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
         <Input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search clients…"
-          className="pl-8"
+          placeholder={t("appointments:class.searchClients")}
+          className="ps-8"
         />
       </div>
       {addMutation.isError && (
@@ -1226,7 +1297,7 @@ function AddAttendeeForm({
                 addMutation.mutate({ client: addMutation.variables!.client, status: "waitlist" })
               }
             >
-              Add to waitlist
+              {t("appointments:class.addToWaitlist")}
             </Button>
           )}
         </div>
@@ -1238,7 +1309,7 @@ function AddAttendeeForm({
               key={c.id}
               onClick={() => addMutation.mutate({ client: c })}
               disabled={addMutation.isPending}
-              className="w-full flex items-center gap-3 px-2.5 py-2 rounded-md text-left transition-colors hover:bg-muted/40 disabled:opacity-50"
+              className="w-full flex items-center gap-3 px-2.5 py-2 rounded-md text-start transition-colors hover:bg-muted/40 disabled:opacity-50"
             >
               <Avatar className="h-7 w-7">
                 <AvatarFallback className="text-[11px]">{c.avatarInitials}</AvatarFallback>
@@ -1251,12 +1322,14 @@ function AddAttendeeForm({
             </button>
           ))}
           {candidates.length === 0 && (
-            <div className="text-xs text-muted-foreground p-6 text-center">No clients match</div>
+            <div className="text-xs text-muted-foreground p-6 text-center">
+              {t("appointments:class.noClientsMatch")}
+            </div>
           )}
         </div>
       </ScrollArea>
       <Button variant="ghost" size="sm" className="w-full" onClick={onCancel}>
-        Cancel
+        {t("common:actions.cancel")}
       </Button>
     </div>
   );

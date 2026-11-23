@@ -1,0 +1,34 @@
+{
+  "brand": "Nutria",
+  "brandTagline": "لوحة اختصاصي التغذية",
+  "signedIn": "تم تسجيل الدخول",
+  "groups": {
+    "practice": "العيادة",
+    "nutrition": "التغذية",
+    "operations": "العمليات",
+    "admin": "الإدارة"
+  },
+  "items": {
+    "overview": "نظرة عامة",
+    "clients": "العملاء",
+    "leads": "عملاء محتملون",
+    "messages": "الرسائل",
+    "appointments": "المواعيد",
+    "mealPlans": "الخطط الغذائية",
+    "mealTemplates": "قوالب الخطط",
+    "mealLibrary": "مكتبة الوجبات",
+    "foodDatabase": "قاعدة بيانات الأطعمة",
+    "journalReview": "مراجعة سجل الطعام",
+    "reports": "التقارير",
+    "billing": "الفواتير",
+    "cms": "الموقع الإلكتروني",
+    "team": "الفريق والصلاحيات",
+    "settings": "الإعدادات"
+  },
+  "topbar": {
+    "language": "اللغة",
+    "languageChange": "تغيير اللغة",
+    "notifications": "الإشعارات",
+    "toggleSidebar": "إظهار/إخفاء القائمة"
+  }
+}

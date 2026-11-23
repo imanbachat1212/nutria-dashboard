@@ -1,0 +1,99 @@
+{
+  "eyebrow": "المحادثات",
+  "title": "الرسائل",
+  "description": "بريد وارد واحد لكل محادثات واتساب — العملاء والعملاء المحتملون. يتولى الذكاء الاصطناعي الردود الروتينية، وتتدخل أنت عند الحاجة.",
+  "status": {
+    "lastMessage": "آخر رسالة قبل {{when}}",
+    "noneLogged": "لم تُسجّل أي رسائل بعد",
+    "active": "نشط قبل {{when}}",
+    "quiet": "هادئ منذ {{when}}",
+    "none": "لا توجد رسائل بعد"
+  },
+  "filtersButton": "التصفية",
+  "searchPlaceholder": "ابحث في جهات الاتصال…",
+  "tabs": {
+    "all": "الكل",
+    "clients": "العملاء",
+    "leads": "محتملون",
+    "unread": "غير مقروء",
+    "review": "مراجعة"
+  },
+  "review": "مراجعة",
+  "list": {
+    "loading": "جارٍ تحميل المحادثات…",
+    "empty": "لا توجد محادثات بعد.",
+    "noneSelected": "لم يتم تحديد أي محادثة."
+  },
+  "thread": {
+    "channel": "واتساب",
+    "autopilot": "الرد التلقائي بالذكاء الاصطناعي",
+    "call": "اتصال",
+    "videoCall": "مكالمة فيديو",
+    "toggleContext": "إظهار/إخفاء السياق",
+    "moreActions": "إجراءات أخرى",
+    "empty": "لا توجد رسائل في هذه المحادثة بعد.",
+    "loading": "جارٍ تحميل الرسائل…",
+    "autopilotPaused": "تم إيقاف الرد التلقائي مؤقتًا — الردود على هذا العميل مسؤوليتك.",
+    "attach": "إرفاق ملف",
+    "recordVoice": "تسجيل رسالة صوتية",
+    "send": "إرسال",
+    "composerOverride": "تجاوز الذكاء الاصطناعي برسالة يدوية…",
+    "composerPlaceholder": "اكتب رسالة…",
+    "quickLabel": "سريع:",
+    "sentToast": "تم الإرسال",
+    "notDeliveredToast": "تم الحفظ، لكن لم يتم التسليم — {{reason}}",
+    "n8nUnreachable": "لا يمكن الوصول إلى n8n",
+    "sendFailed": "لم يتم الإرسال"
+  },
+  "quick": {
+    "greatWork": "عمل رائع! 💪",
+    "sendPlan": "إرسال خطة اليوم",
+    "bookConsult": "حجز استشارة",
+    "requestWeighIn": "طلب صورة الوزن"
+  },
+  "bubble": {
+    "aiReply": "رد الذكاء الاصطناعي",
+    "you": "أنت",
+    "viewFullSize": "عرض بالحجم الكامل",
+    "photoAlt": "صورة مُرسلة في هذه الرسالة",
+    "photoAltLabelled": "صورة مُرسلة في هذه الرسالة: {{label}}",
+    "photo": "صورة",
+    "photoFallbackName": "photo.jpg",
+    "photoNotStored": "الصورة غير محفوظة",
+    "voiceNote": "رسالة صوتية",
+    "mealPlan": "خطة غذائية",
+    "deliveredToWhatsApp": "تم التسليم إلى واتساب",
+    "notDelivered": "لم يتم التسليم"
+  },
+  "context": {
+    "heading": "سياق جهة الاتصال",
+    "openLead": "فتح ملف العميل المحتمل",
+    "openClient": "فتح ملف العميل",
+    "todaysTargets": "مستهدفات اليوم",
+    "calories": "سعرات حرارية",
+    "adherence": "الالتزام",
+    "weightDelta": "تغيّر الوزن",
+    "week": "الأسبوع",
+    "leadSnapshot": "لمحة عن العميل المحتمل",
+    "stage": "المرحلة",
+    "source": "المصدر",
+    "interest": "مجال الاهتمام",
+    "qualityScore": "درجة الجودة",
+    "internalNotes": "ملاحظات داخلية",
+    "notePlaceholder": "أضف ملاحظة خاصة للفريق…",
+    "quickActions": "إجراءات سريعة",
+    "sendPlan": "إرسال خطة اليوم",
+    "scheduleAppointment": "تحديد موعد",
+    "requestWeighIn": "طلب قياس الوزن",
+    "convertToClient": "تحويل إلى عميل"
+  },
+  "ago": {
+    "now": "الآن",
+    "minutes": "{{count}} دقيقة",
+    "hours": "{{count}} ساعة",
+    "days": "{{count}} يوم"
+  },
+  "tag": {
+    "Lead": "عميل محتمل"
+  }
+}

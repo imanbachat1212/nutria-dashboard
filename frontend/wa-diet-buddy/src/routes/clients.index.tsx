@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
   Search,
@@ -72,15 +73,9 @@ export const Route = createFileRoute("/clients/")({
   component: ClientsListPage,
 });
 
-const FILTER_TABS: { key: Filter; label: string }[] = [
-  { key: "all", label: "All" },
-  { key: "active", label: "Active" },
-  { key: "diet", label: "Diet" },
-  { key: "gym", label: "Gym" },
-  { key: "classes", label: "Classes" },
-  { key: "paused", label: "Paused" },
-  { key: "lead", label: "Leads" },
-];
+// Only the KEYS live here now — these are also the values sent to the API, so they stay English.
+// The displayed text is looked up from clients.list.filters.* at render time.
+const FILTER_TABS: Filter[] = ["all", "active", "diet", "gym", "classes", "paused", "lead"];
 
 const CLIENTS_PAGE_SIZE = 20;
 
@@ -114,6 +109,7 @@ function filterToServiceType(filter: Filter): ServiceType | undefined {
 }
 
 function ClientsListPage() {
+  const { t } = useTranslation(["clients", "common"]);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [sort, setSort] = useState<"newest" | "name">("newest");
@@ -172,8 +168,8 @@ function ClientsListPage() {
   const archiveMutation = useMutation({
     mutationFn: (id: string) => archiveClient(id),
     onSuccess: (_client, id) => {
-      const name = archiveTarget?.id === id ? archiveTarget.name : "Client";
-      toast.success(`${name} archived — restore anytime from the Archived view`);
+      const name = archiveTarget?.id === id ? archiveTarget.name : t("clients:list.fallbackName");
+      toast.success(t("clients:list.archivedToast", { name }));
       queryClient.invalidateQueries({ queryKey: ["clients"] });
       setArchiveTarget(null);
     },
@@ -183,7 +179,7 @@ function ClientsListPage() {
   const restoreMutation = useMutation({
     mutationFn: (id: string) => restoreClient(id),
     onSuccess: (restored) => {
-      toast.success(`${restored.name} restored to the active list`);
+      toast.success(t("clients:list.restoredToast", { name: restored.name }));
       queryClient.invalidateQueries({ queryKey: ["clients"] });
     },
     onError: (e: Error) => toast.error(e.message),
@@ -192,23 +188,39 @@ function ClientsListPage() {
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader
-        eyebrow="Practice"
-        title="Clients"
-        description="Search, filter, and open any client to see their plans, journal, clinical notes, and billing."
+        eyebrow={t("clients:eyebrow")}
+        title={t("clients:title")}
+        description={t("clients:description")}
         actions={
           <Button size="sm" onClick={() => setNewOpen(true)}>
             <Plus className="h-4 w-4" />
-            New client
+            {t("clients:newClient")}
           </Button>
         }
       />
 
       {/* Mini stat strip */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 mb-5">
-        <MiniStat label="Total clients" value={totals.total} hint={`${totals.active} active`} />
-        <MiniStat label="Diet" value={totals.diet} hint="program" />
-        <MiniStat label="Gym" value={totals.gym} hint="program" />
-        <MiniStat label="Classes" value={totals.classes} hint="program" />
+        <MiniStat
+          label={t("clients:list.stats.total")}
+          value={totals.total}
+          hint={t("clients:list.stats.totalHint", { count: totals.active })}
+        />
+        <MiniStat
+          label={t("clients:serviceType.diet")}
+          value={totals.diet}
+          hint={t("clients:list.stats.program")}
+        />
+        <MiniStat
+          label={t("clients:serviceType.gym")}
+          value={totals.gym}
+          hint={t("clients:list.stats.program")}
+        />
+        <MiniStat
+          label={t("clients:serviceType.classes")}
+          value={totals.classes}
+          hint={t("clients:list.stats.program")}
+        />
       </div>
 
       <Card className="border-border/70 shadow-soft">
@@ -216,12 +228,12 @@ function ClientsListPage() {
           {/* Toolbar */}
           <div className="flex flex-col gap-3 border-b border-border p-4 lg:flex-row lg:items-center">
             <div className="relative flex-1">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Search className="pointer-events-none absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                placeholder="Search by name, phone, or email…"
+                placeholder={t("clients:list.searchPlaceholder")}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                className="h-9 pl-9 bg-muted/40 border-transparent focus-visible:bg-card focus-visible:border-border"
+                className="h-9 ps-9 bg-muted/40 border-transparent focus-visible:bg-card focus-visible:border-border"
               />
             </div>
 
@@ -231,9 +243,9 @@ function ClientsListPage() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {FILTER_TABS.map((t) => (
-                  <SelectItem key={t.key} value={t.key}>
-                    {t.label}
+                {FILTER_TABS.map((key) => (
+                  <SelectItem key={key} value={key}>
+                    {t(`clients:list.filters.${key}`)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -245,8 +257,8 @@ function ClientsListPage() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="newest">Newest</SelectItem>
-                <SelectItem value="name">Name (A–Z)</SelectItem>
+                <SelectItem value="newest">{t("clients:list.sort.newest")}</SelectItem>
+                <SelectItem value="name">{t("clients:list.sort.name")}</SelectItem>
               </SelectContent>
             </Select>
 
@@ -257,21 +269,22 @@ function ClientsListPage() {
               onClick={() => setShowArchived((v) => !v)}
             >
               <Archive className="h-3.5 w-3.5" />
-              Archived
+              {t("clients:list.archived")}
             </Button>
           </div>
 
           <div className="flex items-center justify-between px-4 pt-3 text-sm text-muted-foreground">
-            {pageTotal === 0 ? (
-              <span className="font-medium text-foreground">0</span>
-            ) : (
-              <>
-                Showing <span className="font-medium text-foreground">{rangeStart}</span>–
-                <span className="font-medium text-foreground">{rangeEnd}</span> of{" "}
-                <span className="font-medium text-foreground">{pageTotal}</span>
-              </>
-            )}{" "}
-            clients
+            {/* One whole sentence. It was five JSX fragments interleaved with <span>s, which
+                hard-codes English word order: Arabic puts the range and the total in different
+                positions, so the pieces cannot be reordered by the translator. The emphasis
+                styling on the numbers is the cost of that, and it is worth it. */}
+            {pageTotal === 0
+              ? t("clients:list.showingEmpty")
+              : t("clients:list.showing", {
+                  from: rangeStart,
+                  to: rangeEnd,
+                  total: pageTotal,
+                })}
           </div>
 
           {/* Table */}
@@ -283,8 +296,8 @@ function ClientsListPage() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-muted/40 hover:bg-muted/40">
-                  <TableHead className="w-[60%]">Client</TableHead>
-                  <TableHead className="w-[39%]">Program</TableHead>
+                  <TableHead className="w-[60%]">{t("clients:list.columns.client")}</TableHead>
+                  <TableHead className="w-[39%]">{t("clients:list.columns.program")}</TableHead>
                   <TableHead className="w-[1%]" />
                 </TableRow>
               </TableHeader>
@@ -312,7 +325,7 @@ function ClientsListPage() {
                               <StatusDot status={c.status} />
                               {c.archived && (
                                 <Badge variant="secondary" className="text-[10px]">
-                                  Archived
+                                  {t("clients:list.badgeArchived")}
                                 </Badge>
                               )}
                             </div>
@@ -329,7 +342,12 @@ function ClientsListPage() {
                       <TableCell onClick={(e) => e.stopPropagation()}>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="size-7">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-7"
+                              aria-label={t("clients:list.actions.openMenu")}
+                            >
                               <MoreHorizontal className="size-4" />
                             </Button>
                           </DropdownMenuTrigger>
@@ -337,17 +355,17 @@ function ClientsListPage() {
                             <DropdownMenuItem asChild>
                               <Link to="/clients/$clientId" params={{ clientId: c.id }}>
                                 <Eye className="h-3.5 w-3.5" />
-                                View
+                                {t("clients:list.actions.view")}
                               </Link>
                             </DropdownMenuItem>
                             <DropdownMenuItem onSelect={() => setEditTarget(c)}>
                               <Pencil className="h-3.5 w-3.5" />
-                              Edit
+                              {t("clients:list.actions.edit")}
                             </DropdownMenuItem>
                             {c.archived ? (
                               <DropdownMenuItem onSelect={() => restoreMutation.mutate(c.id)}>
                                 <ArchiveRestore className="h-3.5 w-3.5" />
-                                Restore
+                                {t("clients:list.actions.restore")}
                               </DropdownMenuItem>
                             ) : (
                               <DropdownMenuItem
@@ -355,7 +373,7 @@ function ClientsListPage() {
                                 onSelect={() => setArchiveTarget(c)}
                               >
                                 <Archive className="h-3.5 w-3.5" />
-                                Delete
+                                {t("clients:list.actions.archive")}
                               </DropdownMenuItem>
                             )}
                           </DropdownMenuContent>
@@ -371,7 +389,9 @@ function ClientsListPage() {
                       <div className="mx-auto flex max-w-sm flex-col items-center gap-2 text-muted-foreground">
                         <UsersIcon className="h-8 w-8 opacity-50" />
                         <p className="text-sm">
-                          {showArchived ? "No archived clients." : "No clients match your filter."}
+                          {showArchived
+                            ? t("clients:list.emptyArchived")
+                            : t("clients:list.emptyFiltered")}
                         </p>
                       </div>
                     </TableCell>
@@ -384,7 +404,7 @@ function ClientsListPage() {
           {!isLoading && totalPages > 1 && (
             <div className="flex items-center justify-between border-t px-4 py-2.5">
               <div className="text-xs text-muted-foreground">
-                Page {page} of {totalPages}
+                {t("clients:list.page", { page, total: totalPages })}
               </div>
               <div className="flex items-center gap-1">
                 <Button
@@ -393,7 +413,7 @@ function ClientsListPage() {
                   disabled={page === 1}
                   onClick={() => setPage((p) => Math.max(1, p - 1))}
                 >
-                  Previous
+                  {t("common:actions.previous")}
                 </Button>
                 {getPageNumbers(page, totalPages).map((p, i) =>
                   p === "ellipsis" ? (
@@ -418,7 +438,7 @@ function ClientsListPage() {
                   disabled={page === totalPages}
                   onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                 >
-                  Next
+                  {t("common:actions.next")}
                 </Button>
               </div>
             </div>
@@ -440,21 +460,23 @@ function ClientsListPage() {
       <AlertDialog open={!!archiveTarget} onOpenChange={(o) => !o && setArchiveTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Archive {archiveTarget?.name}?</AlertDialogTitle>
-            <AlertDialogDescription>
-              They'll be hidden from your active client list, but all their plans, appointments,
-              billing history, and journal entries stay intact. You can restore them anytime from
-              the "Archived" view.
-            </AlertDialogDescription>
+            <AlertDialogTitle>
+              {t("clients:list.archiveTitle", { name: archiveTarget?.name ?? "" })}
+            </AlertDialogTitle>
+            <AlertDialogDescription>{t("clients:list.archiveBody")}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={archiveMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={archiveMutation.isPending}>
+              {t("common:actions.cancel")}
+            </AlertDialogCancel>
             <AlertDialogAction
               className="bg-rose-600 text-white hover:bg-rose-700"
               disabled={archiveMutation.isPending}
               onClick={() => archiveTarget && archiveMutation.mutate(archiveTarget.id)}
             >
-              {archiveMutation.isPending ? "Archiving…" : "Archive"}
+              {archiveMutation.isPending
+                ? t("clients:list.archiving")
+                : t("clients:list.archiveConfirm")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

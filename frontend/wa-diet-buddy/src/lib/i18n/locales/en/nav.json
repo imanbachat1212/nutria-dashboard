@@ -1,0 +1,34 @@
+{
+  "brand": "Nutria",
+  "brandTagline": "Dietitian dashboard",
+  "signedIn": "Signed in",
+  "groups": {
+    "practice": "Practice",
+    "nutrition": "Nutrition",
+    "operations": "Operations",
+    "admin": "Admin"
+  },
+  "items": {
+    "overview": "Overview",
+    "clients": "Clients",
+    "leads": "Leads",
+    "messages": "Messages",
+    "appointments": "Appointments",
+    "mealPlans": "Meal Plans",
+    "mealTemplates": "Meal Templates",
+    "mealLibrary": "Meal Library",
+    "foodDatabase": "Food Database",
+    "journalReview": "Journal Review",
+    "reports": "Reports",
+    "billing": "Billing",
+    "cms": "Website / CMS",
+    "team": "Team & Access",
+    "settings": "Settings"
+  },
+  "topbar": {
+    "language": "Language",
+    "languageChange": "Change language",
+    "notifications": "Notifications",
+    "toggleSidebar": "Toggle sidebar"
+  }
+}

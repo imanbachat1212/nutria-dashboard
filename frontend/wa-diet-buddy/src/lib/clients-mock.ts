@@ -176,11 +176,13 @@ export function calcBMI(c: ClientRecord) {
   return bmi(c.heightCm, c.weightKg);
 }
 
+// `labelKey` indexes clients.detail.bmiBand in the locale files. The English `label` stays so
+// any caller that has not been localised yet keeps rendering real text rather than a key.
 export function bmiBand(value: number) {
-  if (value < 18.5) return { label: "Underweight", tone: "info" as const };
-  if (value < 25) return { label: "Healthy", tone: "success" as const };
-  if (value < 30) return { label: "Overweight", tone: "warning" as const };
-  return { label: "Obese", tone: "destructive" as const };
+  if (value < 18.5) return { label: "Underweight", labelKey: "underweight", tone: "info" as const };
+  if (value < 25) return { label: "Healthy", labelKey: "healthy", tone: "success" as const };
+  if (value < 30) return { label: "Overweight", labelKey: "overweight", tone: "warning" as const };
+  return { label: "Obese", labelKey: "obese", tone: "destructive" as const };
 }
 
 export const CLIENTS: ClientRecord[] = [
@@ -535,6 +537,9 @@ export function getClient(id: string) {
   return CLIENTS.find((c) => c.id === id);
 }
 
+// Now the canonical list of service-type KEYS; the displayed text comes from
+// clients.serviceType.* in the locale files. The English values below are the fallback for any
+// caller that has not been localised.
 export const SERVICE_TYPE_LABEL: Record<ServiceType, string> = {
   diet: "Diet",
   gym: "Gym",

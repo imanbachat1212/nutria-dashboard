@@ -1,5 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import {
   Users,
   CalendarDays,
@@ -26,7 +28,7 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useAuth } from "@/lib/auth-context";
-import { relativeTime } from "@/lib/mealplans-api";
+import { ltrIsolate, useFormatters, useRelativeTime } from "@/lib/i18n/format";
 import {
   fetchOverview,
   type ActivityType,
@@ -55,24 +57,43 @@ export const Route = createFileRoute("/")({
 // so the eyebrow can't name a different day from the numbers underneath it. Parsed without a `Z`
 // on purpose: that makes it a local midnight, which formats back to the same calendar date instead
 // of shifting a day for viewers behind UTC.
-function formatEyebrow(ymd: string | undefined): string {
+function formatEyebrow(ymd: string | undefined, fmt: ReturnType<typeof useFormatters>): string {
   const d = ymd ? new Date(`${ymd}T00:00:00`) : new Date();
-  return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+  // Was pinned to "en-US", which would have left this one line English on an Arabic page.
+  return fmt.date(d, { weekday: "long", month: "long", day: "numeric" });
 }
 
-function greeting(name: string | undefined): string {
+function greeting(name: string | undefined, t: TFunction): string {
   const h = new Date().getHours();
   const part = h < 12 ? "morning" : h < 18 ? "afternoon" : "evening";
   // The mock hardcoded "Good morning, Sura." — the name now comes from the logged-in user (already
   // in AuthProvider's context from /api/auth/me, so this costs no extra request) and the time of
   // day is real. First name only, which is how the greeting always read.
+  //
+  // Six keys rather than "Good {{part}}, {{name}}": Arabic has no shared "Good ___" frame — the
+  // morning and evening greetings are unrelated phrases ("صباح الخير" / "مساء الخير"), and the
+  // afternoon one is a different construction again. Interpolating the time of day would produce
+  // nonsense in exactly the way machine translation does.
   const first = name?.trim().split(/\s+/)[0];
-  return first ? `Good ${part}, ${first}.` : `Good ${part}.`;
+  return first
+    ? t(`overview:greeting.${part}`, { name: first })
+    : t(`overview:greeting.${part}NoName`);
 }
 
 // ── Stat row ───────────────────────────────────────────────────────────────────────────────────
 
-function TrendBadge({ trend, noun, windowDays }: { trend: OverviewTrend | null; noun: string; windowDays: number }) {
+function TrendBadge({
+  trend,
+  labelKey,
+  windowDays,
+}: {
+  trend: OverviewTrend | null;
+  // A whole-sentence key instead of the old `noun` fragment: "+3 new in 7d" cannot be assembled
+  // from parts in Arabic, where the number, the noun and the window all move.
+  labelKey: "trendNew" | "trendVsPrior";
+  windowDays: number;
+}) {
+  const { t } = useTranslation("overview");
   // No honest comparison, no badge. Deliberately renders nothing rather than a "+0" or a
   // percentage over a zero baseline.
   if (!trend) return null;
@@ -87,8 +108,9 @@ function TrendBadge({ trend, noun, windowDays }: { trend: OverviewTrend | null; 
   return (
     <Badge variant="secondary" className={`gap-1 border-0 font-medium ${tone}`}>
       <Icon className="h-3 w-3" />
-      {sign}
-      {trend.delta} {noun} in {windowDays}d
+      {/* The sign travels INSIDE the isolated delta — "+3" / "-3" is one left-to-right token,
+          not a neutral "+" that bidi can strand on the wrong side of the digits. */}
+      {t(`stats.${labelKey}`, { delta: ltrIsolate(`${sign}${trend.delta}`), days: windowDays })}
     </Badge>
   );
 }
@@ -127,25 +149,31 @@ function StatCard({
 
 // "1,352 USDA + 81 Lebanese" — custom only appears once something is actually in it, so the hint
 // doesn't advertise an empty bucket.
-function foodsHint(bySource: Overview["stats"]["foods"]["bySource"]): string {
+function foodsHint(
+  bySource: Overview["stats"]["foods"]["bySource"],
+  t: TFunction,
+  fmt: ReturnType<typeof useFormatters>,
+): string {
   const parts = [
-    bySource.usda ? `${bySource.usda.toLocaleString()} USDA` : null,
-    bySource.lebanese ? `${bySource.lebanese} Lebanese` : null,
-    bySource.custom ? `${bySource.custom} custom` : null,
+    bySource.usda ? t("overview:foodsHint.usda", { count: fmt.number(bySource.usda) }) : null,
+    bySource.lebanese ? t("overview:foodsHint.lebanese", { count: bySource.lebanese }) : null,
+    bySource.custom ? t("overview:foodsHint.custom", { count: bySource.custom }) : null,
   ].filter(Boolean);
-  return parts.length ? parts.join(" + ") : "no foods yet";
+  return parts.length ? parts.join(" + ") : t("overview:foodsHint.empty");
 }
 
 // ── Activity feed ──────────────────────────────────────────────────────────────────────────────
 
 // type → icon + wording, mapped here rather than sent from the backend: the payload carries a
 // stable `type` string and this file owns how it reads.
-const ACTIVITY_META: Record<ActivityType, { icon: React.ComponentType<{ className?: string }>; action: string }> = {
-  "journal-meal": { icon: Utensils, action: "logged a meal" },
-  "journal-exercise": { icon: Dumbbell, action: "logged activity" },
-  "lead-new": { icon: UserPlus, action: "came in as a new lead" },
-  "message-inbound": { icon: MessageSquare, action: "sent a message" },
-  "appointment-booked": { icon: CalendarDays, action: "booked an appointment" },
+// `actionKey` into the `overview` namespace — the TYPE strings on the left are API values and
+// stay exactly as the backend sends them.
+const ACTIVITY_META: Record<ActivityType, { icon: React.ComponentType<{ className?: string }>; actionKey: string }> = {
+  "journal-meal": { icon: Utensils, actionKey: "activity.journalMeal" },
+  "journal-exercise": { icon: Dumbbell, actionKey: "activity.journalExercise" },
+  "lead-new": { icon: UserPlus, actionKey: "activity.leadNew" },
+  "message-inbound": { icon: MessageSquare, actionKey: "activity.messageInbound" },
+  "appointment-booked": { icon: CalendarDays, actionKey: "activity.appointmentBooked" },
 };
 
 // Appointment times read in UTC, deliberately.
@@ -176,8 +204,7 @@ function initialsOf(name: string): string {
 
 function AttentionRow({
   count,
-  singular,
-  plural,
+  countKey,
   description,
   to,
   linkLabel,
@@ -185,14 +212,17 @@ function AttentionRow({
   tone,
 }: {
   count: number;
-  singular: string;
-  plural: string;
+  // One i18next plural key replaces the old singular/plural prop pair. English picks between two
+  // forms; Arabic picks between six, including a dual for exactly 2 — a caller-side
+  // `count === 1 ? singular : plural` can never express that.
+  countKey: string;
   description: string;
   to: string;
   linkLabel: string;
   icon: React.ComponentType<{ className?: string }>;
   tone: "warning" | "info" | "muted";
 }) {
+  const { t } = useTranslation("overview");
   // A zero is not something that needs attention, so the row is simply absent rather than shown
   // as a cheerful "0 flagged entries".
   if (count === 0) return null;
@@ -210,9 +240,7 @@ function AttentionRow({
       <div className="flex items-start gap-2.5">
         <Icon className={`h-4 w-4 mt-0.5 shrink-0 ${iconTone}`} />
         <div className="flex-1 space-y-0.5">
-          <p className="text-sm font-medium">
-            {count} {count === 1 ? singular : plural}
-          </p>
+          <p className="text-sm font-medium">{t(countKey, { count })}</p>
           <p className="text-xs text-muted-foreground">{description}</p>
         </div>
       </div>
@@ -226,6 +254,9 @@ function AttentionRow({
 // ── Page ───────────────────────────────────────────────────────────────────────────────────────
 
 function OverviewPage() {
+  const { t } = useTranslation(["overview", "common"]);
+  const fmt = useFormatters();
+  const relativeTime = useRelativeTime("weeks");
   const { user } = useAuth();
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["overview"],
@@ -249,18 +280,20 @@ function OverviewPage() {
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader
-        eyebrow={formatEyebrow(data?.today.date)}
-        title={greeting(user?.name)}
-        description="Here's what's happening across your practice today — clients, plans, and the WhatsApp queue at a glance."
+        eyebrow={formatEyebrow(data?.today.date, fmt)}
+        title={greeting(user?.name, t)}
+        description={t("overview:description")}
         actions={
           <>
             <Button variant="outline" size="sm" asChild>
-              <Link to="/journal">Review journal</Link>
+              <Link to="/journal">{t("overview:reviewJournal")}</Link>
             </Button>
             <Button size="sm" asChild>
               <Link to="/clients">
-                Open clients
-                <ArrowUpRight className="h-4 w-4" />
+                {t("overview:openClients")}
+                {/* A direction-carrying icon: it must point the other way in RTL, or it reads as
+                    "back" on a forward action. */}
+                <ArrowUpRight className="h-4 w-4 rtl:-scale-x-100" />
               </Link>
             </Button>
           </>
@@ -270,7 +303,7 @@ function OverviewPage() {
       {isError ? (
         <Card className="flex flex-col items-center gap-2 py-16 text-center text-sm text-destructive">
           <WifiOff className="size-8" />
-          {(error as Error)?.message || "Couldn't load your practice overview. Try again shortly."}
+          {(error as Error)?.message || t("overview:loadFailed")}
         </Card>
       ) : isLoading || !data || !stats || !logging || !attention ? (
         <div className="flex items-center justify-center py-24">
@@ -282,32 +315,42 @@ function OverviewPage() {
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <StatCard
               icon={Users}
-              label="Active clients"
-              value={stats.clients.active.toLocaleString()}
-              hint={`of ${stats.clients.total.toLocaleString()} total`}
+              label={t("overview:stats.activeClients")}
+              value={fmt.number(stats.clients.active)}
+              hint={t("overview:stats.activeClientsHint", { total: fmt.number(stats.clients.total) })}
               badge={
-                <TrendBadge trend={stats.clients.trend} noun="new" windowDays={stats.clients.trendWindowDays} />
+                <TrendBadge
+                  trend={stats.clients.trend}
+                  labelKey="trendNew"
+                  windowDays={stats.clients.trendWindowDays}
+                />
               }
             />
             <StatCard
               icon={CalendarDays}
-              label="Active meal plans"
-              value={stats.mealPlans.active.toLocaleString()}
-              hint={`of ${stats.mealPlans.total.toLocaleString()} total`}
+              label={t("overview:stats.activePlans")}
+              value={fmt.number(stats.mealPlans.active)}
+              hint={t("overview:stats.activePlansHint", {
+                total: fmt.number(stats.mealPlans.total),
+              })}
             />
             <StatCard
               icon={Database}
-              label="Foods in database"
-              value={stats.foods.total.toLocaleString()}
-              hint={foodsHint(stats.foods.bySource)}
+              label={t("overview:stats.foods")}
+              value={fmt.number(stats.foods.total)}
+              hint={foodsHint(stats.foods.bySource, t, fmt)}
             />
             <StatCard
               icon={UserPlus}
-              label="New leads"
-              value={stats.leads.last7Days.toLocaleString()}
-              hint={`in last ${stats.leads.trendWindowDays} days`}
+              label={t("overview:stats.newLeads")}
+              value={fmt.number(stats.leads.last7Days)}
+              hint={t("overview:stats.newLeadsHint", { days: stats.leads.trendWindowDays })}
               badge={
-                <TrendBadge trend={stats.leads.trend} noun="vs prior" windowDays={stats.leads.trendWindowDays} />
+                <TrendBadge
+                  trend={stats.leads.trend}
+                  labelKey="trendVsPrior"
+                  windowDays={stats.leads.trendWindowDays}
+                />
               }
             />
           </div>
@@ -318,29 +361,36 @@ function OverviewPage() {
             <Card className="lg:col-span-2 border-border/70 shadow-soft">
               <CardHeader className="flex flex-row items-start justify-between space-y-0">
                 <div>
-                  <CardTitle className="font-display text-lg">Logged a meal today</CardTitle>
+                  <CardTitle className="font-display text-lg">
+                    {t("overview:logging.title")}
+                  </CardTitle>
                   <CardDescription>
-                    Across your active roster · {data.today.timeZone.replace("_", " ")} day
+                    {t("overview:logging.subtitle", {
+                      timeZone: data.today.timeZone.replace("_", " "),
+                    })}
                   </CardDescription>
                 </div>
                 <Button variant="ghost" size="sm" className="text-primary" asChild>
                   <Link to="/journal">
-                    Open journal
-                    <ArrowUpRight className="h-3.5 w-3.5" />
+                    {t("overview:logging.openJournal")}
+                    <ArrowUpRight className="h-3.5 w-3.5 rtl:-scale-x-100" />
                   </Link>
                 </Button>
               </CardHeader>
               <CardContent className="space-y-5">
                 <div className="space-y-2">
                   <p className="font-display text-3xl font-semibold tracking-tight">
-                    {logging.loggedToday}
-                    <span className="text-lg text-muted-foreground"> of {logging.activeClients}</span>
+                    {fmt.number(logging.loggedToday)}
+                    <span className="text-lg text-muted-foreground">
+                      {" "}
+                      {t("overview:logging.ofTotal", { total: fmt.number(logging.activeClients) })}
+                    </span>
                   </p>
                   <Progress value={loggedPct} className="h-2" />
                   <p className="text-xs text-muted-foreground">
                     {logging.activeClients === 0
-                      ? "No active clients on the roster yet."
-                      : `${loggedPct}% of active clients have logged a meal today.`}
+                      ? t("overview:logging.noActiveClients")
+                      : t("overview:logging.percentLogged", { percent: loggedPct })}
                   </p>
                 </div>
 
@@ -349,14 +399,14 @@ function OverviewPage() {
                     <CheckCircle2 className="h-4 w-4 shrink-0 text-success" />
                     <p className="text-sm">
                       {logging.activeClients === 0
-                        ? "Nothing to track yet — add your first client to get started."
-                        : "Everyone on the roster has logged today."}
+                        ? t("overview:logging.nothingToTrack")
+                        : t("overview:logging.everyoneLogged")}
                     </p>
                   </div>
                 ) : (
                   <div className="space-y-2">
                     <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                      Not logged yet · longest quiet first
+                      {t("overview:logging.notLoggedHeading")}
                     </p>
                     <ul className="divide-y divide-border">
                       {logging.notLogged.map((c) => (
@@ -368,7 +418,11 @@ function OverviewPage() {
                           </Avatar>
                           <p className="flex-1 min-w-0 truncate text-sm font-medium">{c.name}</p>
                           <span className="whitespace-nowrap text-xs text-muted-foreground">
-                            {c.lastLoggedAt ? `last logged ${relativeTime(c.lastLoggedAt)}` : "never logged"}
+                            {c.lastLoggedAt
+                              ? t("overview:logging.lastLogged", {
+                                  when: relativeTime(c.lastLoggedAt),
+                                })
+                              : t("overview:logging.neverLogged")}
                           </span>
                         </li>
                       ))}
@@ -377,7 +431,12 @@ function OverviewPage() {
                     {logging.notLoggedCount > logging.notLogged.length && (
                       <Button variant="link" size="sm" className="h-auto p-0 text-primary" asChild>
                         <Link to="/clients">
-                          +{logging.notLoggedCount - logging.notLogged.length} more — open clients
+                          {t("overview:logging.moreClients", {
+                            count: logging.notLoggedCount - logging.notLogged.length,
+                            isolated: ltrIsolate(
+                              `+${logging.notLoggedCount - logging.notLogged.length}`,
+                            ),
+                          })}
                         </Link>
                       </Button>
                     )}
@@ -390,17 +449,19 @@ function OverviewPage() {
             <Card className="border-border/70 shadow-soft">
               <CardHeader className="flex flex-row items-start justify-between space-y-0">
                 <div>
-                  <CardTitle className="font-display text-lg">Today's calendar</CardTitle>
+                  <CardTitle className="font-display text-lg">
+                    {t("overview:calendar.title")}
+                  </CardTitle>
                   <CardDescription>
                     {data.appointmentsToday.length === 0
-                      ? "Nothing booked"
-                      : `${data.appointmentsToday.length} appointment${data.appointmentsToday.length === 1 ? "" : "s"}`}
+                      ? t("overview:calendar.nothingBooked")
+                      : t("overview:calendar.count", { count: data.appointmentsToday.length })}
                   </CardDescription>
                 </div>
                 <Button variant="ghost" size="sm" className="text-primary" asChild>
                   <Link to="/appointments">
-                    All
-                    <ArrowUpRight className="h-3.5 w-3.5" />
+                    {t("overview:calendar.all")}
+                    <ArrowUpRight className="h-3.5 w-3.5 rtl:-scale-x-100" />
                   </Link>
                 </Button>
               </CardHeader>
@@ -409,12 +470,12 @@ function OverviewPage() {
                   // An empty day is a normal, expected state — not an error and not a blank list.
                   <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-border py-10 text-center">
                     <CalendarDays className="size-7 text-muted-foreground/50" />
-                    <p className="text-sm font-medium">No appointments today</p>
+                    <p className="text-sm font-medium">{t("overview:calendar.emptyTitle")}</p>
                     <p className="max-w-[16rem] text-xs text-muted-foreground">
-                      Your calendar is clear. Book a consultation from the Appointments page.
+                      {t("overview:calendar.emptyBody")}
                     </p>
                     <Button variant="link" size="sm" className="h-auto p-0 text-primary" asChild>
-                      <Link to="/appointments">Open calendar</Link>
+                      <Link to="/appointments">{t("overview:calendar.openCalendar")}</Link>
                     </Button>
                   </div>
                 ) : (
@@ -437,13 +498,16 @@ function OverviewPage() {
                           <p className="truncate text-sm font-medium">{a.title}</p>
                           <p className="text-xs text-muted-foreground">{a.subtitle}</p>
                         </div>
+                        {/* Was `{a.category}` with CSS `capitalize` — i.e. the raw API enum shown
+                            to the user. Now a key lookup, so the enum VALUE stays "gym"/"diet"
+                            for the API and only the display text changes. */}
                         <Badge
                           variant="outline"
-                          className={`text-[10px] capitalize ${
+                          className={`text-[10px] ${
                             a.category === "gym" ? "border-accent-foreground/20 text-accent-foreground" : ""
                           }`}
                         >
-                          {a.category}
+                          {t(`overview:category.${a.category}`)}
                         </Badge>
                       </li>
                     ))}
@@ -459,15 +523,15 @@ function OverviewPage() {
             <Card className="lg:col-span-2 border-border/70 shadow-soft">
               <CardHeader className="flex flex-row items-start justify-between space-y-0">
                 <div>
-                  <CardTitle className="font-display text-lg">Recent activity</CardTitle>
-                  <CardDescription>
-                    WhatsApp logs, replies and bookings from across your clients
-                  </CardDescription>
+                  <CardTitle className="font-display text-lg">
+                    {t("overview:activity.title")}
+                  </CardTitle>
+                  <CardDescription>{t("overview:activity.subtitle")}</CardDescription>
                 </div>
                 <Button variant="ghost" size="sm" className="text-primary" asChild>
                   <Link to="/messages">
-                    Open messages
-                    <ArrowUpRight className="h-3.5 w-3.5" />
+                    {t("overview:activity.openMessages")}
+                    <ArrowUpRight className="h-3.5 w-3.5 rtl:-scale-x-100" />
                   </Link>
                 </Button>
               </CardHeader>
@@ -475,10 +539,9 @@ function OverviewPage() {
                 {data.activity.length === 0 ? (
                   <div className="flex flex-col items-center gap-2 py-12 text-center">
                     <Activity className="size-7 text-muted-foreground/50" />
-                    <p className="text-sm font-medium">No activity yet</p>
+                    <p className="text-sm font-medium">{t("overview:activity.emptyTitle")}</p>
                     <p className="max-w-sm text-xs text-muted-foreground">
-                      Meal logs, inbound WhatsApp messages, new leads and bookings will appear here as
-                      they happen.
+                      {t("overview:activity.emptyBody")}
                     </p>
                   </div>
                 ) : (
@@ -496,7 +559,9 @@ function OverviewPage() {
                           <div className="min-w-0 flex-1">
                             <p className="text-sm">
                               <span className="font-medium">{a.clientName}</span>{" "}
-                              <span className="text-muted-foreground">{meta?.action ?? "activity"}</span>
+                              <span className="text-muted-foreground">
+                                {meta ? t(`overview:${meta.actionKey}`) : t("overview:activity.fallback")}
+                              </span>
                             </p>
                             <p className="truncate text-xs text-muted-foreground">{a.meta}</p>
                           </div>
@@ -515,8 +580,10 @@ function OverviewPage() {
             {/* Needs attention */}
             <Card className="border-border/70 shadow-soft">
               <CardHeader>
-                <CardTitle className="font-display text-lg">Needs attention</CardTitle>
-                <CardDescription>Quality control flags from automated logging</CardDescription>
+                <CardTitle className="font-display text-lg">
+                  {t("overview:attention.title")}
+                </CardTitle>
+                <CardDescription>{t("overview:attention.subtitle")}</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
                 {allClear ? (
@@ -524,41 +591,39 @@ function OverviewPage() {
                   // nothing is outstanding the card says so, once.
                   <div className="flex flex-col items-center gap-2 rounded-lg border border-success/30 bg-success/10 py-10 text-center">
                     <CheckCircle2 className="size-7 text-success" />
-                    <p className="text-sm font-medium">All clear</p>
+                    <p className="text-sm font-medium">{t("overview:attention.allClearTitle")}</p>
                     <p className="max-w-[15rem] text-xs text-muted-foreground">
-                      Nothing needs attention right now — no flagged entries, no unanswered replies,
-                      no new leads waiting.
+                      {t("overview:attention.allClearBody")}
                     </p>
                   </div>
                 ) : (
                   <>
                     <AttentionRow
                       count={attention.flaggedEntries}
-                      singular="flagged entry"
-                      plural="flagged entries"
-                      description="AI flagged something unusual — needs a spot check."
+                      countKey="attention.flagged"
+                      description={t("overview:attention.flaggedDescription")}
                       to="/journal"
-                      linkLabel="Review entries"
+                      linkLabel={t("overview:attention.flaggedLink")}
                       icon={AlertCircle}
                       tone="warning"
                     />
                     <AttentionRow
                       count={attention.unreadConversations}
-                      singular="conversation awaiting a reply"
-                      plural="conversations awaiting a reply"
-                      description="Clients whose last message hasn't been answered."
+                      countKey="attention.unread"
+                      description={t("overview:attention.unreadDescription")}
                       to="/messages"
-                      linkLabel="Open inbox"
+                      linkLabel={t("overview:attention.unreadLink")}
                       icon={MessageSquare}
                       tone="info"
                     />
                     <AttentionRow
                       count={attention.newLeads}
-                      singular="new lead"
-                      plural="new leads"
-                      description={`From inquiries in the last ${stats.leads.trendWindowDays} days — ready to qualify.`}
+                      countKey="attention.leads"
+                      description={t("overview:attention.leadsDescription", {
+                        days: stats.leads.trendWindowDays,
+                      })}
                       to="/leads"
-                      linkLabel="View pipeline"
+                      linkLabel={t("overview:attention.leadsLink")}
                       icon={UserPlus}
                       tone="muted"
                     />

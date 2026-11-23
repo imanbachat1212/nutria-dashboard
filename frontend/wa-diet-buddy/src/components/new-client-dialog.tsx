@@ -26,6 +26,7 @@ import {
   Loader2,
   X,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -83,28 +84,32 @@ interface NewClientDialogProps {
 }
 
 const STEPS = [
-  { id: 1, label: "Profile" },
-  { id: 2, label: "Body & goals" },
-  { id: 3, label: "Lifestyle" },
-  { id: 4, label: "Targets & review" },
+  { id: 1, labelKey: "newClient_dialog.stepProfile" },
+  { id: 2, labelKey: "newClient_dialog.stepBody" },
+  { id: 3, labelKey: "newClient_dialog.stepLifestyle" },
+  { id: 4, labelKey: "newClient_dialog.stepTargets" },
 ];
 
+// Values are what gets stored; the text is a key into clients.newClient_dialog.activity.*.
 const ACTIVITY_OPTIONS = [
-  { value: 1.2, label: "Sedentary (desk job)" },
-  { value: 1.375, label: "Light (1–2 days/week)" },
-  { value: 1.55, label: "Moderate (3–5 days/week)" },
-  { value: 1.725, label: "Active (6–7 days/week)" },
-  { value: 1.9, label: "Very active (physical job)" },
+  { value: 1.2, labelKey: "sedentary" },
+  { value: 1.375, labelKey: "light" },
+  { value: 1.55, labelKey: "moderate" },
+  { value: 1.725, labelKey: "active" },
+  { value: 1.9, labelKey: "veryActive" },
 ];
 
-const GOAL_TYPES: { value: ClientGoal["type"]; label: string; deficit: number }[] = [
-  { value: "weight-loss", label: "Weight loss", deficit: -500 },
-  { value: "muscle-gain", label: "Muscle gain", deficit: 300 },
-  { value: "maintenance", label: "Maintenance", deficit: 0 },
-  { value: "clinical", label: "Clinical / other", deficit: 0 },
+// `deficit` is the kcal adjustment applied to TDEE — unchanged. The label moved to
+// clients.newClient_dialog.goalType.*, keyed by the same API value.
+const GOAL_TYPES: { value: ClientGoal["type"]; deficit: number }[] = [
+  { value: "weight-loss", deficit: -500 },
+  { value: "muscle-gain", deficit: 300 },
+  { value: "maintenance", deficit: 0 },
+  { value: "clinical", deficit: 0 },
 ];
 
 export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientDialogProps) {
+  const { t } = useTranslation(["clients", "common"]);
   const queryClient = useQueryClient();
   const isEdit = !!editClientId;
   const [loadingEdit, setLoadingEdit] = useState(false);
@@ -435,7 +440,8 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
     } catch (err) {
       console.error(isEdit ? "Failed to save client changes:" : "Failed to create client:", err);
       toast.error(
-        err instanceof Error ? err.message : "Couldn't save client — please check the form and try again",
+        // The server's own message wins; this is only the fallback for a non-Error throw.
+        err instanceof Error ? err.message : t("clients:newClient_dialog.saveFailed"),
       );
     } finally {
       setSaving(false);
@@ -460,11 +466,15 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
         onPointerDownOutside={(e) => e.preventDefault()}
       >
         <DialogHeader>
-          <DialogTitle>{isEdit ? "Edit client" : "New client"}</DialogTitle>
+          <DialogTitle>
+            {isEdit
+              ? t("clients:newClient_dialog.titleEdit")
+              : t("clients:newClient_dialog.titleNew")}
+          </DialogTitle>
           <DialogDescription>
             {isEdit
-              ? "Update this client's profile, anthropometrics, goals, and macro targets."
-              : "Add a new client record with anthropometrics, goals, and macro targets."}
+              ? t("clients:newClient_dialog.subtitleEdit")
+              : t("clients:newClient_dialog.subtitleNew")}
           </DialogDescription>
         </DialogHeader>
 
@@ -496,7 +506,7 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
                   step === s.id ? "text-foreground" : "text-muted-foreground",
                 )}
               >
-                {s.label}
+                {t(`clients:${s.labelKey}`)}
               </div>
               {i < STEPS.length - 1 && <Separator className="flex-1" />}
             </div>
@@ -508,20 +518,20 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2 space-y-1.5">
-                  <Label htmlFor="name">Full name *</Label>
+                  <Label htmlFor="name">{t("clients:newClient_dialog.fullName")}</Label>
                   <div className="relative">
-                    <User className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <User className="absolute start-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
                       id="name"
                       value={name}
                       onChange={(e) => setName(e.target.value)}
-                      placeholder="e.g. Sura Haddad"
-                      className="pl-8"
+                      placeholder={t("clients:newClient_dialog.namePlaceholder")}
+                      className="ps-8"
                     />
                   </div>
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="phone">Phone *</Label>
+                  <Label htmlFor="phone">{t("clients:newClient_dialog.phone")}</Label>
                   <PhoneInput
                     id="phone"
                     value={phone}
@@ -530,29 +540,33 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
                   />
                   {phone.trim() !== "" && !isValidPhoneNumber(phone) && (
                     <p className="text-xs text-destructive">
-                      Enter a valid number for the selected country.
+                      {t("clients:newClient_dialog.phoneInvalid")}
                     </p>
                   )}
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="email">Email</Label>
+                  <Label htmlFor="email">{t("clients:newClient_dialog.email")}</Label>
                   <div className="relative">
-                    <Mail className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Mail className="absolute start-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
                       id="email"
                       type="email"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      placeholder="name@example.com"
-                      className="pl-8"
+                      placeholder={t("clients:newClient_dialog.emailPlaceholder")}
+                      // Latin-only token: forced LTR on the Arabic page.
+                      dir="ltr"
+                      className="ps-8"
                     />
                   </div>
                 </div>
                 <div className="col-span-2 space-y-1.5">
                   <Label>
-                    Program
+                    {t("clients:newClient_dialog.program")}
                     {serviceTypes.length === 0 && (
-                      <span className="ml-1.5 text-xs font-normal text-muted-foreground">(none selected)</span>
+                      <span className="ms-1.5 text-xs font-normal text-muted-foreground">
+                        {t("clients:newClient_dialog.noneSelected")}
+                      </span>
                     )}
                   </Label>
                   <div className="flex gap-2">
@@ -574,22 +588,22 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
                               : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
                           )}
                         >
-                          {SERVICE_TYPE_LABEL[s]}
+                          {t(`clients:serviceType.${s}`)}
                         </button>
                       );
                     })}
                   </div>
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Status</Label>
+                  <Label>{t("clients:newClient_dialog.status")}</Label>
                   <Select value={status} onValueChange={(v) => setStatus(v as ClientStatus)}>
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="active">Active</SelectItem>
-                      <SelectItem value="paused">Paused</SelectItem>
-                      <SelectItem value="lead">Lead</SelectItem>
+                      <SelectItem value="active">{t("clients:status.active")}</SelectItem>
+                      <SelectItem value="paused">{t("clients:status.paused")}</SelectItem>
+                      <SelectItem value="lead">{t("clients:status.lead")}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -601,7 +615,7 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
             <div className="space-y-4">
               <div className="grid grid-cols-4 gap-3">
                 <div className="space-y-1.5">
-                  <Label htmlFor="age">Age</Label>
+                  <Label htmlFor="age">{t("clients:newClient_dialog.age")}</Label>
                   <Input
                     id="age"
                     type="number"
@@ -611,48 +625,48 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Sex</Label>
+                  <Label>{t("clients:newClient_dialog.sex")}</Label>
                   <Select value={sex} onValueChange={(v) => setSex(v as "F" | "M")}>
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="F">Female</SelectItem>
-                      <SelectItem value="M">Male</SelectItem>
+                      <SelectItem value="F">{t("clients:newClient_dialog.sexFemale")}</SelectItem>
+                      <SelectItem value="M">{t("clients:newClient_dialog.sexMale")}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="height">Height (cm)</Label>
+                  <Label htmlFor="height">{t("clients:newClient_dialog.height")}</Label>
                   <div className="relative">
-                    <Ruler className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Ruler className="absolute start-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
                       id="height"
                       type="number"
                       value={heightCm}
                       onChange={(e) => setHeightCm(e.target.value)}
-                      placeholder="e.g. 165"
-                      className="pl-8"
+                      placeholder={t("clients:newClient_dialog.heightPlaceholder")}
+                      className="ps-8"
                     />
                   </div>
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="weight">Weight (kg)</Label>
+                  <Label htmlFor="weight">{t("clients:newClient_dialog.weight")}</Label>
                   <div className="relative">
-                    <Weight className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Weight className="absolute start-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
                       id="weight"
                       type="number"
                       step={0.1}
                       value={weightKg}
                       onChange={(e) => setWeightKg(e.target.value)}
-                      placeholder="e.g. 70"
-                      className="pl-8"
+                      placeholder={t("clients:newClient_dialog.weightPlaceholder")}
+                      className="ps-8"
                     />
                   </div>
                   {!isEdit && (
                     <p className="text-[11px] text-muted-foreground">
-                      Used as their starting weight too.
+                      {t("clients:newClient_dialog.weightIsStart")}
                     </p>
                   )}
                 </div>
@@ -661,7 +675,7 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
               {sex === "F" && (
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
-                    <Label>Life stage</Label>
+                    <Label>{t("clients:newClient_dialog.lifeStage")}</Label>
                     <Select
                       value={lifeStage}
                       onValueChange={(v) => setLifeStage(v as LifeStage)}
@@ -670,13 +684,13 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="none">None</SelectItem>
-                        <SelectItem value="pregnant">Pregnant</SelectItem>
-                        <SelectItem value="lactating">Lactating</SelectItem>
+                        <SelectItem value="none">{t("clients:newClient_dialog.lifeStageNone")}</SelectItem>
+                        <SelectItem value="pregnant">{t("clients:newClient_dialog.lifeStagePregnant")}</SelectItem>
+                        <SelectItem value="lactating">{t("clients:newClient_dialog.lifeStageLactating")}</SelectItem>
                       </SelectContent>
                     </Select>
                     <p className="text-[11px] text-muted-foreground">
-                      Adjusts DRI vitamin/mineral targets for pregnancy or lactation.
+                      {t("clients:newClient_dialog.lifeStageHint")}
                     </p>
                   </div>
                 </div>
@@ -690,33 +704,33 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
                     started, so this becomes its own editable field again. */}
                 {isEdit && (
                   <div className="space-y-1.5">
-                    <Label htmlFor="startWeight">Start weight (kg)</Label>
+                    <Label htmlFor="startWeight">{t("clients:newClient_dialog.startWeight")}</Label>
                     <Input
                       id="startWeight"
                       type="number"
                       step={0.1}
                       value={startWeightKg}
                       onChange={(e) => setStartWeightKg(e.target.value)}
-                      placeholder="e.g. 78"
+                      placeholder={t("clients:newClient_dialog.startWeightPlaceholder")}
                     />
                   </div>
                 )}
                 <div className="space-y-1.5">
-                  <Label htmlFor="targetWeight">Target weight (kg)</Label>
+                  <Label htmlFor="targetWeight">{t("clients:newClient_dialog.targetWeight")}</Label>
                   <Input
                     id="targetWeight"
                     type="number"
                     step={0.1}
                     value={targetWeightKg}
                     onChange={(e) => setTargetWeightKg(e.target.value)}
-                    placeholder="e.g. 64"
+                    placeholder={t("clients:newClient_dialog.targetWeightPlaceholder")}
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
-                  <Label>Activity level</Label>
+                  <Label>{t("clients:newClient_dialog.activityLevel")}</Label>
                   <Select
                     value={activityFactor.toString()}
                     onValueChange={(v) => setActivityFactor(Number(v))}
@@ -728,14 +742,14 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
                     <SelectContent>
                       {ACTIVITY_OPTIONS.map((opt) => (
                         <SelectItem key={opt.value} value={opt.value.toString()}>
-                          {opt.label}
+                          {t(`clients:newClient_dialog.activity.${opt.labelKey}`)}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Goal</Label>
+                  <Label>{t("clients:newClient_dialog.goal")}</Label>
                   <Select
                     value={goalType}
                     onValueChange={(v) => setGoalType(v as ClientGoal["type"])}
@@ -747,7 +761,7 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
                     <SelectContent>
                       {GOAL_TYPES.map((g) => (
                         <SelectItem key={g.value} value={g.value}>
-                          {g.label}
+                          {t(`clients:newClient_dialog.goalType.${g.value}`)}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -757,15 +771,15 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
-                  <Label htmlFor="targetDate">Target date</Label>
+                  <Label htmlFor="targetDate">{t("clients:newClient_dialog.targetDate")}</Label>
                   <div className="relative">
-                    <Calendar className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Calendar className="absolute start-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
                       id="targetDate"
                       type="date"
                       value={targetDate}
                       onChange={(e) => setTargetDate(e.target.value)}
-                      className="pl-8"
+                      className="ps-8"
                     />
                   </div>
                 </div>
@@ -777,30 +791,30 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
-                  <Label htmlFor="occupation">Occupation</Label>
+                  <Label htmlFor="occupation">{t("clients:newClient_dialog.occupation")}</Label>
                   <div className="relative">
-                    <Briefcase className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Briefcase className="absolute start-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
                       id="occupation"
                       value={occupation}
                       onChange={(e) => setOccupation(e.target.value)}
-                      placeholder="e.g. Architect"
-                      className="pl-8"
+                      placeholder={t("clients:newClient_dialog.occupationPlaceholder")}
+                      className="ps-8"
                     />
                   </div>
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="sleep">Sleep hours</Label>
+                  <Label htmlFor="sleep">{t("clients:newClient_dialog.sleepHours")}</Label>
                   <div className="relative">
-                    <Moon className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Moon className="absolute start-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
                       id="sleep"
                       type="number"
                       step={0.5}
                       value={sleepHours}
                       onChange={(e) => setSleepHours(e.target.value)}
-                      placeholder="e.g. 7"
-                      className="pl-8"
+                      placeholder={t("clients:newClient_dialog.sleepPlaceholder")}
+                      className="ps-8"
                     />
                   </div>
                 </div>
@@ -808,13 +822,15 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
 
               <div className="space-y-1.5">
                 <Label className="flex items-center gap-1.5">
-                  <Apple className="size-4" /> Dietary preferences
+                  <Apple className="size-4" /> {t("clients:newClient_dialog.dietaryPrefs")}
                   {dietaryPrefs.length === 0 && (
-                    <span className="text-xs font-normal text-muted-foreground">(none selected)</span>
+                    <span className="text-xs font-normal text-muted-foreground">
+                      {t("clients:newClient_dialog.noneSelected")}
+                    </span>
                   )}
                 </Label>
                 {dietaryPreferencesLoading ? (
-                  <p className="text-xs text-muted-foreground">Loading options…</p>
+                  <p className="text-xs text-muted-foreground">{t("clients:newClient_dialog.loadingOptions")}</p>
                 ) : (
                   <div className="flex flex-wrap gap-1.5">
                     {dietaryPreferenceOptions.map((pref) => {
@@ -840,23 +856,23 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
               </div>
 
               <PillMultiSelectWithOther
-                label="Allergies"
+                label={t("clients:newClient_dialog.allergies")}
                 icon={AlertTriangle}
                 options={allergyOptions}
                 optionsLoading={allergyOptionsLoading}
                 selected={allergies}
                 onChange={setAllergies}
-                otherPlaceholder="Other allergy…"
+                otherPlaceholder={t("clients:newClient_dialog.otherAllergy")}
               />
 
               <PillMultiSelectWithOther
-                label="Medical history"
+                label={t("clients:newClient_dialog.medicalHistory")}
                 icon={Stethoscope}
                 options={medicalHistoryOptions}
                 optionsLoading={medicalHistoryOptionsLoading}
                 selected={medicalHistory}
                 onChange={setMedicalHistory}
-                otherPlaceholder="Other condition…"
+                otherPlaceholder={t("clients:newClient_dialog.otherCondition")}
               />
             </div>
           )}
@@ -865,27 +881,27 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
             <div className="space-y-4">
               <div className="rounded-lg border bg-muted/30 p-3">
                 <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
-                  <Calculator className="size-4" /> Estimated metabolism
+                  <Calculator className="size-4" /> {t("clients:newClient_dialog.metabolism")}
                 </div>
                 <div className="grid grid-cols-3 gap-2 text-xs">
-                  <StatBox label="BMR" value={`${bmr} kcal`} />
-                  <StatBox label="TDEE" value={`${tdee} kcal`} />
+                  {/* BMR / TDEE / BMI are kept as acronyms in both languages — see
+                      locales/ar/GLOSSARY.md. */}
+                  <StatBox label="BMR" value={t("common:units.kcalValue", { value: bmr })} />
+                  <StatBox label="TDEE" value={t("common:units.kcalValue", { value: tdee })} />
                   <StatBox
                     label="BMI"
                     value={heightN ? (weightN / (heightN / 100) ** 2).toFixed(1) : "—"}
                   />
                 </div>
                 <p className="mt-2 text-xs text-muted-foreground">
-                  Targets update automatically when you change body metrics or goals.
+                  {t("clients:newClient_dialog.targetsAutoUpdate")}
                 </p>
               </div>
 
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-sm font-semibold">Daily macro targets</h3>
-                  <p className="text-xs text-muted-foreground">
-                    Edit values if you want a custom split.
-                  </p>
+                  <h3 className="text-sm font-semibold">{t("clients:newClient_dialog.macroTargets")}</h3>
+                  <p className="text-xs text-muted-foreground">{t("clients:newClient_dialog.macroHint")}</p>
                 </div>
                 <Button
                   variant="outline"
@@ -895,14 +911,14 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
                     setTargets(computedTargets);
                   }}
                 >
-                  <Calculator className="size-4" /> Reset to computed
+                  <Calculator className="size-4" /> {t("clients:newClient_dialog.resetComputed")}
                 </Button>
               </div>
 
               <div className="grid grid-cols-4 gap-2">
                 <MacroInput
                   icon={Flame}
-                  label="kcal"
+                  label={t("common:units.kcal")}
                   value={targets.calories}
                   onChange={(v) => {
                     setOverrideTargets(true);
@@ -912,57 +928,63 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
                 />
                 <MacroInput
                   icon={Beef}
-                  label="Protein"
+                  label={t("common:macros.protein")}
                   value={targets.protein}
                   onChange={(v) => {
                     setOverrideTargets(true);
                     setTargets((t) => ({ ...t, protein: v }));
                   }}
                   hue="bg-rose-50"
-                  suffix="g"
+                  suffix={t("common:units.gram")}
                 />
                 <MacroInput
                   icon={Wheat}
-                  label="Carbs"
+                  label={t("common:macros.carbs")}
                   value={targets.carbs}
                   onChange={(v) => {
                     setOverrideTargets(true);
                     setTargets((t) => ({ ...t, carbs: v }));
                   }}
                   hue="bg-emerald-50"
-                  suffix="g"
+                  suffix={t("common:units.gram")}
                 />
                 <MacroInput
                   icon={Droplet}
-                  label="Fat"
+                  label={t("common:macros.fat")}
                   value={targets.fat}
                   onChange={(v) => {
                     setOverrideTargets(true);
                     setTargets((t) => ({ ...t, fat: v }));
                   }}
                   hue="bg-sky-50"
-                  suffix="g"
+                  suffix={t("common:units.gram")}
                 />
               </div>
 
               <Separator />
 
               <div>
-                <h3 className="text-sm font-semibold">DRI targets</h3>
+                <h3 className="text-sm font-semibold">{t("clients:newClient_dialog.driTargets")}</h3>
+                {/* The trailing ", and life stage" clause is its own key rather than inline
+                    English, because it is a grammatical continuation of the sentence and Arabic
+                    joins it differently. */}
                 <p className="text-xs text-muted-foreground">
-                  Vitamin/mineral targets from NAM Dietary Reference Intakes, based on age, sex
-                  {sex === "F" && lifeStage !== "none" ? ", and life stage" : ""}. Read-only for
-                  now — recomputes automatically if age/sex/life stage change later.
+                  {t("clients:newClient_dialog.driHint", {
+                    lifeStage:
+                      sex === "F" && lifeStage !== "none"
+                        ? t("clients:newClient_dialog.driLifeStageClause")
+                        : "",
+                  })}
                 </p>
                 {!driPreview ? (
                   <p className="mt-2 text-xs text-muted-foreground">
-                    Enter age to preview DRI targets.
+                    {t("clients:newClient_dialog.driNeedsAge")}
                   </p>
                 ) : (
                   <div className="mt-2 grid grid-cols-2 gap-4">
                     <div>
                       <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                        Vitamins
+                        {t("clients:newClient_dialog.vitamins")}
                       </div>
                       <div className="space-y-0.5">
                         {DRI_VITAMIN_FIELDS.map((f) => (
@@ -972,7 +994,7 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
                     </div>
                     <div>
                       <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                        Minerals
+                        {t("clients:newClient_dialog.minerals")}
                       </div>
                       <div className="space-y-0.5">
                         {DRI_MINERAL_FIELDS.map((f) => (
@@ -987,28 +1009,41 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
               <Separator />
 
               <div className="space-y-1.5">
-                <h3 className="text-sm font-semibold">Review</h3>
+                <h3 className="text-sm font-semibold">{t("clients:newClient_dialog.review")}</h3>
                 <div className="rounded-lg border bg-card p-4">
                   <div className="flex items-center gap-3">
                     <div className="flex size-10 items-center justify-center rounded-full bg-primary-soft text-sm font-semibold text-primary">
                       {avatarInitials || "??"}
                     </div>
                     <div>
-                      <div className="font-semibold">{name || "New client"}</div>
+                      <div className="font-semibold">
+                        {name || t("clients:newClient_dialog.reviewFallbackName")}
+                      </div>
                       <div className="text-xs text-muted-foreground">
-                        {phone} · {serviceTypes.map((s) => SERVICE_TYPE_LABEL[s]).join(" + ") || "No program"} · {status}
+                        {phone} ·{" "}
+                        {serviceTypes.map((s) => t(`clients:serviceType.${s}`)).join(" + ") ||
+                          t("clients:newClient_dialog.noProgram")}{" "}
+                        · {t(`clients:status.${status}`)}
                       </div>
                     </div>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-1.5">
                     <Badge variant="secondary">
-                      {age || "—"} yrs · {sex}
+                      {t("clients:newClient_dialog.reviewAge", {
+                        age: age || "—",
+                        sex: sex === "F" ? t("clients:newClient_dialog.sexFemale") : t("clients:newClient_dialog.sexMale"),
+                      })}
                     </Badge>
                     <Badge variant="secondary">
-                      {heightCm || "—"} cm · {weightN.toFixed(1)} kg
+                      {t("clients:newClient_dialog.reviewBody", {
+                        height: heightCm || "—",
+                        weight: weightN.toFixed(1),
+                      })}
                     </Badge>
                     <Badge variant="secondary">
-                      Goal: {GOAL_TYPES.find((g) => g.value === goalType)?.label}
+                      {t("clients:newClient_dialog.reviewGoal", {
+                        goal: t(`clients:newClient_dialog.goalType.${goalType}`),
+                      })}
                     </Badge>
                   </div>
                 </div>
@@ -1023,16 +1058,21 @@ export function NewClientDialog({ open, onOpenChange, editClientId }: NewClientD
             onClick={() => setStep((s) => Math.max(1, s - 1))}
             disabled={step === 1}
           >
-            <ChevronLeft className="size-4" /> Back
+            {/* Step navigation chevrons point along the reading direction. */}
+            <ChevronLeft className="size-4 rtl:rotate-180" /> {t("clients:newClient_dialog.back")}
           </Button>
           {step < STEPS.length ? (
             <Button onClick={() => setStep((s) => s + 1)} disabled={!canAdvance}>
-              Next <ChevronRight className="size-4" />
+              {t("clients:newClient_dialog.next")} <ChevronRight className="size-4 rtl:rotate-180" />
             </Button>
           ) : (
             <Button onClick={handleSave} disabled={saving}>
               <CheckCircle2 className="size-4" />{" "}
-              {saving ? "Saving…" : isEdit ? "Save changes" : "Save client"}
+              {saving
+                ? t("common:actions.saving")
+                : isEdit
+                  ? t("clients:newClient_dialog.saveEdit")
+                  : t("clients:newClient_dialog.saveNew")}
             </Button>
           )}
         </DialogFooter>
@@ -1066,6 +1106,7 @@ function PillMultiSelectWithOther({
   onChange: (next: string[]) => void;
   otherPlaceholder: string;
 }) {
+  const { t } = useTranslation(["clients", "common"]);
   const [otherValue, setOtherValue] = useState("");
 
   const isSelected = (value: string) =>
@@ -1105,11 +1146,13 @@ function PillMultiSelectWithOther({
       <Label className="flex items-center gap-1.5">
         <Icon className="size-4" /> {label}
         {selected.length === 0 && (
-          <span className="text-xs font-normal text-muted-foreground">(none selected)</span>
+          <span className="text-xs font-normal text-muted-foreground">
+            {t("clients:newClient_dialog.noneSelected")}
+          </span>
         )}
       </Label>
       {optionsLoading ? (
-        <p className="text-xs text-muted-foreground">Loading options…</p>
+        <p className="text-xs text-muted-foreground">{t("clients:newClient_dialog.loadingOptions")}</p>
       ) : (
         <div className="flex flex-wrap gap-1.5">
           {options.map((option) => {
@@ -1135,7 +1178,7 @@ function PillMultiSelectWithOther({
               key={value}
               type="button"
               onClick={() => removeCustom(value)}
-              title="Custom entry for this client — click to remove"
+              title={t("clients:newClient_dialog.customChipTitle")}
               className="inline-flex items-center gap-1 rounded-full border border-dashed border-primary/50 bg-primary-soft/60 px-3 py-1 text-xs font-medium text-primary"
             >
               {value}

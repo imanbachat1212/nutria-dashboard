@@ -1,0 +1,91 @@
+{
+  "greeting": {
+    "morning": "Good morning, {{name}}.",
+    "afternoon": "Good afternoon, {{name}}.",
+    "evening": "Good evening, {{name}}.",
+    "morningNoName": "Good morning.",
+    "afternoonNoName": "Good afternoon.",
+    "eveningNoName": "Good evening."
+  },
+  "description": "Here's what's happening across your practice today — clients, plans, and the WhatsApp queue at a glance.",
+  "reviewJournal": "Review journal",
+  "openClients": "Open clients",
+  "loadFailed": "Couldn't load your practice overview. Try again shortly.",
+  "stats": {
+    "activeClients": "Active clients",
+    "activeClientsHint": "of {{total}} total",
+    "activePlans": "Active meal plans",
+    "activePlansHint": "of {{total}} total",
+    "foods": "Foods in database",
+    "newLeads": "New leads",
+    "newLeadsHint": "in last {{days}} days",
+    "trendNew": "{{delta}} new in {{days}}d",
+    "trendVsPrior": "{{delta}} vs prior in {{days}}d"
+  },
+  "foodsHint": {
+    "usda": "{{count}} USDA",
+    "lebanese": "{{count}} Lebanese",
+    "custom": "{{count}} custom",
+    "empty": "no foods yet"
+  },
+  "logging": {
+    "title": "Logged a meal today",
+    "subtitle": "Across your active roster · {{timeZone}} day",
+    "openJournal": "Open journal",
+    "ofTotal": "of {{total}}",
+    "noActiveClients": "No active clients on the roster yet.",
+    "percentLogged": "{{percent}}% of active clients have logged a meal today.",
+    "nothingToTrack": "Nothing to track yet — add your first client to get started.",
+    "everyoneLogged": "Everyone on the roster has logged today.",
+    "notLoggedHeading": "Not logged yet · longest quiet first",
+    "lastLogged": "last logged {{when}}",
+    "neverLogged": "never logged",
+    "moreClients_one": "{{isolated}} more — open clients",
+    "moreClients_other": "{{isolated}} more — open clients"
+  },
+  "calendar": {
+    "title": "Today's calendar",
+    "nothingBooked": "Nothing booked",
+    "count_one": "{{count}} appointment",
+    "count_other": "{{count}} appointments",
+    "all": "All",
+    "emptyTitle": "No appointments today",
+    "emptyBody": "Your calendar is clear. Book a consultation from the Appointments page.",
+    "openCalendar": "Open calendar"
+  },
+  "category": {
+    "diet": "Diet",
+    "gym": "Gym"
+  },
+  "activity": {
+    "title": "Recent activity",
+    "subtitle": "WhatsApp logs, replies and bookings from across your clients",
+    "openMessages": "Open messages",
+    "emptyTitle": "No activity yet",
+    "emptyBody": "Meal logs, inbound WhatsApp messages, new leads and bookings will appear here as they happen.",
+    "fallback": "activity",
+    "journalMeal": "logged a meal",
+    "journalExercise": "logged activity",
+    "leadNew": "came in as a new lead",
+    "messageInbound": "sent a message",
+    "appointmentBooked": "booked an appointment"
+  },
+  "attention": {
+    "title": "Needs attention",
+    "subtitle": "Quality control flags from automated logging",
+    "allClearTitle": "All clear",
+    "allClearBody": "Nothing needs attention right now — no flagged entries, no unanswered replies, no new leads waiting.",
+    "flagged_one": "{{count}} flagged entry",
+    "flagged_other": "{{count}} flagged entries",
+    "flaggedDescription": "AI flagged something unusual — needs a spot check.",
+    "flaggedLink": "Review entries",
+    "unread_one": "{{count}} conversation awaiting a reply",
+    "unread_other": "{{count}} conversations awaiting a reply",
+    "unreadDescription": "Clients whose last message hasn't been answered.",
+    "unreadLink": "Open inbox",
+    "leads_one": "{{count}} new lead",
+    "leads_other": "{{count}} new leads",
+    "leadsDescription": "From inquiries in the last {{days}} days — ready to qualify.",
+    "leadsLink": "View pipeline"
+  }
+}

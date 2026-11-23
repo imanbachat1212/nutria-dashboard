@@ -22,7 +22,11 @@ export function PageHeader({ title, description, eyebrow, actions, className }: 
           <p className="text-sm text-muted-foreground max-w-2xl">{description}</p>
         )}
       </div>
-      {actions && <div className="flex items-center gap-2">{actions}</div>}
+      {/* flex-wrap: Arabic labels run longer than their English equivalents (e.g. Journal's
+          "Approve all clean" becomes "الموافقة على كل المدخلات السليمة"), and a non-wrapping
+          action row pushed the page 36px past the viewport at 900px wide. Caught by measuring
+          document.body.scrollWidth per page in both languages, not by reading the code. */}
+      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </div>
   );
 }

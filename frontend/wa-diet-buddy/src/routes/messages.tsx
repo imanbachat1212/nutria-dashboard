@@ -22,6 +22,9 @@ import {
   PanelRightOpen,
   ExternalLink,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
+
+import { ltrIsolate } from "@/lib/i18n/format";
 
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -33,12 +36,7 @@ import { Switch } from "@/components/ui/switch";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import {
   fetchConversations,
@@ -46,9 +44,7 @@ import {
   fetchMessagesStatus,
   sendMessage,
   setAiAutopilot,
-  formatClock,
-  formatDay,
-  relativeAgo,
+  useThreadFormatters,
   type ChatMessage,
   type ConversationSummary,
   type Thread,
@@ -75,7 +71,25 @@ export const Route = createFileRoute("/messages")({
 
 type FilterKey = "all" | "clients" | "leads" | "unread" | "review";
 
+/**
+ * The conversation badge. The backend sends either "Lead" or the client's first serviceType
+ * ("diet" / "gym" / "classes") — see messages.service.js — so both vocabularies already have
+ * translations. Anything unrecognised is shown verbatim rather than swallowed.
+ */
+function useConversationTag() {
+  const { t } = useTranslation(["messages", "clients"]);
+  return (tag: string | null) => {
+    if (!tag) return null;
+    if (tag === "Lead") return t("messages:tag.Lead");
+    if (["diet", "gym", "classes"].includes(tag)) return t(`clients:serviceType.${tag}`);
+    return tag;
+  };
+}
+
 function MessagesPage() {
+  const { t } = useTranslation(["messages", "common"]);
+  const { ago } = useThreadFormatters();
+  const conversationTag = useConversationTag();
   const [filter, setFilter] = useState<FilterKey>("all");
   const [search, setSearch] = useState("");
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -102,17 +116,19 @@ function MessagesPage() {
   }, [all, activeId]);
 
   const conversations = useMemo(() => {
-    return all
-      .filter((c) => {
-        if (filter === "clients" && c.kind !== "client") return false;
-        if (filter === "leads" && c.kind !== "lead") return false;
-        if (filter === "unread" && c.unread === 0) return false;
-        if (filter === "review" && !c.awaitingDietitian) return false;
-        if (search && !c.name.toLowerCase().includes(search.toLowerCase())) return false;
-        return true;
-      })
-      // `pinned` is gone: nothing sets it (see messages-api.ts). Newest-first only.
-      .sort((a, b) => b.lastAtIso.localeCompare(a.lastAtIso));
+    return (
+      all
+        .filter((c) => {
+          if (filter === "clients" && c.kind !== "client") return false;
+          if (filter === "leads" && c.kind !== "lead") return false;
+          if (filter === "unread" && c.unread === 0) return false;
+          if (filter === "review" && !c.awaitingDietitian) return false;
+          if (search && !c.name.toLowerCase().includes(search.toLowerCase())) return false;
+          return true;
+        })
+        // `pinned` is gone: nothing sets it (see messages-api.ts). Newest-first only.
+        .sort((a, b) => b.lastAtIso.localeCompare(a.lastAtIso))
+    );
   }, [all, filter, search]);
 
   const active = all.find((c) => c.id === activeId) ?? null;
@@ -127,9 +143,9 @@ function MessagesPage() {
   return (
     <div className="flex h-[calc(100vh-7rem)] flex-col">
       <PageHeader
-        eyebrow="Conversations"
-        title="Messages"
-        description="One inbox for every WhatsApp thread — clients and leads. The AI handles routine replies; you step in when flagged."
+        eyebrow={t("messages:eyebrow")}
+        title={t("messages:title")}
+        description={t("messages:description")}
         actions={
           <>
             {/* Was a hardcoded "n8n connected" string. Now reports whether a message has
@@ -140,8 +156,8 @@ function MessagesPage() {
               className="gap-1.5"
               title={
                 status?.lastMessageAt
-                  ? `Last message ${relativeAgo(status.lastMessageAt)} ago`
-                  : "No messages logged yet"
+                  ? t("messages:status.lastMessage", { when: ago(status.lastMessageAt) })
+                  : t("messages:status.noneLogged")
               }
             >
               <span
@@ -151,14 +167,14 @@ function MessagesPage() {
                 )}
               />
               {status?.recentlyActive
-                ? `Active ${relativeAgo(status.lastMessageAt!)} ago`
+                ? t("messages:status.active", { when: ago(status.lastMessageAt!) })
                 : status?.lastMessageAt
-                  ? `Quiet ${relativeAgo(status.lastMessageAt)}`
-                  : "No messages yet"}
+                  ? t("messages:status.quiet", { when: ago(status.lastMessageAt) })
+                  : t("messages:status.none")}
             </Badge>
             <Button variant="outline" size="sm">
               <Filter className="h-4 w-4" />
-              Filters
+              {t("messages:filtersButton")}
             </Button>
           </>
         }
@@ -169,31 +185,37 @@ function MessagesPage() {
         <div className="flex min-h-0 flex-col rounded-xl border border-border bg-card shadow-soft">
           <div className="border-b border-border p-3 space-y-3">
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Search className="absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search contacts…"
-                className="pl-9"
+                placeholder={t("messages:searchPlaceholder")}
+                className="ps-9"
               />
             </div>
             <Tabs value={filter} onValueChange={(v) => setFilter(v as FilterKey)}>
               <TabsList className="grid w-full grid-cols-5 h-8">
-                <TabsTrigger value="all" className="text-[11px]">All</TabsTrigger>
-                <TabsTrigger value="clients" className="text-[11px]">Clients</TabsTrigger>
-                <TabsTrigger value="leads" className="text-[11px]">Leads</TabsTrigger>
+                <TabsTrigger value="all" className="text-[11px]">
+                  {t("messages:tabs.all")}
+                </TabsTrigger>
+                <TabsTrigger value="clients" className="text-[11px]">
+                  {t("messages:tabs.clients")}
+                </TabsTrigger>
+                <TabsTrigger value="leads" className="text-[11px]">
+                  {t("messages:tabs.leads")}
+                </TabsTrigger>
                 <TabsTrigger value="unread" className="text-[11px]">
-                  Unread
+                  {t("messages:tabs.unread")}
                   {totals.unread > 0 && (
-                    <span className="ml-1 rounded-full bg-primary px-1.5 text-[10px] text-primary-foreground">
+                    <span className="ms-1 rounded-full bg-primary px-1.5 text-[10px] text-primary-foreground">
                       {totals.unread}
                     </span>
                   )}
                 </TabsTrigger>
                 <TabsTrigger value="review" className="text-[11px]">
-                  Review
+                  {t("messages:tabs.review")}
                   {totals.review > 0 && (
-                    <span className="ml-1 rounded-full bg-warning px-1.5 text-[10px] text-warning-foreground">
+                    <span className="ms-1 rounded-full bg-warning px-1.5 text-[10px] text-warning-foreground">
                       {totals.review}
                     </span>
                   )}
@@ -209,7 +231,7 @@ function MessagesPage() {
                   <button
                     onClick={() => setActiveId(c.id)}
                     className={cn(
-                      "w-full px-3 py-3 text-left transition-colors hover:bg-muted/60",
+                      "w-full px-3 py-3 text-start transition-colors hover:bg-muted/60",
                       c.id === activeId && "bg-muted/80",
                     )}
                   >
@@ -224,7 +246,9 @@ function MessagesPage() {
                           <div className="flex items-center gap-1.5 min-w-0">
                             <span className="truncate text-sm font-medium">{c.name}</span>
                           </div>
-                          <span className="text-[11px] text-muted-foreground shrink-0">{relativeAgo(c.lastAtIso)}</span>
+                          <span className="text-[11px] text-muted-foreground shrink-0">
+                            {ago(c.lastAtIso)}
+                          </span>
                         </div>
                         <div className="mt-0.5 flex items-center justify-between gap-2">
                           <p className="truncate text-xs text-muted-foreground">{c.lastSnippet}</p>
@@ -244,12 +268,12 @@ function MessagesPage() {
                                 : "border-primary/30 text-primary bg-primary/5",
                             )}
                           >
-                            {c.tag}
+                            {conversationTag(c.tag)}
                           </Badge>
                           {c.awaitingDietitian && (
                             <Badge className="h-4 px-1.5 text-[10px] font-normal bg-warning/15 text-warning border-warning/30">
-                              <AlertCircle className="h-2.5 w-2.5 mr-0.5" />
-                              Review
+                              <AlertCircle className="h-2.5 w-2.5 me-0.5" />
+                              {t("messages:review")}
                             </Badge>
                           )}
                         </div>
@@ -260,7 +284,7 @@ function MessagesPage() {
               ))}
               {conversations.length === 0 && (
                 <li className="p-8 text-center text-sm text-muted-foreground">
-                  {isLoading ? "Loading conversations…" : "No conversations yet."}
+                  {isLoading ? t("messages:list.loading") : t("messages:list.empty")}
                 </li>
               )}
             </ul>
@@ -277,7 +301,7 @@ function MessagesPage() {
           />
         ) : (
           <div className="flex min-h-0 items-center justify-center rounded-xl border border-border bg-card text-sm text-muted-foreground shadow-soft">
-            {isLoading ? "Loading…" : "No conversation selected."}
+            {isLoading ? t("common:state.loading") : t("messages:list.noneSelected")}
           </div>
         )}
 
@@ -299,6 +323,9 @@ function ConversationThread({
   onDraft: (v: string) => void;
   onToggleContext: () => void;
 }) {
+  const { t } = useTranslation(["messages", "common"]);
+  const { day: formatDay } = useThreadFormatters();
+  const conversationTag = useConversationTag();
   const qc = useQueryClient();
 
   const { data: thread } = useQuery({
@@ -340,10 +367,16 @@ function ConversationThread({
       qc.invalidateQueries({ queryKey: ["messages"] });
       // The message is stored either way; only delivery can fail. Saying so beats a silent
       // success on a message the client never received.
-      if (res.delivered) toast.success("Sent");
-      else toast.error(`Saved, but not delivered — ${res.error ?? "n8n unreachable"}`);
+      if (res.delivered) toast.success(t("messages:thread.sentToast"));
+      else
+        toast.error(
+          t("messages:thread.notDeliveredToast", {
+            // The server's own error text, shown as the server sends it.
+            reason: res.error ?? t("messages:thread.n8nUnreachable"),
+          }),
+        );
     },
-    onError: (err: Error) => toast.error(err.message || "Couldn't send"),
+    onError: (err: Error) => toast.error(err.message || t("messages:thread.sendFailed")),
   });
 
   const messages = thread?.messages ?? [];
@@ -357,13 +390,18 @@ function ConversationThread({
       map.get(day)!.push(m);
     }
     return Array.from(map.entries());
-  }, [messages]);
+    // The map KEY is the formatted day label, so a language switch has to rebuild these groups
+    // or the date separators keep the old language.
+  }, [messages, formatDay]);
 
   return (
     <div className="flex min-h-0 flex-col rounded-xl border border-border bg-card shadow-soft">
       {/* Thread header */}
-      <div className="flex items-center justify-between border-b border-border px-4 py-3">
-        <div className="flex items-center gap-3 min-w-0">
+      {/* gap-2 + min-w-0 on the right-hand control group: the Arabic autopilot label
+          ("الرد التلقائي بالذكاء الاصطناعي") is far longer than "AI autopilot", and without a
+          shrinkable left side it rode over the phone/WhatsApp line. */}
+      <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
           <Avatar className="h-10 w-10">
             <AvatarFallback className="bg-accent text-accent-foreground text-xs font-semibold">
               {conversation.avatarInitials}
@@ -372,38 +410,49 @@ function ConversationThread({
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h2 className="font-display text-base font-semibold truncate">{conversation.name}</h2>
-              <Badge variant="outline" className="h-5 text-[10px]">{conversation.tag}</Badge>
+              <Badge variant="outline" className="h-5 text-[10px]">
+                {conversationTag(conversation.tag)}
+              </Badge>
             </div>
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span>{conversation.phone}</span>
+            <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span dir="ltr">{conversation.phone}</span>
               <span>·</span>
               <span className="inline-flex items-center gap-1">
                 <span className="h-1.5 w-1.5 rounded-full bg-success" />
-                WhatsApp
+                {t("messages:thread.channel")}
               </span>
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-1">
-          <div className="mr-2 flex items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-1.5">
-            <Sparkles className={cn("h-3.5 w-3.5", autopilot ? "text-primary" : "text-muted-foreground")} />
-            <span className="text-xs font-medium">AI autopilot</span>
+        <div className="flex shrink-0 items-center gap-1">
+          <div className="me-2 flex items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-1.5">
+            <Sparkles
+              className={cn("h-3.5 w-3.5", autopilot ? "text-primary" : "text-muted-foreground")}
+            />
+            <span className="hidden text-xs font-medium lg:inline">
+              {t("messages:thread.autopilot")}
+            </span>
             <Switch
               checked={autopilot}
               disabled={autopilotMutation.isPending}
               onCheckedChange={(v) => autopilotMutation.mutate(v)}
             />
           </div>
-          <Button variant="ghost" size="icon" title="Call">
+          <Button variant="ghost" size="icon" title={t("messages:thread.call")}>
             <Phone className="h-4 w-4" />
           </Button>
-          <Button variant="ghost" size="icon" title="Video call">
+          <Button variant="ghost" size="icon" title={t("messages:thread.videoCall")}>
             <Video className="h-4 w-4" />
           </Button>
-          <Button variant="ghost" size="icon" title="Toggle context" onClick={onToggleContext}>
+          <Button
+            variant="ghost"
+            size="icon"
+            title={t("messages:thread.toggleContext")}
+            onClick={onToggleContext}
+          >
             <PanelRightOpen className="h-4 w-4" />
           </Button>
-          <Button variant="ghost" size="icon">
+          <Button variant="ghost" size="icon" aria-label={t("messages:thread.moreActions")}>
             <MoreVertical className="h-4 w-4" />
           </Button>
         </div>
@@ -414,7 +463,7 @@ function ConversationThread({
         <div className="space-y-6 p-6">
           {grouped.length === 0 && (
             <p className="py-10 text-center text-sm text-muted-foreground">
-              {thread ? "No messages in this conversation yet." : "Loading messages…"}
+              {thread ? t("messages:thread.empty") : t("messages:thread.loading")}
             </p>
           )}
           {grouped.map(([day, msgs]) => (
@@ -437,11 +486,16 @@ function ConversationThread({
         {!autopilot && (
           <div className="flex items-center gap-2 rounded-md bg-warning/10 border border-warning/30 px-3 py-1.5 text-xs text-warning">
             <AlertCircle className="h-3.5 w-3.5" />
-            AI autopilot paused — replies to this client are yours to send.
+            {t("messages:thread.autopilotPaused")}
           </div>
         )}
         <div className="flex items-end gap-2">
-          <Button variant="ghost" size="icon" className="shrink-0">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="shrink-0"
+            aria-label={t("messages:thread.attach")}
+          >
             <Paperclip className="h-4 w-4" />
           </Button>
           <Textarea
@@ -453,11 +507,20 @@ function ConversationThread({
                 sendMutation.mutate(draft.trim());
               }
             }}
-            placeholder={autopilot ? "Override AI with a manual message…" : "Type a message…"}
+            placeholder={
+              autopilot
+                ? t("messages:thread.composerOverride")
+                : t("messages:thread.composerPlaceholder")
+            }
             className="min-h-11 max-h-32 resize-none"
             rows={1}
           />
-          <Button variant="ghost" size="icon" className="shrink-0">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="shrink-0"
+            aria-label={t("messages:thread.recordVoice")}
+          >
             <Mic className="h-4 w-4" />
           </Button>
           <Button
@@ -465,26 +528,38 @@ function ConversationThread({
             className="shrink-0"
             disabled={!draft.trim() || sendMutation.isPending}
             onClick={() => sendMutation.mutate(draft.trim())}
+            aria-label={t("messages:thread.send")}
           >
-            <Send className="h-4 w-4" />
+            {/* The paper-plane points in the reading direction, so it has to mirror. */}
+            <Send className="h-4 w-4 rtl:-scale-x-100" />
           </Button>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[11px] text-muted-foreground mr-1">Quick:</span>
-          {[
-            "Great work! 💪",
-            "Send today's plan",
-            "Book a consult",
-            "Request weigh-in photo",
-          ].map((q) => (
-            <button
-              key={q}
-              onClick={() => onDraft(q)}
-              className="rounded-full border border-border bg-background px-2.5 py-0.5 text-[11px] text-foreground hover:bg-muted transition-colors"
-            >
-              {q}
-            </button>
-          ))}
+          <span className="text-[11px] text-muted-foreground me-1">
+            {t("messages:thread.quickLabel")}
+          </span>
+          {/* These are message BODIES, not UI labels — they go into the composer and get sent
+              to a client over WhatsApp, so they have to be in the language the practice writes
+              to clients in. Translated with the UI for that reason. */}
+          {(
+            [
+              "quick.greatWork",
+              "quick.sendPlan",
+              "quick.bookConsult",
+              "quick.requestWeighIn",
+            ] as const
+          ).map((key) => {
+            const q = t(`messages:${key}`);
+            return (
+              <button
+                key={key}
+                onClick={() => onDraft(q)}
+                className="rounded-full border border-border bg-background px-2.5 py-0.5 text-[11px] text-foreground hover:bg-muted transition-colors"
+              >
+                {q}
+              </button>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -492,6 +567,8 @@ function ConversationThread({
 }
 
 function MessageBubble({ message }: { message: ChatMessage }) {
+  const { t } = useTranslation("messages");
+  const { clock } = useThreadFormatters();
   // Per-bubble, so each photo opens itself. Cheap: the Dialog is only mounted for a message that
   // actually has an image.
   const [photoOpen, setPhotoOpen] = useState(false);
@@ -513,11 +590,15 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       <div
         className={cn(
           "max-w-[78%] rounded-2xl px-3.5 py-2 shadow-soft",
+          // The squared-off "tail" corner. LOGICAL, not physical: `justify-end` already puts an
+          // outgoing bubble on the left in Arabic, so a bottom-RIGHT tail would end up on the
+          // far side of the bubble from the speaker and the chat would read as inverted.
+          // rounded-ee = bottom-end, rounded-es = bottom-start.
           isOut
             ? message.author === "ai"
-              ? "bg-primary/10 text-foreground border border-primary/20 rounded-br-sm"
-              : "bg-primary text-primary-foreground rounded-br-sm"
-            : "bg-card border border-border rounded-bl-sm",
+              ? "bg-primary/10 text-foreground border border-primary/20 rounded-ee-sm"
+              : "bg-primary text-primary-foreground rounded-ee-sm"
+            : "bg-card border border-border rounded-es-sm",
           // A failed send is the one message state worth ringing. The mock's per-message
           // `flagged` had no producer and isn't built (see messages-api.ts).
           message.status === "failed" && "ring-2 ring-destructive/50",
@@ -528,12 +609,12 @@ function MessageBubble({ message }: { message: ChatMessage }) {
             {message.author === "ai" ? (
               <>
                 <Sparkles className="h-2.5 w-2.5" />
-                AI reply
+                {t("bubble.aiReply")}
               </>
             ) : (
               <>
                 <UserCircle2 className="h-2.5 w-2.5" />
-                You
+                {t("bubble.you")}
               </>
             )}
           </div>
@@ -548,14 +629,18 @@ function MessageBubble({ message }: { message: ChatMessage }) {
               type="button"
               onClick={() => setPhotoOpen(true)}
               className="mb-1.5 block overflow-hidden rounded-md ring-offset-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              title="View full size"
+              title={t("bubble.viewFullSize")}
             >
               <img
                 src={message.attachmentUrl}
                 // The label is a filename ("lunch.jpg") — useless to a screen reader, so the
                 // alt describes what the image IS. Empty alt would hide a photo that is often
                 // the entire content of the message.
-                alt={`Photo sent in this message${message.attachmentLabel ? `: ${message.attachmentLabel}` : ""}`}
+                alt={
+                  message.attachmentLabel
+                    ? t("bubble.photoAltLabelled", { label: message.attachmentLabel })
+                    : t("bubble.photoAlt")
+                }
                 loading="lazy"
                 className="max-h-60 w-full max-w-[240px] cursor-zoom-in object-cover transition-opacity hover:opacity-90"
               />
@@ -564,14 +649,18 @@ function MessageBubble({ message }: { message: ChatMessage }) {
               <DialogContent className="max-w-3xl">
                 <DialogHeader>
                   <DialogTitle className="text-sm font-medium">
-                    {message.attachmentLabel ?? "Photo"}
+                    {message.attachmentLabel ?? t("bubble.photo")}
                   </DialogTitle>
                 </DialogHeader>
                 {/* Capped against the viewport, not a fixed size: a portrait phone photo would
                     otherwise run off the bottom of the dialog with no way to see the rest. */}
                 <img
                   src={message.attachmentUrl}
-                  alt={`Photo sent in this message${message.attachmentLabel ? `: ${message.attachmentLabel}` : ""}`}
+                  alt={
+                    message.attachmentLabel
+                      ? t("bubble.photoAltLabelled", { label: message.attachmentLabel })
+                      : t("bubble.photoAlt")
+                  }
                   className="max-h-[75vh] w-auto rounded-md object-contain"
                 />
               </DialogContent>
@@ -588,8 +677,10 @@ function MessageBubble({ message }: { message: ChatMessage }) {
               <ImageIcon className="h-5 w-5" />
             </div>
             <div className="flex-1">
-              <p className="font-medium">{message.attachmentLabel ?? "photo.jpg"}</p>
-              <p className="text-[10px] opacity-70">Photo not stored</p>
+              <p className="font-medium">
+                {message.attachmentLabel ?? t("bubble.photoFallbackName")}
+              </p>
+              <p className="text-[10px] opacity-70">{t("bubble.photoNotStored")}</p>
             </div>
           </div>
         )}
@@ -610,7 +701,9 @@ function MessageBubble({ message }: { message: ChatMessage }) {
             </div>
             {/* Duration omitted: n8n doesn't send it, and a fabricated 0:00 is worse than
                 nothing. attachmentLabel carries what is actually known. */}
-            <span className="text-[11px] opacity-80">{message.attachmentLabel ?? "Voice note"}</span>
+            <span className="text-[11px] opacity-80">
+              {message.attachmentLabel ?? t("bubble.voiceNote")}
+            </span>
           </div>
         )}
 
@@ -620,8 +713,8 @@ function MessageBubble({ message }: { message: ChatMessage }) {
               <FileText className="h-4 w-4" />
             </div>
             <div className="flex-1">
-              <p className="font-medium">{message.attachmentLabel ?? "Meal plan"}</p>
-              <p className="text-[10px] opacity-70">Delivered to WhatsApp</p>
+              <p className="font-medium">{message.attachmentLabel ?? t("bubble.mealPlan")}</p>
+              <p className="text-[10px] opacity-70">{t("bubble.deliveredToWhatsApp")}</p>
             </div>
           </div>
         )}
@@ -630,8 +723,13 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.text}</p>
         )}
 
-        <div className={cn("mt-1 flex items-center gap-1 text-[10px] opacity-70", isOut ? "justify-end" : "justify-start")}>
-          <span>{formatClock(message.at)}</span>
+        <div
+          className={cn(
+            "mt-1 flex items-center gap-1 text-[10px] opacity-70",
+            isOut ? "justify-end" : "justify-start",
+          )}
+        >
+          <span>{clock(message.at)}</span>
           {/* Real delivery states only. "delivered"/"read" would need WhatsApp receipts
               flowing back through n8n, which don't exist — double ticks that always showed
               would be a lie about whether a client saw the message. */}
@@ -643,7 +741,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           {isOut && message.status === "failed" && (
             <span className="inline-flex items-center gap-0.5 font-medium opacity-100">
               <AlertCircle className="h-3 w-3" />
-              Not delivered
+              {t("bubble.notDelivered")}
             </span>
           )}
         </div>
@@ -653,12 +751,14 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 }
 
 function ContextPanel({ conversation }: { conversation: ConversationSummary }) {
+  const { t } = useTranslation("messages");
+  const conversationTag = useConversationTag();
   const isLead = conversation.kind === "lead";
   return (
     <div className="hidden xl:flex min-h-0 flex-col rounded-xl border border-border bg-card shadow-soft">
       <div className="border-b border-border px-4 py-3">
         <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-          Contact context
+          {t("context.heading")}
         </p>
       </div>
       <ScrollArea className="flex-1">
@@ -671,12 +771,14 @@ function ContextPanel({ conversation }: { conversation: ConversationSummary }) {
             </Avatar>
             <h3 className="mt-2 font-display text-base font-semibold">{conversation.name}</h3>
             <p className="text-xs text-muted-foreground">{conversation.phone}</p>
-            <Badge variant="outline" className="mt-2 text-[10px]">{conversation.tag}</Badge>
+            <Badge variant="outline" className="mt-2 text-[10px]">
+              {conversationTag(conversation.tag)}
+            </Badge>
           </div>
 
           <Button variant="outline" size="sm" className="w-full">
             <ExternalLink className="h-3.5 w-3.5" />
-            {isLead ? "Open lead profile" : "Open client profile"}
+            {isLead ? t("context.openLead") : t("context.openClient")}
           </Button>
 
           <Separator />
@@ -684,23 +786,25 @@ function ContextPanel({ conversation }: { conversation: ConversationSummary }) {
           {!isLead ? (
             <div className="space-y-3">
               <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                Today's targets
+                {t("context.todaysTargets")}
               </h4>
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div className="rounded-md border border-border bg-muted/40 p-2">
-                  <p className="text-muted-foreground">Calories</p>
+                  <p className="text-muted-foreground">{t("context.calories")}</p>
                   <p className="font-display text-lg font-semibold">1,650</p>
                 </div>
                 <div className="rounded-md border border-border bg-muted/40 p-2">
-                  <p className="text-muted-foreground">Adherence</p>
+                  <p className="text-muted-foreground">{t("context.adherence")}</p>
                   <p className="font-display text-lg font-semibold text-success">82%</p>
                 </div>
                 <div className="rounded-md border border-border bg-muted/40 p-2">
-                  <p className="text-muted-foreground">Weight Δ</p>
-                  <p className="font-display text-lg font-semibold">-1.4 kg</p>
+                  <p className="text-muted-foreground">{t("context.weightDelta")}</p>
+                  {/* Hardcoded mock (no backend source yet) — isolated so the sign stays on
+                      the left of the digits once this is wired to a real value. */}
+                  <p className="font-display text-lg font-semibold">{ltrIsolate("-1.4 kg")}</p>
                 </div>
                 <div className="rounded-md border border-border bg-muted/40 p-2">
-                  <p className="text-muted-foreground">Week</p>
+                  <p className="text-muted-foreground">{t("context.week")}</p>
                   <p className="font-display text-lg font-semibold">3 / 12</p>
                 </div>
               </div>
@@ -708,13 +812,25 @@ function ContextPanel({ conversation }: { conversation: ConversationSummary }) {
           ) : (
             <div className="space-y-3">
               <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                Lead snapshot
+                {t("context.leadSnapshot")}
               </h4>
               <div className="space-y-2 text-xs">
-                <div className="flex justify-between"><span className="text-muted-foreground">Stage</span><span className="font-medium">New</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Source</span><span className="font-medium">Instagram reel</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Interest</span><span className="font-medium">Diet · PCOS</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Quality score</span><span className="font-medium text-success">82 / 100</span></div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">{t("context.stage")}</span>
+                  <span className="font-medium">New</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">{t("context.source")}</span>
+                  <span className="font-medium">Instagram reel</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">{t("context.interest")}</span>
+                  <span className="font-medium">Diet · PCOS</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">{t("context.qualityScore")}</span>
+                  <span className="font-medium text-success">82 / 100</span>
+                </div>
               </div>
             </div>
           )}
@@ -723,25 +839,32 @@ function ContextPanel({ conversation }: { conversation: ConversationSummary }) {
 
           <div className="space-y-2">
             <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-              Internal notes
+              {t("context.internalNotes")}
             </h4>
-            <Textarea
-              placeholder="Add a private note for the team…"
-              className="min-h-20 text-xs"
-            />
+            <Textarea placeholder={t("context.notePlaceholder")} className="min-h-20 text-xs" />
           </div>
 
           <Separator />
 
           <div className="space-y-2">
             <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-              Quick actions
+              {t("context.quickActions")}
             </h4>
             <div className="grid gap-1.5">
-              <Button variant="outline" size="sm" className="justify-start">Send today's plan</Button>
-              <Button variant="outline" size="sm" className="justify-start">Schedule appointment</Button>
-              <Button variant="outline" size="sm" className="justify-start">Request weigh-in</Button>
-              {isLead && <Button variant="outline" size="sm" className="justify-start">Convert to client</Button>}
+              <Button variant="outline" size="sm" className="justify-start">
+                {t("context.sendPlan")}
+              </Button>
+              <Button variant="outline" size="sm" className="justify-start">
+                {t("context.scheduleAppointment")}
+              </Button>
+              <Button variant="outline" size="sm" className="justify-start">
+                {t("context.requestWeighIn")}
+              </Button>
+              {isLead && (
+                <Button variant="outline" size="sm" className="justify-start">
+                  {t("context.convertToClient")}
+                </Button>
+              )}
             </div>
           </div>
         </div>

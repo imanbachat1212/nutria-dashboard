@@ -1,0 +1,99 @@
+{
+  "eyebrow": "Conversations",
+  "title": "Messages",
+  "description": "One inbox for every WhatsApp thread — clients and leads. The AI handles routine replies; you step in when flagged.",
+  "status": {
+    "lastMessage": "Last message {{when}} ago",
+    "noneLogged": "No messages logged yet",
+    "active": "Active {{when}} ago",
+    "quiet": "Quiet {{when}}",
+    "none": "No messages yet"
+  },
+  "filtersButton": "Filters",
+  "searchPlaceholder": "Search contacts…",
+  "tabs": {
+    "all": "All",
+    "clients": "Clients",
+    "leads": "Leads",
+    "unread": "Unread",
+    "review": "Review"
+  },
+  "review": "Review",
+  "list": {
+    "loading": "Loading conversations…",
+    "empty": "No conversations yet.",
+    "noneSelected": "No conversation selected."
+  },
+  "thread": {
+    "channel": "WhatsApp",
+    "autopilot": "AI autopilot",
+    "call": "Call",
+    "videoCall": "Video call",
+    "toggleContext": "Toggle context",
+    "moreActions": "More actions",
+    "empty": "No messages in this conversation yet.",
+    "loading": "Loading messages…",
+    "autopilotPaused": "AI autopilot paused — replies to this client are yours to send.",
+    "attach": "Attach a file",
+    "recordVoice": "Record a voice note",
+    "send": "Send",
+    "composerOverride": "Override AI with a manual message…",
+    "composerPlaceholder": "Type a message…",
+    "quickLabel": "Quick:",
+    "sentToast": "Sent",
+    "notDeliveredToast": "Saved, but not delivered — {{reason}}",
+    "n8nUnreachable": "n8n unreachable",
+    "sendFailed": "Couldn't send"
+  },
+  "quick": {
+    "greatWork": "Great work! 💪",
+    "sendPlan": "Send today's plan",
+    "bookConsult": "Book a consult",
+    "requestWeighIn": "Request weigh-in photo"
+  },
+  "bubble": {
+    "aiReply": "AI reply",
+    "you": "You",
+    "viewFullSize": "View full size",
+    "photoAlt": "Photo sent in this message",
+    "photoAltLabelled": "Photo sent in this message: {{label}}",
+    "photo": "Photo",
+    "photoFallbackName": "photo.jpg",
+    "photoNotStored": "Photo not stored",
+    "voiceNote": "Voice note",
+    "mealPlan": "Meal plan",
+    "deliveredToWhatsApp": "Delivered to WhatsApp",
+    "notDelivered": "Not delivered"
+  },
+  "context": {
+    "heading": "Contact context",
+    "openLead": "Open lead profile",
+    "openClient": "Open client profile",
+    "todaysTargets": "Today's targets",
+    "calories": "Calories",
+    "adherence": "Adherence",
+    "weightDelta": "Weight Δ",
+    "week": "Week",
+    "leadSnapshot": "Lead snapshot",
+    "stage": "Stage",
+    "source": "Source",
+    "interest": "Interest",
+    "qualityScore": "Quality score",
+    "internalNotes": "Internal notes",
+    "notePlaceholder": "Add a private note for the team…",
+    "quickActions": "Quick actions",
+    "sendPlan": "Send today's plan",
+    "scheduleAppointment": "Schedule appointment",
+    "requestWeighIn": "Request weigh-in",
+    "convertToClient": "Convert to client"
+  },
+  "ago": {
+    "now": "now",
+    "minutes": "{{count}} min",
+    "hours": "{{count}}h",
+    "days": "{{count}}d"
+  },
+  "tag": {
+    "Lead": "Lead"
+  }
+}

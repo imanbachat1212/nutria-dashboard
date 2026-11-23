@@ -26,6 +26,10 @@ import {
   ArrowRight,
   ExternalLink,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
+
+import { ltrIsolate, useFormatters, type Formatters } from "@/lib/i18n/format";
 
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -52,10 +56,7 @@ import {
   fetchJournalEntries,
   fetchJournalQueue,
   updateJournalEntry,
-  FLAG_LABEL,
-  SOURCE_LABEL,
-  SLOT_LABEL,
-  timeAgo,
+  useJournalLabels,
   type JournalEntry,
   type JournalConfidence,
   type JournalSource,
@@ -131,16 +132,18 @@ function toGroup(c: JournalQueueClient): ClientGroup {
 const isClean = (e: JournalEntry) =>
   e.status === "pending" && e.flags.length === 0 && e.confidence !== "low";
 
-function dayLabel(d: Date): string {
+function dayLabel(d: Date, t: TFunction, fmt: Formatters): string {
   const today = new Date();
   const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
   const diffDays = Math.round((startOf(today) - startOf(d)) / 86_400_000);
-  if (diffDays === 0) return "Today";
-  if (diffDays === 1) return "Yesterday";
-  return d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+  if (diffDays === 0) return t("journal:day.today");
+  if (diffDays === 1) return t("journal:day.yesterday");
+  return fmt.date(d, { weekday: "short", day: "numeric", month: "short" });
 }
 
 function JournalReviewPage() {
+  const { t } = useTranslation(["journal", "common"]);
+  const fmt = useFormatters();
   const qc = useQueryClient();
   const [tab, setTab] = useState<Tab>("pending");
   const [query, setQuery] = useState("");
@@ -342,14 +345,16 @@ function JournalReviewPage() {
       const k = d.toDateString();
       let day = out.find((x) => x.key === k);
       if (!day) {
-        day = { key: k, label: dayLabel(d), kcal: 0, entries: [] };
+        day = { key: k, label: dayLabel(d, t, fmt), kcal: 0, entries: [] };
         out.push(day);
       }
       day.entries.push(e);
       if (e.kind === "meal" && e.status !== "rejected") day.kcal += e.totals.kcal;
     }
     return out;
-  }, [activeGroup, activeVisible]);
+    // `t`/`fmt` are dependencies because each day's heading ("Today", "Mon, 6 Oct") is built
+    // here — omitting them would keep yesterday's language on every day header after a switch.
+  }, [activeGroup, activeVisible, t, fmt]);
 
   const dayDefaultOpen = (
     day: { entries: JournalEntry[] },
@@ -374,11 +379,11 @@ function JournalReviewPage() {
   return (
     <div className="mx-auto max-w-350">
       <PageHeader
-        eyebrow="Daily review"
-        title="Journal Review"
-        description="Spot-check text and photo WhatsApp logs, correct portions or macros, and push clean entries into the client chart."
+        eyebrow={t("journal:eyebrow")}
+        title={t("journal:title")}
+        description={t("journal:description")}
         actions={
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button
               size="sm"
               variant="outline"
@@ -386,7 +391,7 @@ function JournalReviewPage() {
               onClick={() => setNewOpen(true)}
             >
               <Plus className="h-4 w-4" />
-              Log entry
+              {t("journal:logEntry")}
             </Button>
             <Button
               size="sm"
@@ -399,7 +404,9 @@ function JournalReviewPage() {
               ) : (
                 <CheckCircle2 className="h-4 w-4" />
               )}
-              Approve all clean{stats.cleanPending > 0 ? ` (${stats.cleanPending})` : ""}
+              {stats.cleanPending > 0
+                ? t("journal:approveAllCleanWithCount", { count: stats.cleanPending })
+                : t("journal:approveAllClean")}
             </Button>
           </div>
         }
@@ -411,47 +418,50 @@ function JournalReviewPage() {
           <TabsList>
             <TabsTrigger value="pending" className="gap-1.5">
               <Clock className="h-3.5 w-3.5" />
-              Pending
+              {t("journal:tabs.pending")}
               <CountBadge n={stats.pending} />
             </TabsTrigger>
             <TabsTrigger value="flagged" className="gap-1.5">
               <AlertTriangle className="h-3.5 w-3.5" />
-              Flagged
+              {t("journal:tabs.flagged")}
               <CountBadge n={stats.flagged} tone="warn" />
             </TabsTrigger>
             <TabsTrigger value="approved" className="gap-1.5">
               <CheckCircle2 className="h-3.5 w-3.5" />
-              Approved
+              {t("journal:tabs.approved")}
               <CountBadge n={stats.approved} />
             </TabsTrigger>
-            <TabsTrigger value="all">All</TabsTrigger>
+            <TabsTrigger value="all">{t("journal:tabs.all")}</TabsTrigger>
           </TabsList>
         </Tabs>
-        <div className="flex items-center gap-2">
+        {/* flex-wrap + a search field that can shrink: in Arabic the two view tabs ("بحسب
+            العميل" / "التسلسل الزمني") are wider than "By client" / "Timeline", and a fixed
+            w-72 search box next to them pushed this row 36px past the viewport at 900px. */}
+        <div className="flex flex-wrap items-center gap-2">
           <Tabs value={view} onValueChange={(v) => setView(v as ViewMode)}>
             <TabsList>
               <TabsTrigger value="client" className="gap-1.5">
                 <Users className="h-3.5 w-3.5" />
-                By client
+                {t("journal:tabs.byClient")}
               </TabsTrigger>
               <TabsTrigger value="timeline" className="gap-1.5">
                 <Clock className="h-3.5 w-3.5" />
-                Timeline
+                {t("journal:tabs.timeline")}
               </TabsTrigger>
             </TabsList>
           </Tabs>
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <div className="relative min-w-0 flex-1 sm:flex-none">
+            <Search className="absolute start-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search clients, items, messages…"
-              className="h-9 w-72 pl-8 text-sm"
+              placeholder={t("journal:searchPlaceholder")}
+              className="h-9 w-full min-w-48 sm:w-72 ps-8 text-sm"
             />
           </div>
           <Button variant="outline" size="sm" className="gap-1.5">
             <Filter className="h-3.5 w-3.5" />
-            Filter
+            {t("journal:filter")}
           </Button>
         </div>
       </div>
@@ -464,10 +474,7 @@ function JournalReviewPage() {
       {view === "timeline" && entries.length >= 200 && (
         <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          <span>
-            Timeline shows up to 200 entries from the last 30 days, newest first — older ones are
-            not listed here. Switch to By client for complete per-client counts.
-          </span>
+          <span>{t("journal:timelineWarning")}</span>
         </div>
       )}
 
@@ -478,10 +485,8 @@ function JournalReviewPage() {
       ) : (view === "timeline" ? filtered.length === 0 : groups.length === 0) ? (
         <Card className="flex flex-col items-center gap-2 p-12 text-center">
           <CheckCircle2 className="h-8 w-8 text-emerald-500" />
-          <p className="font-display text-lg font-semibold">All caught up</p>
-          <p className="text-sm text-muted-foreground">
-            No logs match this view. Take a sip of coffee.
-          </p>
+          <p className="font-display text-lg font-semibold">{t("journal:allCaughtUpTitle")}</p>
+          <p className="text-sm text-muted-foreground">{t("journal:allCaughtUpBody")}</p>
         </Card>
       ) : view === "timeline" ? (
         <div className="space-y-2.5">
@@ -503,7 +508,7 @@ function JournalReviewPage() {
           <Card className="overflow-hidden p-0">
             <div className="flex items-center gap-1.5 border-b px-3 py-2 text-xs font-medium text-muted-foreground">
               <Users className="h-3.5 w-3.5" />
-              {groups.length} client{groups.length === 1 ? "" : "s"}
+              {t("journal:queue.clients", { count: groups.length })}
             </div>
             <div className="max-h-[calc(100vh-22rem)] min-h-40 divide-y overflow-y-auto">
               {groups.map((g) => (
@@ -513,10 +518,10 @@ function JournalReviewPage() {
                   active={g.key === activeGroup?.key}
                   badge={
                     tab === "approved"
-                      ? { n: g.approved, title: "Approved" }
+                      ? { n: g.approved, title: t("journal:queue.badgeApproved") }
                       : tab === "all"
-                        ? { n: g.entryCount, title: "Entries" }
-                        : { n: g.pending, title: "Pending" }
+                        ? { n: g.entryCount, title: t("journal:queue.badgeEntries") }
+                        : { n: g.pending, title: t("journal:queue.badgePending") }
                   }
                   onSelect={() => setSelectedKey(g.key)}
                 />
@@ -544,17 +549,19 @@ function JournalReviewPage() {
                           to="/clients/$clientId"
                           params={{ clientId: activeGroup.clientId }}
                           className="text-muted-foreground hover:text-foreground"
-                          title="Open client profile"
+                          title={t("journal:client.openProfile")}
                         >
                           <ExternalLink className="h-3.5 w-3.5" />
                         </Link>
                       )}
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      {activeGroup.pending} pending
-                      {activeGroup.flagged > 0 && ` · ${activeGroup.flagged} flagged`}
-                      {activeGroup.lowConf > 0 && ` · ${activeGroup.lowConf} low confidence`}
-                      {` · ${activeVisible.length} in this view`}
+                      {t("journal:client.summaryPending", { count: activeGroup.pending })}
+                      {activeGroup.flagged > 0 &&
+                        t("journal:client.summaryFlagged", { count: activeGroup.flagged })}
+                      {activeGroup.lowConf > 0 &&
+                        t("journal:client.summaryLowConf", { count: activeGroup.lowConf })}
+                      {t("journal:client.summaryInView", { count: activeVisible.length })}
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
@@ -570,13 +577,14 @@ function JournalReviewPage() {
                         <CheckCircle2 className="h-4 w-4" />
                       )}
                       {activeClean.length > 0
-                        ? `Approve ${activeClean.length} clean`
-                        : "No clean entries"}
+                        ? t("journal:client.approveClean", { count: activeClean.length })
+                        : t("journal:client.noClean")}
                     </Button>
                     {groups.length > 1 && (
                       <Button size="sm" variant="outline" className="gap-1.5" onClick={goNextClient}>
-                        Next client
-                        <ArrowRight className="h-3.5 w-3.5" />
+                        {t("journal:client.nextClient")}
+                        {/* Points forward, so it must mirror in RTL. */}
+                        <ArrowRight className="h-3.5 w-3.5 rtl:rotate-180" />
                       </Button>
                     )}
                   </div>
@@ -592,9 +600,9 @@ function JournalReviewPage() {
               ) : days.length === 0 ? (
                 <Card className="flex flex-col items-center gap-1.5 p-8 text-center">
                   <CheckCircle2 className="h-6 w-6 text-emerald-500" />
-                  <p className="text-sm font-medium">Nothing to review here</p>
+                  <p className="text-sm font-medium">{t("journal:client.nothingTitle")}</p>
                   <p className="text-xs text-muted-foreground">
-                    No entries match this view for {activeGroup.name}.
+                    {t("journal:client.nothingBody", { name: activeGroup.name })}
                   </p>
                 </Card>
               ) : null}
@@ -607,7 +615,7 @@ function JournalReviewPage() {
                     className="h-7 px-2 text-xs"
                     onClick={() => setAllDays(true)}
                   >
-                    Expand all
+                    {t("journal:client.expandAll")}
                   </Button>
                   <Button
                     size="sm"
@@ -615,7 +623,7 @@ function JournalReviewPage() {
                     className="h-7 px-2 text-xs"
                     onClick={() => setAllDays(false)}
                   >
-                    Collapse all
+                    {t("journal:client.collapseAll")}
                   </Button>
                 </div>
               )}
@@ -630,7 +638,7 @@ function JournalReviewPage() {
                       type="button"
                       aria-expanded={open}
                       onClick={() => setDayOpen((prev) => ({ ...prev, [id]: !open }))}
-                      className="mb-2 flex w-full items-center gap-2 rounded-md px-1 py-1.5 text-left text-xs transition hover:bg-muted/50"
+                      className="mb-2 flex w-full items-center gap-2 rounded-md px-1 py-1.5 text-start text-xs transition hover:bg-muted/50"
                     >
                       <ChevronDown
                         className={cn(
@@ -642,19 +650,19 @@ function JournalReviewPage() {
                       {day.kcal > 0 && (
                         <span className="flex items-center gap-1 text-muted-foreground">
                           <Flame className="h-3 w-3 text-orange-500" />
-                          {Math.round(day.kcal)} kcal logged
+                          {t("journal:day.kcalLogged", { kcal: Math.round(day.kcal) })}
                         </span>
                       )}
                       <span className="text-muted-foreground">
-                        · {day.entries.length} {day.entries.length === 1 ? "entry" : "entries"}
+                        {t("journal:day.entries", { count: day.entries.length })}
                       </span>
                       {/* Visible while collapsed too, so a closed day can't hide unreviewed work. */}
                       {pendingInDay > 0 && (
                         <Badge
                           variant="outline"
-                          className="ml-auto rounded-md border-amber-200 bg-amber-50 px-1.5 text-[10px] text-amber-700"
+                          className="ms-auto rounded-md border-amber-200 bg-amber-50 px-1.5 text-[10px] text-amber-700"
                         >
-                          {pendingInDay} pending
+                          {t("journal:day.pending", { count: pendingInDay })}
                         </Badge>
                       )}
                     </button>
@@ -691,39 +699,59 @@ function JournalReviewPage() {
           {stats.cleanPending > 0 ? (
             <>
               <AlertDialogHeader>
-                <AlertDialogTitle>Approve all clean entries?</AlertDialogTitle>
+                <AlertDialogTitle>{t("journal:approveAll.title")}</AlertDialogTitle>
                 {/* Counts come from the server's totals, so they describe every clean pending
-                    entry in the window — not just the ones on the loaded page. */}
+                    entry in the window — not just the ones on the loaded page.
+                    THREE counts in one sentence, and i18next allows one `count` per key — so
+                    each counted noun phrase is its own plural key and gets interpolated into
+                    the sentence. That is also what lets Arabic use its dual form for exactly
+                    two entries, which an inline `n === 1 ? "entry" : "entries"` cannot. */}
                 <AlertDialogDescription>
-                  This approves {stats.cleanPending}{" "}
-                  {stats.cleanPending === 1 ? "entry" : "entries"} across {cleanClientCount} client
-                  {cleanClientCount === 1 ? "" : "s"} without opening them individually. Only
-                  entries with no flags and AI confidence above "low" are included
-                  {stats.pending > stats.cleanPending &&
-                    `; the other ${stats.pending - stats.cleanPending} pending need a manual look`}
-                  . To review one client at a time, cancel and use "Approve clean" on that client
-                  instead.
+                  {stats.pending > stats.cleanPending
+                    ? t("journal:approveAll.bodyWithRemainder", {
+                        entries: t("journal:approveAll.entriesPhrase", {
+                          count: stats.cleanPending,
+                        }),
+                        clients: t("journal:approveAll.clientsPhrase", {
+                          count: cleanClientCount,
+                        }),
+                        remainder: t("journal:approveAll.remainderPhrase", {
+                          count: stats.pending - stats.cleanPending,
+                        }),
+                      })
+                    : t("journal:approveAll.body", {
+                        entries: t("journal:approveAll.entriesPhrase", {
+                          count: stats.cleanPending,
+                        }),
+                        clients: t("journal:approveAll.clientsPhrase", {
+                          count: cleanClientCount,
+                        }),
+                      })}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogCancel>{t("common:actions.cancel")}</AlertDialogCancel>
                 <AlertDialogAction onClick={approveAllClean}>
-                  Approve {stats.cleanPending}
+                  {t("journal:approveAll.confirm", { count: stats.cleanPending })}
                 </AlertDialogAction>
               </AlertDialogFooter>
             </>
           ) : (
             <>
               <AlertDialogHeader>
-                <AlertDialogTitle>Nothing to approve automatically</AlertDialogTitle>
+                <AlertDialogTitle>{t("journal:approveAll.nothingTitle")}</AlertDialogTitle>
                 <AlertDialogDescription>
                   {stats.pending === 0
-                    ? "There are no pending entries right now."
-                    : `All ${stats.pending} pending ${stats.pending === 1 ? "entry needs" : "entries need"} a manual look — each one is either flagged (${stats.flagged}) or has low AI confidence (${stats.lowConf}), so they are never approved in bulk. Open the Flagged tab to review them one by one.`}
+                    ? t("journal:approveAll.nothingNone")
+                    : t("journal:approveAll.nothingBody", {
+                        count: stats.pending,
+                        flagged: stats.flagged,
+                        lowConf: stats.lowConf,
+                      })}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
-                <AlertDialogCancel>Close</AlertDialogCancel>
+                <AlertDialogCancel>{t("common:actions.close")}</AlertDialogCancel>
               </AlertDialogFooter>
             </>
           )}
@@ -763,6 +791,7 @@ function ClientQueueRow({
   badge: { n: number; title: string };
   onSelect: () => void;
 }) {
+  const { t } = useTranslation("journal");
   const sinceIso =
     g.oldestPendingMs !== null ? new Date(g.oldestPendingMs).toISOString() : new Date(g.lastMs).toISOString();
   return (
@@ -770,7 +799,7 @@ function ClientQueueRow({
       type="button"
       onClick={onSelect}
       className={cn(
-        "flex w-full items-center gap-3 border-l-2 border-transparent px-3 py-2.5 text-left transition hover:bg-muted/50",
+        "flex w-full items-center gap-3 border-s-2 border-transparent px-3 py-2.5 text-start transition hover:bg-muted/50",
         active && "border-primary bg-primary/5",
       )}
     >
@@ -783,7 +812,7 @@ function ClientQueueRow({
         <div className="truncate text-sm font-medium">{g.name}</div>
         <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
           <Clock className="h-3 w-3" />
-          {g.oldestPendingMs !== null ? "waiting " : "last entry "}
+          {g.oldestPendingMs !== null ? t("queue.waiting") : t("queue.lastEntry")}{" "}
           <TimeAgo iso={sinceIso} />
         </div>
       </div>
@@ -792,7 +821,7 @@ function ClientQueueRow({
           <Badge
             variant="outline"
             className="gap-1 rounded-md border-amber-200 bg-amber-50 px-1.5 text-[10px] text-amber-700"
-            title={`${g.flagged} flagged`}
+            title={t("queue.flaggedTitle", { count: g.flagged })}
           >
             <AlertTriangle className="h-3 w-3" />
             {g.flagged}
@@ -812,7 +841,7 @@ function CountBadge({ n, tone }: { n: number; tone?: "warn" }) {
     <Badge
       variant="secondary"
       className={cn(
-        "ml-1 h-5 px-1.5 text-[10px]",
+        "ms-1 h-5 px-1.5 text-[10px]",
         tone === "warn" && "bg-amber-100 text-amber-700",
       )}
     >
@@ -838,29 +867,33 @@ function SourceIcon({ source }: { source: JournalSource }) {
 
 // null-safe: dashboard entries have confidence=null → render nothing
 function ConfidencePill({ c }: { c: JournalConfidence }) {
+  const { t } = useTranslation("journal");
   if (!c) return null;
-  const map = {
-    high: { label: "High", cls: "border-emerald-200 bg-emerald-50 text-emerald-700" },
-    medium: { label: "Medium", cls: "border-amber-200  bg-amber-50  text-amber-700" },
-    low: { label: "Low", cls: "border-rose-200   bg-rose-50   text-rose-700" },
-  } as const;
-  const m = map[c];
+  // Colour only — the words come from the `journal.confidence` keys. "AI {{level}}" is one
+  // string rather than "AI" + a separate word, because Arabic puts the qualifier after a
+  // longer noun phrase and cannot simply prefix it.
+  const cls = {
+    high: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    medium: "border-amber-200  bg-amber-50  text-amber-700",
+    low: "border-rose-200   bg-rose-50   text-rose-700",
+  }[c];
   return (
-    <Badge variant="outline" className={cn("gap-1 rounded-md text-[10px]", m.cls)}>
+    <Badge variant="outline" className={cn("gap-1 rounded-md text-[10px]", cls)}>
       <Sparkles className="h-3 w-3" />
-      AI {m.label}
+      {t("confidence.label", { level: t(`confidence.${c}`) })}
     </Badge>
   );
 }
 
 function StatusPill({ status }: { status: JournalEntry["status"] }) {
+  const { t } = useTranslation("journal");
   if (status === "approved")
     return (
       <Badge
         variant="outline"
         className="rounded-md border-emerald-200 bg-emerald-50 text-[10px] text-emerald-700"
       >
-        Approved
+        {t("status.approved")}
       </Badge>
     );
   if (status === "edited")
@@ -869,7 +902,7 @@ function StatusPill({ status }: { status: JournalEntry["status"] }) {
         variant="outline"
         className="rounded-md border-blue-200   bg-blue-50   text-[10px] text-blue-700"
       >
-        Edited
+        {t("status.edited")}
       </Badge>
     );
   if (status === "rejected")
@@ -878,7 +911,7 @@ function StatusPill({ status }: { status: JournalEntry["status"] }) {
         variant="outline"
         className="rounded-md border-rose-200   bg-rose-50   text-[10px] text-rose-700"
       >
-        Rejected
+        {t("status.rejected")}
       </Badge>
     );
   return (
@@ -886,25 +919,31 @@ function StatusPill({ status }: { status: JournalEntry["status"] }) {
       variant="outline"
       className="rounded-md border-amber-200 bg-amber-50 text-[10px] text-amber-700"
     >
-      Pending
+      {t("status.pending")}
     </Badge>
   );
 }
 
 function TimeAgo({ iso }: { iso: string }) {
+  const { timeAgo } = useJournalLabels();
   const [label, setLabel] = useState<string | null>(null);
+  // `timeAgo` is in the dependency list so switching language re-labels every visible row
+  // immediately rather than at the next 60s tick.
   useEffect(() => {
     setLabel(timeAgo(iso));
     const id = setInterval(() => setLabel(timeAgo(iso)), 60_000);
     return () => clearInterval(id);
-  }, [iso]);
+  }, [iso, timeAgo]);
   return <span>{label ?? "—"}</span>;
 }
 
 function SlotBadge({ log }: { log: JournalEntry }) {
-  const text = log.mealSlot ? SLOT_LABEL[log.mealSlot] : log.kind;
+  const labels = useJournalLabels();
+  // Falls back to the entry KIND ("meal"/"exercise") when there is no meal slot — which is also
+  // a translated label now rather than the raw enum under a CSS `capitalize`.
+  const text = log.mealSlot ? labels.slot(log.mealSlot) : labels.kind(log.kind);
   return (
-    <Badge variant="secondary" className="gap-1 rounded-md text-[10px] capitalize">
+    <Badge variant="secondary" className="gap-1 rounded-md text-[10px]">
       <KindIcon kind={log.kind} className="h-3 w-3" />
       {text}
     </Badge>
@@ -928,6 +967,8 @@ function LogRow({
   rejecting: boolean;
   hideClient?: boolean;
 }) {
+  const { t } = useTranslation(["journal", "common"]);
+  const labels = useJournalLabels();
   return (
     <Card
       onClick={onOpen}
@@ -951,11 +992,11 @@ function LogRow({
             <SlotBadge log={log} />
             <Badge variant="outline" className="gap-1 rounded-md text-[10px]">
               <SourceIcon source={log.source} />
-              {SOURCE_LABEL[log.source]}
+              {labels.source(log.source)}
             </Badge>
             <ConfidencePill c={log.confidence} />
             <StatusPill status={log.status} />
-            <span className="ml-auto flex items-center gap-1 text-[11px] text-muted-foreground">
+            <span className="ms-auto flex items-center gap-1 text-[11px] text-muted-foreground">
               <Clock className="h-3 w-3" />
               <TimeAgo iso={log.date} />
             </span>
@@ -999,7 +1040,12 @@ function LogRow({
                 </span>
               ))}
               {log.items.length > 4 && (
-                <span className="text-muted-foreground">+{log.items.length - 4} more</span>
+                <span className="text-muted-foreground">
+                  {t("journal:row.moreItems", {
+                    count: log.items.length - 4,
+                    isolated: ltrIsolate(`+${log.items.length - 4}`),
+                  })}
+                </span>
               )}
             </div>
           )}
@@ -1013,7 +1059,7 @@ function LogRow({
                   className="gap-1 rounded-md border-amber-200 bg-amber-50 text-[10px] text-amber-700"
                 >
                   <AlertTriangle className="h-3 w-3" />
-                  {FLAG_LABEL[f] ?? f}
+                  {labels.flag(f)}
                 </Badge>
               ))}
             </div>
@@ -1021,16 +1067,24 @@ function LogRow({
         </div>
 
         {log.kind === "meal" && log.totals.kcal > 0 && (
-          <div className="text-right shrink-0">
+          <div className="text-end shrink-0">
             <div className="flex items-center justify-end gap-1 font-display text-xl font-semibold tracking-tight">
               <Flame className="h-4 w-4 text-orange-500" />
               {log.totals.kcal}
             </div>
-            <div className="text-[10px] uppercase text-muted-foreground">kcal</div>
+            <div className="text-[10px] uppercase text-muted-foreground">
+              {t("journal:row.kcal")}
+            </div>
             <div className="mt-1 flex items-center justify-end gap-2 text-[10px] text-muted-foreground">
-              <span>P {log.totals.protein}</span>
-              <span>C {log.totals.carbs}</span>
-              <span>F {log.totals.fat}</span>
+              <span>
+                {t("common:macros.proteinShort")} {log.totals.protein}
+              </span>
+              <span>
+                {t("common:macros.carbsShort")} {log.totals.carbs}
+              </span>
+              <span>
+                {t("common:macros.fatShort")} {log.totals.fat}
+              </span>
             </div>
           </div>
         )}
@@ -1039,27 +1093,39 @@ function LogRow({
             "burned" — the two numbers must never be mistakable for one another at a glance,
             since nothing in this app subtracts one from the other. */}
         {log.kind === "exercise" && log.exercise && (
-          <div className="text-right shrink-0">
+          <div className="text-end shrink-0">
             {log.exercise.burnedCalories != null ? (
               <>
                 <div className="flex items-center justify-end gap-1 font-display text-xl font-semibold tracking-tight text-sky-700">
                   <Dumbbell className="h-4 w-4 text-sky-600" />
                   {log.exercise.burnedCalories}
                 </div>
-                <div className="text-[10px] uppercase text-muted-foreground">kcal burned</div>
+                <div className="text-[10px] uppercase text-muted-foreground">
+                  {t("journal:row.kcalBurned")}
+                </div>
               </>
             ) : (
-              <div className="text-[10px] uppercase text-muted-foreground">no estimate</div>
+              <div className="text-[10px] uppercase text-muted-foreground">
+                {t("journal:row.noEstimate")}
+              </div>
             )}
+            {/* `intensity` and `type` are free text the AI extracted from the client's own
+                WhatsApp message — client data, so shown as written and never translated. */}
             <div className="mt-1 text-[10px] capitalize text-muted-foreground">
-              {[log.exercise.minutes != null ? `${log.exercise.minutes} min` : null, log.exercise.intensity]
+              {[
+                log.exercise.minutes != null
+                  ? t("journal:row.minutes", { count: log.exercise.minutes })
+                  : null,
+                log.exercise.intensity,
+              ]
                 .filter(Boolean)
                 .join(" · ")}
             </div>
           </div>
         )}
 
-        <ChevronRight className="h-4 w-4 self-center text-muted-foreground opacity-0 transition group-hover:opacity-100" />
+        {/* "Open this row" affordance — points in the reading direction, so it mirrors. */}
+        <ChevronRight className="h-4 w-4 self-center text-muted-foreground opacity-0 transition group-hover:opacity-100 rtl:rotate-180" />
       </div>
 
       {log.status === "pending" && (
@@ -1081,7 +1147,7 @@ function LogRow({
               ) : (
                 <XCircle className="h-3.5 w-3.5" />
               )}
-              Reject
+              {t("journal:row.reject")}
             </Button>
             <Button
               size="sm"
@@ -1093,7 +1159,7 @@ function LogRow({
               }}
             >
               <Pencil className="h-3.5 w-3.5" />
-              Edit
+              {t("journal:row.edit")}
             </Button>
             <Button
               size="sm"
@@ -1109,7 +1175,7 @@ function LogRow({
               ) : (
                 <CheckCircle2 className="h-3.5 w-3.5" />
               )}
-              Approve
+              {t("journal:row.approve")}
             </Button>
           </div>
         </>
@@ -1127,6 +1193,8 @@ function LogDetail({
   onClose: () => void;
   onReject: () => void;
 }) {
+  const { t } = useTranslation(["journal", "common"]);
+  const labels = useJournalLabels();
   const qc = useQueryClient();
   const [editItems, setEditItems] = useState(
     log.items.map((i) => ({
@@ -1186,10 +1254,10 @@ function LogDetail({
               {log.clientInitials}
             </AvatarFallback>
           </Avatar>
-          <div className="text-left">
+          <div className="text-start">
             <SheetTitle className="font-display text-lg">{log.clientName}</SheetTitle>
             <p className="text-xs text-muted-foreground">
-              {SOURCE_LABEL[log.source]} · <TimeAgo iso={log.date} />
+              {labels.source(log.source)} · <TimeAgo iso={log.date} />
             </p>
           </div>
         </div>
@@ -1205,7 +1273,7 @@ function LogDetail({
         <a href={log.photo.url} target="_blank" rel="noreferrer" className="mt-4 block">
           <img
             src={log.photo.url}
-            alt="Meal photo sent by the client"
+            alt={t("journal:detail.photoAlt")}
             className="max-h-72 w-full rounded-lg border object-contain"
           />
         </a>
@@ -1214,7 +1282,7 @@ function LogDetail({
       {log.rawMessage && (
         <Card className="mt-4 bg-muted/40 p-3">
           <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-            Original message
+            {t("journal:detail.originalMessage")}
           </div>
           <p className="mt-1 text-sm italic">"{log.rawMessage}"</p>
         </Card>
@@ -1224,11 +1292,11 @@ function LogDetail({
         <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
           <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-800">
             <AlertTriangle className="h-3.5 w-3.5" />
-            Why this was flagged
+            {t("journal:detail.whyFlagged")}
           </div>
           <ul className="mt-1.5 space-y-1 text-xs text-amber-900/90">
             {log.flags.map((f) => (
-              <li key={f}>· {FLAG_LABEL[f] ?? f}</li>
+              <li key={f}>· {labels.flag(f)}</li>
             ))}
             {log.note && <li className="mt-1 text-amber-800">— {log.note}</li>}
           </ul>
@@ -1241,7 +1309,7 @@ function LogDetail({
       {log.kind === "exercise" && log.exercise && (
         <>
           <Separator className="my-5" />
-          <h3 className="mb-2 text-sm font-semibold">Activity</h3>
+          <h3 className="mb-2 text-sm font-semibold">{t("journal:detail.activity")}</h3>
           <Card className="p-3">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
@@ -1252,25 +1320,27 @@ function LogDetail({
                   <p className="text-sm font-medium capitalize">{log.exercise.type}</p>
                   <p className="text-xs capitalize text-muted-foreground">
                     {[
-                      log.exercise.minutes != null ? `${log.exercise.minutes} min` : null,
+                      log.exercise.minutes != null
+                        ? t("journal:row.minutes", { count: log.exercise.minutes })
+                        : null,
                       log.exercise.intensity,
                     ]
                       .filter(Boolean)
-                      .join(" · ") || "No duration reported"}
+                      .join(" · ") || t("journal:detail.noDuration")}
                   </p>
                 </div>
               </div>
-              <div className="text-right">
+              <div className="text-end">
                 <p className="font-display text-xl font-semibold tracking-tight text-sky-700">
                   {log.exercise.burnedCalories ?? "—"}
                 </p>
-                <p className="text-[10px] uppercase text-muted-foreground">kcal burned</p>
+                <p className="text-[10px] uppercase text-muted-foreground">
+                  {t("journal:detail.kcalBurned")}
+                </p>
               </div>
             </div>
             <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
-              Estimated from the activity, duration and the client's weight. Not subtracted from
-              their daily target — approving this records the session, it doesn't give back
-              calories.
+              {t("journal:detail.burnNote")}
             </p>
           </Card>
         </>
@@ -1280,7 +1350,7 @@ function LogDetail({
         <>
           <Separator className="my-5" />
           <div className="mb-2 flex items-center justify-between">
-            <h3 className="text-sm font-semibold">Items</h3>
+            <h3 className="text-sm font-semibold">{t("journal:detail.items")}</h3>
             <Button
               size="sm"
               variant="ghost"
@@ -1292,7 +1362,7 @@ function LogDetail({
                 ])
               }
             >
-              <Plus className="h-3 w-3" /> Add item
+              <Plus className="h-3 w-3" /> {t("journal:detail.addItem")}
             </Button>
           </div>
 
@@ -1304,41 +1374,42 @@ function LogDetail({
                     value={it.label}
                     onChange={(e) => updateItem(idx, { label: e.target.value })}
                     className="h-8 text-sm"
-                    placeholder="Item name"
+                    placeholder={t("journal:detail.itemName")}
                   />
                   <Button
                     size="icon"
                     variant="ghost"
                     className="h-8 w-8 text-muted-foreground hover:text-rose-600"
                     onClick={() => setEditItems((p) => p.filter((_, i) => i !== idx))}
+                    aria-label={t("journal:detail.removeItem")}
                   >
                     <Minus className="h-3.5 w-3.5" />
                   </Button>
                 </div>
                 <div className="mt-2 grid grid-cols-5 gap-1.5">
                   <LabeledInput
-                    label="Grams"
+                    label={t("journal:detail.grams")}
                     value={it.grams}
                     onChange={(v) => updateItem(idx, { grams: v })}
                     isText
                   />
                   <LabeledInput
-                    label="kcal"
+                    label={t("journal:row.kcal")}
                     value={String(it.calories)}
                     onChange={(v) => updateItem(idx, { calories: Number(v) || 0 })}
                   />
                   <LabeledInput
-                    label="P"
+                    label={t("common:macros.proteinShort")}
                     value={String(it.protein)}
                     onChange={(v) => updateItem(idx, { protein: Number(v) || 0 })}
                   />
                   <LabeledInput
-                    label="C"
+                    label={t("common:macros.carbsShort")}
                     value={String(it.carbs)}
                     onChange={(v) => updateItem(idx, { carbs: Number(v) || 0 })}
                   />
                   <LabeledInput
-                    label="F"
+                    label={t("common:macros.fatShort")}
                     value={String(it.fat)}
                     onChange={(v) => updateItem(idx, { fat: Number(v) || 0 })}
                   />
@@ -1349,24 +1420,35 @@ function LogDetail({
 
           <Card className="mt-4 bg-primary/5 p-3">
             <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              Meal totals
+              {t("journal:detail.mealTotals")}
             </div>
             <div className="mt-2 grid grid-cols-4 gap-2 text-center">
-              <TotalCell label="kcal" value={totals.kcal} />
-              <TotalCell label="Protein" value={`${totals.protein}g`} />
-              <TotalCell label="Carbs" value={`${totals.carbs}g`} />
-              <TotalCell label="Fat" value={`${totals.fat}g`} />
+              <TotalCell label={t("journal:row.kcal")} value={totals.kcal} />
+              <TotalCell
+                label={t("common:macros.protein")}
+                value={t("common:units.gramValue", { value: totals.protein })}
+              />
+              <TotalCell
+                label={t("common:macros.carbs")}
+                value={t("common:units.gramValue", { value: totals.carbs })}
+              />
+              <TotalCell
+                label={t("common:macros.fat")}
+                value={t("common:units.gramValue", { value: totals.fat })}
+              />
             </div>
           </Card>
         </>
       )}
 
       <Separator className="my-5" />
-      <label className="text-xs font-medium text-muted-foreground">Coach note (optional)</label>
+      <label className="text-xs font-medium text-muted-foreground">
+        {t("journal:detail.coachNote")}
+      </label>
       <Textarea
         value={note}
         onChange={(e) => setNote(e.target.value)}
-        placeholder="e.g. Great choice — let's swap the croissant for fruit next time."
+        placeholder={t("journal:detail.coachNotePlaceholder")}
         className="mt-1.5 min-h-15 text-sm"
       />
 
@@ -1377,11 +1459,11 @@ function LogDetail({
           ) : (
             <CheckCircle2 className="h-4 w-4" />
           )}
-          {saving ? "Saving…" : "Approve & push to chart"}
+          {saving ? t("common:actions.saving") : t("journal:detail.approveAndPush")}
         </Button>
         <Button size="sm" variant="outline" className="gap-1.5" onClick={onClose}>
-          <Send className="h-3.5 w-3.5" />
-          Reply on WhatsApp
+          <Send className="h-3.5 w-3.5 rtl:-scale-x-100" />
+          {t("journal:detail.replyOnWhatsApp")}
         </Button>
         <Button
           size="sm"
@@ -1390,7 +1472,7 @@ function LogDetail({
           onClick={onReject}
         >
           <XCircle className="h-4 w-4" />
-          Reject
+          {t("journal:detail.reject")}
         </Button>
       </div>
     </>

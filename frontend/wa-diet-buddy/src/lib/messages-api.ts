@@ -1,3 +1,7 @@
+import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
+
+import { useFormatters } from "@/lib/i18n/format";
 import { api } from "./api";
 
 // Real Messages inbox (prompt-96), replacing lib/messages-mock.ts.
@@ -56,7 +60,10 @@ export interface ConversationSummary {
 // attachmentUrl is omitted alongside the other "last message" fields: on a thread the photos
 // live on the individual messages, and a thread-level copy of the newest one would be a second
 // source of truth for the same image.
-export interface Thread extends Omit<ConversationSummary, "lastSnippet" | "attachmentUrl" | "lastAtIso" | "unread" | "awaitingDietitian" | "messageCount"> {
+export interface Thread extends Omit<
+  ConversationSummary,
+  "lastSnippet" | "attachmentUrl" | "lastAtIso" | "unread" | "awaitingDietitian" | "messageCount"
+> {
   messages: ChatMessage[];
 }
 
@@ -95,28 +102,51 @@ export async function setAiAutopilot(clientId: string, aiAutopilot: boolean): Pr
 }
 
 // ── Display helpers, lifted verbatim from messages-mock.ts so the UI formats identically ──
-export function formatClock(iso: string): string {
-  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+// ── Date/time formatting (localised) ─────────────────────────────────────────────────────────
+//
+// These three were module-level functions returning English ("Today", "2 min"). They are now
+// factories that take the active language's helpers, because the strings they produce are
+// user-visible and the chat is the densest date display in the app. `useThreadFormatters` below
+// is what the Messages page actually calls.
+
+export function createClockFormatter(fmt: { time: (v: string) => string }) {
+  return (iso: string) => fmt.time(iso);
 }
 
-export function formatDay(iso: string): string {
-  const d = new Date(iso);
-  const today = new Date();
-  const yesterday = new Date(today);
-  yesterday.setDate(today.getDate() - 1);
-  if (d.toDateString() === today.toDateString()) return "Today";
-  if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
-  return d.toLocaleDateString([], { day: "numeric", month: "short" });
+export function createDayFormatter(
+  fmt: { date: (v: string, o?: Intl.DateTimeFormatOptions) => string },
+  labels: { today: string; yesterday: string },
+) {
+  return (iso: string): string => {
+    const d = new Date(iso);
+    const today = new Date();
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    if (d.toDateString() === today.toDateString()) return labels.today;
+    if (d.toDateString() === yesterday.toDateString()) return labels.yesterday;
+    return fmt.date(iso, { day: "numeric", month: "short" });
+  };
 }
 
-// Relative label for the conversation list ("2 min"), which the mock stored as a frozen string.
-export function relativeAgo(iso: string): string {
-  const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
-  if (mins < 1) return "now";
-  if (mins < 60) return `${mins} min`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
+/**
+ * Compact relative label for the conversation list ("2 min"), which the mock stored as a frozen
+ * string. Deliberately NOT the `common:time.*` plural set used elsewhere: this one has to fit in
+ * a ~40px column next to each row, so it is the abbreviated form in both languages.
+ */
+export function createRelativeAgoFormatter(labels: {
+  now: string;
+  minutes: (n: number) => string;
+  hours: (n: number) => string;
+  days: (n: number) => string;
+}) {
+  return (iso: string): string => {
+    const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+    if (mins < 1) return labels.now;
+    if (mins < 60) return labels.minutes(mins);
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return labels.hours(hours);
+    return labels.days(Math.floor(hours / 24));
+  };
 }
 
 // ── Mock fields with no real source, deliberately not built ──────────────────────────────────
@@ -126,3 +156,28 @@ export function relativeAgo(iso: string): string {
 // voiceSeconds  — n8n doesn't send duration; attachmentLabel covers the display.
 // status "delivered"/"read" — needs WhatsApp delivery receipts flowing back through n8n, which
 //                 don't exist yet. Inventing them would put meaningless ticks in the UI.
+
+// ── Hook wrapper ─────────────────────────────────────────────────────────────────────────────
+// Kept at the bottom of this file rather than in the route, so the Messages page gets one import
+// and the three formatters cannot drift apart.
+export function useThreadFormatters() {
+  const { t } = useTranslation("messages");
+  const fmt = useFormatters();
+
+  return useMemo(
+    () => ({
+      clock: createClockFormatter(fmt),
+      day: createDayFormatter(fmt, {
+        today: t("common:time.today"),
+        yesterday: t("common:time.yesterday"),
+      }),
+      ago: createRelativeAgoFormatter({
+        now: t("ago.now"),
+        minutes: (count) => t("ago.minutes", { count }),
+        hours: (count) => t("ago.hours", { count }),
+        days: (count) => t("ago.days", { count }),
+      }),
+    }),
+    [t, fmt],
+  );
+}

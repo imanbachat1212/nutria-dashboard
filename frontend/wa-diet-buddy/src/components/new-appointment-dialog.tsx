@@ -17,6 +17,7 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,7 +44,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import {
-  typeMeta,
+  useTypeMeta,
   staffPoolForType,
   isCapacityType,
   categoryForStaff,
@@ -64,8 +65,8 @@ interface NewAppointmentDialogProps {
 }
 
 const STEPS = [
-  { id: 1, label: "Details" },
-  { id: 2, label: "Review" },
+  { id: 1, labelKey: "newAppt.stepDetails" },
+  { id: 2, labelKey: "newAppt.stepReview" },
 ];
 
 const APPT_TYPES: AppointmentType[] = [
@@ -85,6 +86,8 @@ export function NewAppointmentDialog({
   onCreate,
   defaultDate,
 }: NewAppointmentDialogProps) {
+  const { t } = useTranslation(["appointments", "common"]);
+  const typeMeta = useTypeMeta();
   const [step, setStep] = useState(1);
 
   const initialDate = defaultDate ?? new Date();
@@ -193,7 +196,11 @@ export function NewAppointmentDialog({
   const meta = typeMeta(type);
   const staff = staffPool.find((s) => s.id === staffId) ?? staffPool[0];
   const staffLabel =
-    meta.group === "gym" ? "Trainer" : meta.group === "diet" ? "Dietitian" : "Staff";
+    meta.group === "gym"
+      ? t("appointments:newAppt.staffTrainer")
+      : meta.group === "diet"
+        ? t("appointments:newAppt.staffDietitian")
+        : t("appointments:newAppt.staffGeneric");
 
   const overCapacity = isCapacity && attendees.length > capacity;
 
@@ -209,11 +216,11 @@ export function NewAppointmentDialog({
   // fallback the calendar tile uses (typeMeta(type).label) once name goes unset in the payload.
   const reviewTitle = isCapacity
     ? type === "gym-class"
-      ? className || "New class"
+      ? className || t("appointments:newAppt.newClass")
       : attendees.length > 0
         ? attendees.map((a) => a.name).join(", ")
         : meta.label
-    : selectedClient?.name || "New appointment";
+    : selectedClient?.name || t("appointments:newAppt.title");
 
   const canAdvance = step === 1 && !!staffId && nameValid && !overCapacity;
 
@@ -260,8 +267,8 @@ export function NewAppointmentDialog({
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>New appointment</DialogTitle>
-          <DialogDescription>Schedule a diet or gym session on the calendar.</DialogDescription>
+          <DialogTitle>{t("appointments:newAppt.title")}</DialogTitle>
+          <DialogDescription>{t("appointments:newAppt.subtitle")}</DialogDescription>
         </DialogHeader>
 
         {/* Stepper */}
@@ -286,7 +293,7 @@ export function NewAppointmentDialog({
                   step === s.id ? "text-foreground" : "text-muted-foreground",
                 )}
               >
-                {s.label}
+                {t(`appointments:${s.labelKey}`)}
               </div>
               {i < STEPS.length - 1 && <Separator className="flex-1" />}
             </div>
@@ -299,7 +306,7 @@ export function NewAppointmentDialog({
               {/* Appointment type */}
               <section className="space-y-3">
                 <h3 className="text-sm font-semibold flex items-center gap-1.5">
-                  <ClipboardList className="size-4" /> Appointment type
+                  <ClipboardList className="size-4" /> {t("appointments:newAppt.appointmentType")}
                 </h3>
                 <div className="grid grid-cols-2 gap-3">
                   {APPT_TYPES.map((t) => {
@@ -312,7 +319,7 @@ export function NewAppointmentDialog({
                         key={t}
                         onClick={() => setType(t)}
                         className={cn(
-                          "flex items-center gap-2 rounded-md border px-3 py-2 text-left text-sm transition-colors",
+                          "flex items-center gap-2 rounded-md border px-3 py-2 text-start text-sm transition-colors",
                           active
                             ? "border-primary bg-primary/10 text-primary"
                             : "border-input bg-background hover:bg-accent",
@@ -337,10 +344,10 @@ export function NewAppointmentDialog({
                   {type === "gym-class" ? (
                     <div className="grid grid-cols-2 gap-3">
                       <div className="space-y-1.5">
-                        <Label htmlFor="className">Class type *</Label>
+                        <Label htmlFor="className">{t("appointments:newAppt.classType")}</Label>
                         <Select value={className} onValueChange={setClassName}>
                           <SelectTrigger id="className">
-                            <SelectValue placeholder="Select a class type" />
+                            <SelectValue placeholder={t("appointments:newAppt.selectClassType")} />
                           </SelectTrigger>
                           <SelectContent>
                             {classTypes.map((c: string) => (
@@ -352,7 +359,7 @@ export function NewAppointmentDialog({
                         </Select>
                       </div>
                       <div className="space-y-1.5">
-                        <Label htmlFor="capacity">Capacity</Label>
+                        <Label htmlFor="capacity">{t("appointments:newAppt.capacity")}</Label>
                         <Input
                           id="capacity"
                           type="number"
@@ -367,7 +374,7 @@ export function NewAppointmentDialog({
                     // Gym machine has no name field — the resource is generic ("Gym machine"
                     // on the tile/Sheet until attendees are booked, then their names take over).
                     <div className="space-y-1.5 max-w-40">
-                      <Label htmlFor="capacity">Capacity</Label>
+                      <Label htmlFor="capacity">{t("appointments:newAppt.capacity")}</Label>
                       <Input
                         id="capacity"
                         type="number"
@@ -380,17 +387,19 @@ export function NewAppointmentDialog({
                   )}
 
                   <div className="space-y-1.5">
-                    <Label>Attendees</Label>
+                    <Label>{t("appointments:newAppt.attendees")}</Label>
                     {attendees.length > 0 && (
                       <div className="flex flex-wrap gap-1.5">
                         {attendees.map((a) => (
-                          <Badge key={a.id} variant="secondary" className="gap-1 pr-1 font-normal">
+                          <Badge key={a.id} variant="secondary" className="gap-1 pe-1 font-normal">
                             {a.name}
                             <button
                               type="button"
                               onClick={() => toggleAttendee(a)}
-                              className="ml-1 rounded-full p-0.5 hover:bg-muted-foreground/20"
-                              aria-label={`Remove ${a.name}`}
+                              className="ms-1 rounded-full p-0.5 hover:bg-muted-foreground/20"
+                              aria-label={t("appointments:newAppt.removeAttendee", {
+                                name: a.name,
+                              })}
                             >
                               <X className="size-3" />
                             </button>
@@ -399,12 +408,12 @@ export function NewAppointmentDialog({
                       </div>
                     )}
                     <div className="relative">
-                      <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                      <Search className="absolute start-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                       <Input
                         value={clientSearch}
                         onChange={(e) => setClientSearch(e.target.value)}
-                        placeholder="Search clients…"
-                        className="pl-8"
+                        placeholder={t("appointments:newAppt.searchClients")}
+                        className="ps-8"
                       />
                     </div>
                     <ScrollArea className="h-40 border rounded-md">
@@ -419,7 +428,7 @@ export function NewAppointmentDialog({
                               onClick={() => toggleAttendee(c)}
                               disabled={blocked}
                               className={cn(
-                                "w-full flex items-center gap-3 px-2.5 py-2 rounded-md text-left transition-colors",
+                                "w-full flex items-center gap-3 px-2.5 py-2 rounded-md text-start transition-colors",
                                 selected
                                   ? "bg-primary/10 ring-1 ring-primary/30"
                                   : blocked
@@ -444,7 +453,7 @@ export function NewAppointmentDialog({
                         })}
                         {allClients.length === 0 && (
                           <div className="text-xs text-muted-foreground p-6 text-center">
-                            No clients match "{clientSearch}"
+                            {t("appointments:newAppt.noClientsMatch", { query: clientSearch })}
                           </div>
                         )}
                       </div>
@@ -456,27 +465,34 @@ export function NewAppointmentDialog({
                       )}
                     >
                       {overCapacity
-                        ? `${attendees.length} selected exceeds capacity of ${capacity}. Remove ${attendees.length - capacity} or increase capacity.`
-                        : `${attendees.length}/${capacity} selected`}
+                        ? t("appointments:newAppt.overCapacity", {
+                            selected: attendees.length,
+                            capacity,
+                            excess: attendees.length - capacity,
+                          })
+                        : t("appointments:newAppt.selectedOfCapacity", {
+                            selected: attendees.length,
+                            capacity,
+                          })}
                     </p>
                   </div>
 
                   <p className="text-xs text-muted-foreground">
-                    More attendees can be added from the appointment detail view after it's created.
+                    {t("appointments:newAppt.moreLater")}
                   </p>
                 </section>
               ) : (
                 <section className="space-y-3">
                   <h3 className="text-sm font-semibold flex items-center gap-1.5">
-                    <Users className="size-4" /> Client
+                    <Users className="size-4" /> {t("appointments:newAppt.client")}
                   </h3>
                   <div className="relative">
-                    <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                    <Search className="absolute start-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                     <Input
                       value={clientSearch}
                       onChange={(e) => setClientSearch(e.target.value)}
-                      placeholder="Search clients…"
-                      className="pl-8"
+                      placeholder={t("appointments:newAppt.searchClients")}
+                      className="ps-8"
                     />
                   </div>
                   <ScrollArea className="h-40 border rounded-md">
@@ -488,7 +504,7 @@ export function NewAppointmentDialog({
                             key={c.id}
                             onClick={() => setClientId(c.id)}
                             className={cn(
-                              "w-full flex items-center gap-3 px-2.5 py-2 rounded-md text-left transition-colors",
+                              "w-full flex items-center gap-3 px-2.5 py-2 rounded-md text-start transition-colors",
                               selected
                                 ? "bg-primary/10 ring-1 ring-primary/30"
                                 : "hover:bg-muted/40",
@@ -511,7 +527,7 @@ export function NewAppointmentDialog({
                       })}
                       {allClients.length === 0 && (
                         <div className="text-xs text-muted-foreground p-6 text-center">
-                          No clients match "{clientSearch}"
+                          {t("appointments:newAppt.noClientsMatch", { query: clientSearch })}
                         </div>
                       )}
                     </div>
@@ -523,17 +539,17 @@ export function NewAppointmentDialog({
 
               {/* Status */}
               <section className="space-y-1.5">
-                <Label>Status</Label>
+                <Label>{t("appointments:newAppt.status")}</Label>
                 <Select value={status} onValueChange={(v) => setStatus(v as AppointmentStatus)}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="confirmed">Confirmed</SelectItem>
-                    <SelectItem value="pending">Pending</SelectItem>
-                    <SelectItem value="completed">Completed</SelectItem>
-                    <SelectItem value="no-show">No-show</SelectItem>
-                    <SelectItem value="cancelled">Cancelled</SelectItem>
+                    <SelectItem value="confirmed">{t("appointments:status.confirmed")}</SelectItem>
+                    <SelectItem value="pending">{t("appointments:status.pending")}</SelectItem>
+                    <SelectItem value="completed">{t("appointments:status.completed")}</SelectItem>
+                    <SelectItem value="no-show">{t("appointments:status.no-show")}</SelectItem>
+                    <SelectItem value="cancelled">{t("appointments:status.cancelled")}</SelectItem>
                   </SelectContent>
                 </Select>
               </section>
@@ -543,37 +559,37 @@ export function NewAppointmentDialog({
               {/* Date / time / duration */}
               <section className="space-y-3">
                 <h3 className="text-sm font-semibold flex items-center gap-1.5">
-                  <CalendarDays className="size-4" /> Date & time
+                  <CalendarDays className="size-4" /> {t("appointments:newAppt.dateTime")}
                 </h3>
                 <div className="grid grid-cols-3 gap-3">
                   <div className="space-y-1.5">
-                    <Label htmlFor="date">Date</Label>
+                    <Label htmlFor="date">{t("appointments:newAppt.date")}</Label>
                     <div className="relative">
-                      <Calendar className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                      <Calendar className="absolute start-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                       <Input
                         id="date"
                         type="date"
                         value={date}
                         onChange={(e) => setDate(e.target.value)}
-                        className="pl-8"
+                        className="ps-8"
                       />
                     </div>
                   </div>
                   <div className="space-y-1.5">
-                    <Label htmlFor="time">Time</Label>
+                    <Label htmlFor="time">{t("appointments:newAppt.time")}</Label>
                     <div className="relative">
-                      <Clock className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                      <Clock className="absolute start-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                       <Input
                         id="time"
                         type="time"
                         value={time}
                         onChange={(e) => setTime(e.target.value)}
-                        className="pl-8"
+                        className="ps-8"
                       />
                     </div>
                   </div>
                   <div className="space-y-1.5">
-                    <Label>Duration</Label>
+                    <Label>{t("appointments:newAppt.duration")}</Label>
                     <Select
                       value={durationMin.toString()}
                       onValueChange={(v) => setDurationMin(Number(v))}
@@ -585,7 +601,7 @@ export function NewAppointmentDialog({
                       <SelectContent>
                         {DURATIONS.map((d) => (
                           <SelectItem key={d} value={d.toString()}>
-                            {d} min
+                            {t("appointments:newAppt.durationMinutes", { count: d })}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -599,7 +615,7 @@ export function NewAppointmentDialog({
               {/* Staff / room */}
               <section className="space-y-3">
                 <h3 className="text-sm font-semibold flex items-center gap-1.5">
-                  <Users className="size-4" /> Staff & room
+                  <Users className="size-4" /> {t("appointments:newAppt.staffAndRoom")}
                 </h3>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
@@ -611,22 +627,22 @@ export function NewAppointmentDialog({
                       <SelectContent>
                         {staffPool.map((s) => (
                           <SelectItem key={s.id} value={s.id}>
-                            {s.name} · {s.role}
+                            {t("appointments:newAppt.staffOption", { name: s.name, role: s.role })}
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
                   <div className="space-y-1.5">
-                    <Label htmlFor="room">Room / location</Label>
+                    <Label htmlFor="room">{t("appointments:newAppt.room")}</Label>
                     <div className="relative">
-                      <DoorOpen className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                      <DoorOpen className="absolute start-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                       <Input
                         id="room"
                         value={room}
                         onChange={(e) => setRoom(e.target.value)}
-                        placeholder="e.g. Room 1"
-                        className="pl-8"
+                        placeholder={t("appointments:newAppt.roomPlaceholder")}
+                        className="ps-8"
                       />
                     </div>
                   </div>
@@ -637,12 +653,12 @@ export function NewAppointmentDialog({
 
               {/* Notes */}
               <section className="space-y-1.5">
-                <Label htmlFor="notes">Notes</Label>
+                <Label htmlFor="notes">{t("appointments:newAppt.notes")}</Label>
                 <Textarea
                   id="notes"
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Anything staff should know before the session."
+                  placeholder={t("appointments:newAppt.notesPlaceholder")}
                   rows={2}
                 />
               </section>
@@ -664,7 +680,10 @@ export function NewAppointmentDialog({
                     <div className="font-semibold">{reviewTitle}</div>
                     <div className="text-xs text-muted-foreground">
                       {isCapacity
-                        ? `${attendees.length}/${capacity} attendees booked`
+                        ? t("appointments:newAppt.attendeesBooked", {
+                            booked: attendees.length,
+                            capacity,
+                          })
                         : selectedClient?.phone || "—"}
                     </div>
                     {isCapacity && attendees.length > 0 && (
@@ -679,7 +698,7 @@ export function NewAppointmentDialog({
                       <Badge
                         variant="secondary"
                         className={cn(
-                          "text-[10px] capitalize",
+                          "text-[10px]",
                           status === "confirmed" && "bg-emerald-100 text-emerald-700",
                           status === "pending" && "bg-amber-100 text-amber-700",
                           status === "completed" && "bg-muted text-foreground",
@@ -687,7 +706,7 @@ export function NewAppointmentDialog({
                           status === "cancelled" && "bg-muted text-muted-foreground",
                         )}
                       >
-                        {status}
+                        {t(`appointments:status.${status}`)}
                       </Badge>
                     </div>
                   </div>
@@ -696,16 +715,17 @@ export function NewAppointmentDialog({
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div>
                     <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      Date
+                      {t("appointments:newAppt.date")}
                     </div>
                     <div>{date}</div>
                   </div>
                   <div>
                     <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      Time
+                      {t("appointments:newAppt.time")}
                     </div>
                     <div>
-                      {startLabel} · {durationMin} min
+                      {startLabel} ·{" "}
+                      {t("appointments:newAppt.durationMinutes", { count: durationMin })}
                     </div>
                   </div>
                   <div>
@@ -716,7 +736,7 @@ export function NewAppointmentDialog({
                   </div>
                   <div>
                     <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      Room
+                      {t("appointments:newAppt.roomShort")}
                     </div>
                     <div>{room || "—"}</div>
                   </div>
@@ -726,7 +746,7 @@ export function NewAppointmentDialog({
                     <Separator className="my-3" />
                     <div>
                       <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                        Notes
+                        {t("appointments:newAppt.notes")}
                       </div>
                       <p className="text-sm text-muted-foreground">{notes}</p>
                     </div>
@@ -748,16 +768,17 @@ export function NewAppointmentDialog({
             onClick={() => setStep((s) => Math.max(1, s - 1))}
             disabled={step === 1}
           >
-            <ChevronLeft className="size-4" /> Back
+            {/* Step navigation: both chevrons point along the reading direction. */}
+            <ChevronLeft className="size-4 rtl:rotate-180" /> {t("appointments:newAppt.back")}
           </Button>
           {step < STEPS.length ? (
             <Button onClick={() => setStep((s) => s + 1)} disabled={!canAdvance}>
-              Next <ChevronRight className="size-4" />
+              {t("appointments:newAppt.next")} <ChevronRight className="size-4 rtl:rotate-180" />
             </Button>
           ) : (
             <Button onClick={() => mutation.mutate()} disabled={mutation.isPending}>
               <CheckCircle2 className="size-4" />
-              {mutation.isPending ? "Saving…" : "Save appointment"}
+              {mutation.isPending ? t("common:actions.saving") : t("appointments:newAppt.save")}
             </Button>
           )}
         </DialogFooter>

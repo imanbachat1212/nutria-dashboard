@@ -1,3 +1,8 @@
+import { useCallback, useMemo } from "react";
+import { useTranslation } from "react-i18next";
+
+import { useFormatters } from "@/lib/i18n/format";
+
 export type AppointmentType =
   | "consult-initial"
   | "consult-followup"
@@ -163,6 +168,17 @@ export function apptDateKey(iso: string): string {
   return utcDateKey(new Date(iso));
 }
 
+// ── Date/time formatting ─────────────────────────────────────────────────────────────────────
+//
+// Everything here reads the timestamp in UTC ON PURPOSE. new-appointment-dialog.tsx stores the
+// dietitian's chosen wall-clock time via Date.UTC(...), so a booking entered as 09:00 sits in
+// Mongo as 09:00Z; formatting in the viewer's own zone would show a Beirut dietitian 12:00 for
+// the appointment she typed as 09:00.
+//
+// The LOCALISED versions are in `useAppointmentFormatters` at the bottom of this file: they keep
+// `timeZone: "UTC"` and get Arabic weekday/month names from Intl, instead of indexing the
+// hardcoded English DAY_NAMES/MONTH_NAMES arrays these originals use. These originals stay for
+// out-of-scope callers.
 export function formatTime(iso: string): string {
   const d = new Date(iso);
   const h = d.getUTCHours();
@@ -198,3 +214,60 @@ export function fmtRelative(iso: string, nowIso: string = new Date().toISOString
 }
 
 export const TODAY_KEY = new Date().toISOString().split("T")[0];
+
+// ── Localised formatters + type labels ───────────────────────────────────────────────────────
+
+/**
+ * `typeMeta` with the label translated. The TYPE KEYS ("consult-initial", "gym-class") are API
+ * values and stay English; only `label` changes.
+ */
+export function useTypeMeta() {
+  const { t } = useTranslation("appointments");
+  return useCallback(
+    (type: AppointmentType) => {
+      const meta = TYPE_META[type];
+      return { ...meta, label: meta ? t(`type.${type}`) : type };
+    },
+    [t],
+  );
+}
+
+/**
+ * The calendar's date/time strings, localised but still read in UTC (see the note above
+ * formatTime). Intl with `timeZone: "UTC"` gives Arabic month and weekday names without
+ * shifting the clock, which indexing a hardcoded English array could never do.
+ */
+export function useAppointmentFormatters() {
+  const { t } = useTranslation("appointments");
+  const { locale } = useFormatters();
+
+  return useMemo(() => {
+    const dtf = (options: Intl.DateTimeFormatOptions) =>
+      new Intl.DateTimeFormat(locale, { ...options, timeZone: "UTC" });
+
+    const timeFmt = dtf({ hour: "numeric", minute: "2-digit", hour12: true });
+    const dayHeadingFmt = dtf({ weekday: "long", month: "long", day: "numeric" });
+    const weekdayFmt = dtf({ weekday: "short" });
+    const monthYearFmt = dtf({ month: "long", year: "numeric" });
+    const monthShortFmt = dtf({ month: "short", day: "numeric" });
+
+    return {
+      time: (iso: string) => timeFmt.format(new Date(iso)),
+      dayHeading: (d: Date) => dayHeadingFmt.format(d),
+      shortDay: (d: Date) => ({
+        weekday: weekdayFmt.format(d),
+        date: d.getUTCDate(),
+      }),
+      monthYear: (d: Date) => monthYearFmt.format(d),
+      monthShort: (d: Date) => monthShortFmt.format(d),
+      relative: (iso: string, nowIso: string = new Date().toISOString()): string => {
+        const diffMin = Math.round((new Date(nowIso).getTime() - new Date(iso).getTime()) / 60000);
+        if (diffMin < 1) return t("ago.justNow");
+        if (diffMin < 60) return t("ago.minutes", { count: diffMin });
+        const h = Math.floor(diffMin / 60);
+        if (h < 24) return t("ago.hours", { count: h });
+        return t("ago.days", { count: Math.floor(h / 24) });
+      },
+    };
+  }, [locale, t]);
+}

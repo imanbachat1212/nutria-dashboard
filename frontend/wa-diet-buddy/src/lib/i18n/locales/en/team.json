@@ -1,0 +1,175 @@
+{
+  "eyebrow": "Admin",
+  "title": "Team & Access",
+  "description": "Invite teammates, assign roles, and review everything that has been changed.",
+  "inviteTeammate": "Invite teammate",
+  "roles": {
+    "unknown": "Unknown",
+    "owner": {
+      "label": "Owner",
+      "description": "Full access. Billing, team, danger-zone settings."
+    },
+    "dietitian": {
+      "label": "Dietitian",
+      "description": "Manage clients, plans, appointments and journal."
+    },
+    "intern": {
+      "label": "Intern",
+      "description": "Read-only on clients; can draft plans for review."
+    },
+    "reception": {
+      "label": "Reception",
+      "description": "Booking, intake forms and basic client info only."
+    },
+    "accountant": {
+      "label": "Accountant",
+      "description": "Billing, invoices and financial reports."
+    },
+    "assistant": {
+      "label": "Assistant (legacy)",
+      "description": "Retired role — migrate these users to reception."
+    }
+  },
+  "status": {
+    "active": "Active",
+    "suspended": "Suspended"
+  },
+  "stats": {
+    "members": "Team members",
+    "membersHint": "{{count}} active",
+    "pendingInvites": "Pending invites",
+    "expiredHint": "{{count}} expired",
+    "awaitingHint": "awaiting acceptance",
+    "roles": "Roles",
+    "rolesHint": "permission sets",
+    "owners": "Owners",
+    "ownersHint": "can manage the team"
+  },
+  "tabs": {
+    "members": "Members",
+    "invites": "Invites",
+    "roles": "Roles",
+    "audit": "Audit log"
+  },
+  "searchMembers": "Search members…",
+  "members": {
+    "loadFailed": "Couldn't load the team: {{error}}",
+    "empty": "No team members match.",
+    "you": "You",
+    "noLogin": "No login",
+    "noLoginTitle": "This account has never signed in",
+    "activeAgo": "active {{when}}",
+    "neverActive": "never active",
+    "joined": "joined {{date}}",
+    "selfRoleTitle": "You cannot change your own role",
+    "openMenu": "Open member actions",
+    "roleUpdated": "{{name}}'s role updated",
+    "suspendAccess": "Suspend access",
+    "suspended": "{{name}} suspended",
+    "reactivate": "Reactivate",
+    "reactivated": "{{name}} reactivated",
+    "removeFromTeam": "Remove from team",
+    "removed": "{{name}} removed from the team",
+    "removeTitle": "Remove {{name}} from the team?",
+    "removeBody": "They lose access immediately, including any session they already have open. Their account is kept rather than deleted, so past appointments and audit entries still show who they were, and their email address stays reserved.",
+    "removeConfirm": "Remove"
+  },
+  "invites": {
+    "emptyTitle": "No pending invitations",
+    "emptyBody": "Invitations appear here until they're accepted or revoked.",
+    "invitedBy": "invited by {{name}} · {{date}}",
+    "someone": "someone",
+    "emailedAgo": " · emailed {{when}}",
+    "notEmailed": " · not emailed",
+    "expiredAgo": "Expired {{when}}",
+    "expiresOn": "Expires {{date}}",
+    "copyLink": "Copy link",
+    "newLinkCopied": "New link copied",
+    "newLinkCopiedHint": "Any earlier link for this invite no longer works.",
+    "renew": "Renew",
+    "resend": "Resend",
+    "renewed": "Invitation renewed",
+    "resent": "Invitation resent",
+    "newLinkIssued": "A new link was issued; the previous one no longer works.",
+    "revoke": "Revoke invitation",
+    "revoked": "Invitation revoked"
+  },
+  "rolesTab": {
+    "retired": "retired",
+    "members_one": "{{count}} member",
+    "members_other": "{{count}} members",
+    "permissions_one": "{{count}} permission",
+    "permissions_other": "{{count}} permissions",
+    "editPermissions": "Edit permissions",
+    "viewPermissions": "View permissions"
+  },
+  "permissionsDialog": {
+    "title": "{{role}} permissions",
+    "ownerLocked": "The owner role always has full access and can't be edited — otherwise an owner could remove their own ability to manage the team.",
+    "intro": "Rows are modules, columns are what this role can do. Only permissions the backend actually enforces are listed.",
+    "module": "Module",
+    "other": "Other",
+    "save": "Save permissions",
+    "updated": "{{role}} permissions updated"
+  },
+  "action": {
+    "read": "read",
+    "create": "create",
+    "update": "update",
+    "delete": "delete",
+    "write": "write",
+    "upload": "upload",
+    "manage": "manage"
+  },
+  "permissionModule": {
+    "clients": "Clients",
+    "clinical": "Clinical records",
+    "foods": "Food database",
+    "meals": "Meal library",
+    "mealplans": "Meal plans",
+    "mealplantemplates": "Plan templates",
+    "journal": "Journal",
+    "appointments": "Appointments",
+    "messages": "Messages",
+    "intake": "Intake forms",
+    "leads": "Leads",
+    "billing": "Billing",
+    "reports": "Reports",
+    "cms": "Website / CMS",
+    "settings": "Settings",
+    "users": "Team & access",
+    "audit": "Audit log",
+    "media": "Media uploads",
+    "integrations": "Integrations"
+  },
+  "audit": {
+    "searchPlaceholder": "Search person or entity…",
+    "allEntities": "All entities",
+    "allActions": "All actions",
+    "exported_one": "Exported {{count}} row",
+    "exported_other": "Exported {{count}} rows",
+    "exportRows": "Export {{count}} rows",
+    "emptyFiltered": "Nothing matches these filters.",
+    "system": "System",
+    "loadMore": "Load more ({{loaded}} of {{total}})"
+  },
+  "inviteDialog": {
+    "title": "Invite a teammate",
+    "email": "Email",
+    "role": "Role",
+    "emailed": "Invitation emailed to {{email}}",
+    "created": "Invitation created for {{email}}",
+    "emailFailed": "The invitation was created, but the email couldn't be sent ({{error}}).",
+    "linkCopied": "Link copied",
+    "done": "Done",
+    "inviteHint": "They'll get a link to choose their own password. It expires in 7 days and can only be used once.",
+    "emailPlaceholder": "name@practice.com",
+    "send": "Send invitation",
+    "emailNotConfigured": "Email isn't configured — copy the link to send it yourself.",
+    "linkTitle": "Send this link to {{email}}",
+    "linkNotConfigured": "Email sending isn't configured on this server, so the invitation wasn't emailed.",
+    "linkCopyHint": "Copy the link below and send it yourself.",
+    "linkWarningBefore": "Anyone with this link can create an account as ",
+    "linkWarningAfter": ". Send it only to {{email}}."
+  }
+}

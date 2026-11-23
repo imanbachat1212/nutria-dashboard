@@ -1,3 +1,6 @@
+import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
+
 import { api } from "./api";
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -263,6 +266,13 @@ export async function deleteJournalEntry(id: string): Promise<void> {
 
 // ── Display helpers ────────────────────────────────────────────────────────
 
+// ── Display labels ───────────────────────────────────────────────────────────────────────────
+//
+// These three maps are now the canonical list of KEYS. Their English values are kept as the
+// fallback for any caller not yet localised, but the Journal screens read the text through
+// `useJournalLabels()` below. The keys themselves are API values ("snack-am",
+// "whatsapp-photo", "portion-uncertain") and must never be translated — the backend sends and
+// receives exactly these strings.
 export const SLOT_LABEL: Record<MealSlot, string> = {
   breakfast: "Breakfast",
   "snack-am": "AM Snack",
@@ -278,19 +288,61 @@ export const SOURCE_LABEL: Record<JournalSource, string> = {
 };
 
 export const FLAG_LABEL: Record<string, string> = {
+  // ── The values n8n's Groq analysis actually writes ────────────────────────────────────────
+  // Confirmed by aggregating journalentries.flags in the live database. The previous list
+  // ("portion-uncertain", "missing-detail", "macro-outlier", "duplicate", "image-unclear",
+  // "off-plan") matched NONE of them — the model writes snake_case and a different vocabulary —
+  // so every flag has always rendered as its raw key in the UI, in English too. Found by
+  // reading the rendered Arabic page, not the code.
+  no_db_match: "No database match",
+  portion_uncertain: "Portion uncertain",
+  over_daily_target: "Over daily target",
+  pending_entry: "Pending entry",
+  pending_entries: "Pending entries",
+  activity_only: "Activity only",
+  ai_parse_failed: "AI could not parse",
+  ai_estimated_items: "Items estimated by AI",
+  ai_estimate: "AI estimate",
+  photo_unclear: "Photo unclear",
+
+  // ── Legacy hyphenated keys ────────────────────────────────────────────────────────────────
+  // Kept so any entry written before the current analysis prompt still renders a label.
   "portion-uncertain": "Portion uncertain",
-  "missing-detail":    "Missing detail",
-  "macro-outlier":     "Macro outlier",
-  duplicate:           "Possible duplicate",
-  "image-unclear":     "Image unclear",
-  "off-plan":          "Off plan",
+  "missing-detail": "Missing detail",
+  "macro-outlier": "Macro outlier",
+  duplicate: "Possible duplicate",
+  "image-unclear": "Image unclear",
+  "off-plan": "Off plan",
 };
 
-export function timeAgo(iso: string): string {
-  const diff = (Date.now() - new Date(iso).getTime()) / 60_000;
-  if (diff < 1)  return "just now";
-  if (diff < 60) return `${Math.round(diff)}m ago`;
-  const h = diff / 60;
-  if (h < 24)   return `${Math.round(h)}h ago`;
-  return `${Math.round(h / 24)}d ago`;
+/**
+ * Localised labels + the compact "2h ago" used across the review queue.
+ *
+ * One hook rather than three so a screen cannot end up with a translated slot name next to an
+ * English flag reason. `timeAgo` stays abbreviated in both languages — it renders in an 11px
+ * column beside every row, where the full `common:time.*` phrasing does not fit.
+ */
+export function useJournalLabels() {
+  const { t } = useTranslation("journal");
+
+  return useMemo(
+    () => ({
+      slot: (key: MealSlot | null | undefined, fallback = "") =>
+        key && key in SLOT_LABEL ? t(`slot.${key}`) : fallback,
+      source: (key: JournalSource) => (key in SOURCE_LABEL ? t(`source.${key}`) : key),
+      // An unrecognised flag is shown verbatim: it came from the backend and the raw key is
+      // more useful to Sura than silence.
+      flag: (key: string) => (key in FLAG_LABEL ? t(`flag.${key}`) : key),
+      kind: (key: "meal" | "exercise") => t(`kind.${key}`),
+      timeAgo: (iso: string): string => {
+        const diff = (Date.now() - new Date(iso).getTime()) / 60_000;
+        if (diff < 1) return t("ago.justNow");
+        if (diff < 60) return t("ago.minutes", { count: Math.round(diff) });
+        const h = diff / 60;
+        if (h < 24) return t("ago.hours", { count: Math.round(h) });
+        return t("ago.days", { count: Math.round(h / 24) });
+      },
+    }),
+    [t],
+  );
 }

@@ -1,5 +1,6 @@
 import * as React from "react";
 import { Eye, EyeOff } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -10,6 +11,7 @@ export const PasswordInput = React.forwardRef<
   HTMLInputElement,
   Omit<React.ComponentProps<"input">, "type">
 >(({ className, disabled, ...props }, ref) => {
+  const { t } = useTranslation("auth");
   const [visible, setVisible] = React.useState(false);
   return (
     <div className="relative">
@@ -17,7 +19,7 @@ export const PasswordInput = React.forwardRef<
         ref={ref}
         type={visible ? "text" : "password"}
         disabled={disabled}
-        className={cn("pr-10", className)}
+        className={cn("pe-10", className)}
         {...props}
       />
       <button
@@ -26,9 +28,9 @@ export const PasswordInput = React.forwardRef<
         // Keep the caret in the field when the eye is clicked.
         onMouseDown={(e) => e.preventDefault()}
         disabled={disabled}
-        aria-label={visible ? "Hide password" : "Show password"}
+        aria-label={visible ? t("passwordInput.hidePassword") : t("passwordInput.showPassword")}
         aria-pressed={visible}
-        className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:text-foreground disabled:pointer-events-none disabled:opacity-50"
+        className="absolute inset-y-0 end-0 flex w-10 items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:text-foreground disabled:pointer-events-none disabled:opacity-50"
       >
         {visible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
       </button>

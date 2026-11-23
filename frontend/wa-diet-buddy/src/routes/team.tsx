@@ -23,6 +23,7 @@ import {
   Link as LinkIcon,
   RotateCw,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
 import { PageHeader } from "@/components/page-header";
@@ -68,7 +69,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
-import { roleMeta, STATUS_STYLES, fmtRelative, fmtDate } from "@/lib/team-mock";
+import { useRoleMeta, useStatusStyles, useTeamDates } from "@/lib/team-mock";
 import {
   fetchTeamMembers,
   updateTeamMember,
@@ -114,6 +115,7 @@ const QK = {
 const EMPTY: never[] = [];
 
 function TeamPage() {
+  const { t } = useTranslation(["team", "common"]);
   const qc = useQueryClient();
   const { user, can } = useAuth();
   const [tab, setTab] = useState("members");
@@ -162,14 +164,14 @@ function TeamPage() {
   return (
     <div className="mx-auto max-w-350">
       <PageHeader
-        eyebrow="Admin"
-        title="Team & Access"
-        description="Invite teammates, assign roles, and review everything that has been changed."
+        eyebrow={t("team:eyebrow")}
+        title={t("team:title")}
+        description={t("team:description")}
         actions={
           can("users.create") ? (
             <Button className="gap-1.5" onClick={() => setInviteOpen(true)}>
               <UserPlus className="h-4 w-4" />
-              Invite teammate
+              {t("team:inviteTeammate")}
             </Button>
           ) : null
         }
@@ -178,34 +180,34 @@ function TeamPage() {
       <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           icon={<Users className="h-4 w-4" />}
-          label="Team members"
+          label={t("team:stats.members")}
           value={stats.total}
-          hint={`${stats.active} active`}
+          hint={t("team:stats.membersHint", { count: stats.active })}
           loading={membersQ.isLoading}
         />
         <StatCard
           icon={<Mail className="h-4 w-4" />}
-          label="Pending invites"
+          label={t("team:stats.pendingInvites")}
           value={stats.pendingInvites}
           hint={
             invites.length > stats.pendingInvites
-              ? `${invites.length - stats.pendingInvites} expired`
-              : "awaiting acceptance"
+              ? t("team:stats.expiredHint", { count: invites.length - stats.pendingInvites })
+              : t("team:stats.awaitingHint")
           }
           loading={invitesQ.isLoading}
         />
         <StatCard
           icon={<Shield className="h-4 w-4" />}
-          label="Roles"
+          label={t("team:stats.roles")}
           value={stats.roles}
-          hint="permission sets"
+          hint={t("team:stats.rolesHint")}
           loading={rolesQ.isLoading}
         />
         <StatCard
           icon={<ShieldCheck className="h-4 w-4" />}
-          label="Owners"
+          label={t("team:stats.owners")}
           value={members.filter((m) => m.role?.name === "owner" && m.status === "active").length}
-          hint="can manage the team"
+          hint={t("team:stats.ownersHint")}
           loading={membersQ.isLoading}
         />
       </div>
@@ -215,37 +217,37 @@ function TeamPage() {
           <TabsList>
             <TabsTrigger value="members" className="gap-1.5">
               <Users className="h-3.5 w-3.5" />
-              Members
+              {t("team:tabs.members")}
             </TabsTrigger>
             <TabsTrigger value="invites" className="gap-1.5">
               <Mail className="h-3.5 w-3.5" />
-              Invites
+              {t("team:tabs.invites")}
               {stats.pendingInvites > 0 && (
-                <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-[10px]">
+                <Badge variant="secondary" className="ms-1 h-5 px-1.5 text-[10px]">
                   {stats.pendingInvites}
                 </Badge>
               )}
             </TabsTrigger>
             <TabsTrigger value="roles" className="gap-1.5">
               <Shield className="h-3.5 w-3.5" />
-              Roles
+              {t("team:tabs.roles")}
             </TabsTrigger>
             {/* Only rendered with audit.read — the log reveals who touched which client record. */}
             {canAudit && (
               <TabsTrigger value="audit" className="gap-1.5">
                 <Activity className="h-3.5 w-3.5" />
-                Audit log
+                {t("team:tabs.audit")}
               </TabsTrigger>
             )}
           </TabsList>
           {tab === "members" && (
             <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Search className="absolute start-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search members…"
-                className="h-9 w-64 pl-8 text-sm"
+                placeholder={t("team:searchMembers")}
+                className="h-9 w-64 ps-8 text-sm"
               />
             </div>
           )}
@@ -353,6 +355,10 @@ function MembersTab({
   canDelete: boolean;
   onChanged: () => void;
 }) {
+  const { t } = useTranslation(["team", "common"]);
+  const roleMeta = useRoleMeta();
+  const { relative: fmtRelative, date: fmtDate } = useTeamDates();
+  const STATUS_STYLES = useStatusStyles();
   const [confirmRemove, setConfirmRemove] = useState<TeamMember | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -382,14 +388,16 @@ function MembersTab({
   if (error)
     return (
       <Card className="p-6 text-sm text-muted-foreground">
-        Couldn&apos;t load the team: {errorMessage(error)}
+        {t("team:members.loadFailed", { error: errorMessage(error) })}
       </Card>
     );
 
   return (
     <Card className="divide-y p-0">
       {members.length === 0 && (
-        <div className="p-8 text-center text-sm text-muted-foreground">No team members match.</div>
+        <div className="p-8 text-center text-sm text-muted-foreground">
+          {t("team:members.empty")}
+        </div>
       )}
       {members.map((m) => {
         const meta = roleMeta(m.role?.name);
@@ -413,7 +421,7 @@ function MembersTab({
                 <span className="truncate text-sm font-medium">{m.name}</span>
                 {isSelf && (
                   <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
-                    You
+                    {t("team:members.you")}
                   </Badge>
                 )}
                 {/* Display accounts: referenced by appointments.staffId, never signed in. Without
@@ -422,9 +430,9 @@ function MembersTab({
                   <Badge
                     variant="outline"
                     className="h-5 gap-1 px-1.5 text-[10px] text-muted-foreground"
-                    title="This account has never signed in"
+                    title={t("team:members.noLoginTitle")}
                   >
-                    No login
+                    {t("team:members.noLogin")}
                   </Badge>
                 )}
               </div>
@@ -438,9 +446,11 @@ function MembersTab({
                 )}
                 <span className="flex items-center gap-1">
                   <Clock className="h-3 w-3" />
-                  {m.lastActiveAt ? `active ${fmtRelative(m.lastActiveAt)}` : "never active"}
+                  {m.lastActiveAt
+                    ? t("team:members.activeAgo", { when: fmtRelative(m.lastActiveAt) })
+                    : t("team:members.neverActive")}
                 </span>
-                <span>joined {fmtDate(m.joinedAt)}</span>
+                <span>{t("team:members.joined", { date: fmtDate(m.joinedAt) })}</span>
               </div>
             </div>
 
@@ -462,7 +472,7 @@ function MembersTab({
                   run(
                     m.id,
                     () => updateTeamMember(m.id, { role: roleId }),
-                    `${m.name}'s role updated`,
+                    t("team:members.roleUpdated", { name: m.name }),
                   )
                 }
               >
@@ -470,7 +480,7 @@ function MembersTab({
                     role), and offering a control that always fails is worse than not offering it. */}
                 <SelectTrigger
                   className="h-8 w-36 text-xs"
-                  title={isSelf ? "You cannot change your own role" : undefined}
+                  title={isSelf ? t("team:members.selfRoleTitle") : undefined}
                 >
                   <SelectValue />
                 </SelectTrigger>
@@ -486,7 +496,13 @@ function MembersTab({
 
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8" disabled={busy}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  disabled={busy}
+                  aria-label={t("team:members.openMenu")}
+                >
                   {busy ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
@@ -502,12 +518,12 @@ function MembersTab({
                       run(
                         m.id,
                         () => updateTeamMember(m.id, { active: false }),
-                        `${m.name} suspended`,
+                        t("team:members.suspended", { name: m.name }),
                       )
                     }
                   >
-                    <Ban className="mr-2 h-3.5 w-3.5" />
-                    Suspend access
+                    <Ban className="me-2 h-3.5 w-3.5" />
+                    {t("team:members.suspendAccess")}
                   </DropdownMenuItem>
                 )}
                 {canUpdate && m.status === "suspended" && (
@@ -516,12 +532,12 @@ function MembersTab({
                       run(
                         m.id,
                         () => updateTeamMember(m.id, { active: true }),
-                        `${m.name} reactivated`,
+                        t("team:members.reactivated", { name: m.name }),
                       )
                     }
                   >
-                    <CheckCircle2 className="mr-2 h-3.5 w-3.5" />
-                    Reactivate
+                    <CheckCircle2 className="me-2 h-3.5 w-3.5" />
+                    {t("team:members.reactivate")}
                   </DropdownMenuItem>
                 )}
                 {/* "Reset password" is deliberately absent. It used to fire a toast and do
@@ -534,8 +550,8 @@ function MembersTab({
                       disabled={isSelf}
                       onClick={() => setConfirmRemove(m)}
                     >
-                      <Trash2 className="mr-2 h-3.5 w-3.5" />
-                      Remove from team
+                      <Trash2 className="me-2 h-3.5 w-3.5" />
+                      {t("team:members.removeFromTeam")}
                     </DropdownMenuItem>
                   </>
                 )}
@@ -548,23 +564,25 @@ function MembersTab({
       <AlertDialog open={!!confirmRemove} onOpenChange={(o) => !o && setConfirmRemove(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove {confirmRemove?.name} from the team?</AlertDialogTitle>
-            <AlertDialogDescription>
-              They lose access immediately, including any session they already have open. Their
-              account is kept rather than deleted, so past appointments and audit entries still show
-              who they were, and their email address stays reserved.
-            </AlertDialogDescription>
+            <AlertDialogTitle>
+              {t("team:members.removeTitle", { name: confirmRemove?.name ?? "" })}
+            </AlertDialogTitle>
+            <AlertDialogDescription>{t("team:members.removeBody")}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t("common:actions.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
                 const m = confirmRemove!;
                 setConfirmRemove(null);
-                run(m.id, () => removeTeamMember(m.id), `${m.name} removed from the team`);
+                run(
+                  m.id,
+                  () => removeTeamMember(m.id),
+                  t("team:members.removed", { name: m.name }),
+                );
               }}
             >
-              Remove
+              {t("team:members.removeConfirm")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -588,6 +606,9 @@ function InvitesTab({
   onChanged: () => void;
   onLink: (r: InviteResult) => void;
 }) {
+  const { t } = useTranslation(["team", "common"]);
+  const roleMeta = useRoleMeta();
+  const { relative: fmtRelative, date: fmtDate } = useTeamDates();
   const [busyId, setBusyId] = useState<string | null>(null);
 
   async function copyLink(inv: TeamInvite) {
@@ -598,8 +619,8 @@ function InvitesTab({
       // invalidating a link someone already sent would be a nasty surprise.
       const result = await resendInvite(inv.id);
       await navigator.clipboard.writeText(result.link);
-      toast.success("New link copied", {
-        description: "Any earlier link for this invite no longer works.",
+      toast.success(t("team:invites.newLinkCopied"), {
+        description: t("team:invites.newLinkCopiedHint"),
       });
       onChanged();
     } catch (err) {
@@ -633,10 +654,8 @@ function InvitesTab({
     return (
       <Card className="flex flex-col items-center gap-2 p-12 text-center">
         <Mail className="h-7 w-7 text-muted-foreground" />
-        <p className="font-display text-base font-semibold">No pending invitations</p>
-        <p className="text-sm text-muted-foreground">
-          Invitations appear here until they&apos;re accepted or revoked.
-        </p>
+        <p className="font-display text-base font-semibold">{t("team:invites.emptyTitle")}</p>
+        <p className="text-sm text-muted-foreground">{t("team:invites.emptyBody")}</p>
       </Card>
     );
   }
@@ -655,8 +674,13 @@ function InvitesTab({
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium">{inv.email}</p>
               <p className="text-[11px] text-muted-foreground">
-                invited by {inv.invitedByName ?? "someone"} · {fmtDate(inv.createdAt)}
-                {inv.lastSentAt ? ` · emailed ${fmtRelative(inv.lastSentAt)}` : " · not emailed"}
+                {t("team:invites.invitedBy", {
+                  name: inv.invitedByName ?? t("team:invites.someone"),
+                  date: fmtDate(inv.createdAt),
+                })}
+                {inv.lastSentAt
+                  ? t("team:invites.emailedAgo", { when: fmtRelative(inv.lastSentAt) })
+                  : t("team:invites.notEmailed")}
               </p>
             </div>
             <Badge variant="outline" className={cn("rounded-md text-[11px]", meta.cls)}>
@@ -667,14 +691,14 @@ function InvitesTab({
                 variant="outline"
                 className="rounded-md border-rose-200 bg-rose-50 text-[11px] text-rose-700"
               >
-                Expired {fmtRelative(inv.expiresAt)}
+                {t("team:invites.expiredAgo", { when: fmtRelative(inv.expiresAt) })}
               </Badge>
             ) : (
               <Badge
                 variant="outline"
                 className="rounded-md border-amber-200 bg-amber-50 text-[11px] text-amber-700"
               >
-                Expires {fmtDate(inv.expiresAt)}
+                {t("team:invites.expiresOn", { date: fmtDate(inv.expiresAt) })}
               </Badge>
             )}
             {canManage && (
@@ -691,7 +715,7 @@ function InvitesTab({
                   ) : (
                     <Copy className="h-3.5 w-3.5" />
                   )}
-                  Copy link
+                  {t("team:invites.copyLink")}
                 </Button>
                 <Button
                   variant="outline"
@@ -706,8 +730,8 @@ function InvitesTab({
                         if (!r.emailSent) onLink(r);
                         return r;
                       },
-                      expired ? "Invitation renewed" : "Invitation resent",
-                      "A new link was issued; the previous one no longer works.",
+                      expired ? t("team:invites.renewed") : t("team:invites.resent"),
+                      t("team:invites.newLinkIssued"),
                     )
                   }
                 >
@@ -716,15 +740,15 @@ function InvitesTab({
                   ) : (
                     <Send className="h-3.5 w-3.5" />
                   )}
-                  {expired ? "Renew" : "Resend"}
+                  {expired ? t("team:invites.renew") : t("team:invites.resend")}
                 </Button>
                 <Button
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8 text-destructive"
                   disabled={busy}
-                  onClick={() => run(inv.id, () => revokeInvite(inv.id), "Invitation revoked")}
-                  title="Revoke invitation"
+                  onClick={() => run(inv.id, () => revokeInvite(inv.id), t("team:invites.revoked"))}
+                  title={t("team:invites.revoke")}
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>
@@ -763,6 +787,8 @@ function RolesTab({
   canEdit: boolean;
   onChanged: () => void;
 }) {
+  const { t } = useTranslation(["team", "common"]);
+  const roleMeta = useRoleMeta();
   const [editing, setEditing] = useState<TeamRoleRow | null>(null);
 
   if (loading || !data)
@@ -787,19 +813,19 @@ function RolesTab({
                   {r.legacy && (
                     <Badge
                       variant="outline"
-                      className="ml-1.5 rounded-md text-[10px] text-muted-foreground"
+                      className="ms-1.5 rounded-md text-[10px] text-muted-foreground"
                     >
-                      retired
+                      {t("team:rolesTab.retired")}
                     </Badge>
                   )}
                 </div>
                 <span className="text-[11px] text-muted-foreground">
-                  {r.memberCount} member{r.memberCount === 1 ? "" : "s"}
+                  {t("team:rolesTab.members", { count: r.memberCount })}
                 </span>
               </div>
               <p className="text-xs text-muted-foreground">{r.description ?? meta.description}</p>
               <p className="text-[11px] text-muted-foreground">
-                {r.permissions.length} permission{r.permissions.length === 1 ? "" : "s"}
+                {t("team:rolesTab.permissions", { count: r.permissions.length })}
               </p>
               <div className="mt-auto pt-1">
                 <Button
@@ -809,7 +835,9 @@ function RolesTab({
                   onClick={() => setEditing(r)}
                 >
                   {/* Owner is viewable but not editable — see the dialog. */}
-                  {r.editable && canEdit ? "Edit permissions" : "View permissions"}
+                  {r.editable && canEdit
+                    ? t("team:rolesTab.editPermissions")
+                    : t("team:rolesTab.viewPermissions")}
                 </Button>
               </div>
             </Card>
@@ -844,6 +872,8 @@ function RolePermissionsDialog({
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
 }) {
+  const { t } = useTranslation(["team", "common"]);
+  const roleMeta = useRoleMeta();
   const [draft, setDraft] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
@@ -862,7 +892,7 @@ function RolePermissionsDialog({
     setSaving(true);
     try {
       await updateRolePermissions(role.id, [...draft]);
-      toast.success(`${roleMeta(role.name).label} permissions updated`);
+      toast.success(t("team:permissionsDialog.updated", { role: roleMeta(role.name).label }));
       onSaved();
     } catch (err) {
       toast.error(errorMessage(err));
@@ -875,11 +905,15 @@ function RolePermissionsDialog({
     <Dialog open={!!role} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl">
         <DialogHeader>
-          <DialogTitle>{role ? roleMeta(role.name).label : ""} permissions</DialogTitle>
+          <DialogTitle>
+            {t("team:permissionsDialog.title", {
+              role: role ? roleMeta(role.name).label : "",
+            })}
+          </DialogTitle>
           <DialogDescription>
             {role?.editable === false
-              ? "The owner role always has full access and can't be edited — otherwise an owner could remove their own ability to manage the team."
-              : "Rows are modules, columns are what this role can do. Only permissions the backend actually enforces are listed."}
+              ? t("team:permissionsDialog.ownerLocked")
+              : t("team:permissionsDialog.intro")}
           </DialogDescription>
         </DialogHeader>
 
@@ -887,19 +921,29 @@ function RolePermissionsDialog({
           <table className="w-full text-sm">
             <thead className="sticky top-0 bg-background">
               <tr className="border-b text-[11px] uppercase tracking-wide text-muted-foreground">
-                <th className="px-2 py-2 text-left font-medium">Module</th>
+                <th className="px-2 py-2 text-start font-medium">
+                  {t("team:permissionsDialog.module")}
+                </th>
                 {ACTION_COLUMNS.map((a) => (
                   <th key={a} className="px-2 py-2 text-center font-medium">
-                    {a}
+                    {t(`team:action.${a}`)}
                   </th>
                 ))}
-                <th className="px-2 py-2 text-left font-medium">Other</th>
+                <th className="px-2 py-2 text-start font-medium">
+                  {t("team:permissionsDialog.other")}
+                </th>
               </tr>
             </thead>
             <tbody>
               {groups.map((g) => (
                 <tr key={g.module} className="border-b last:border-0">
-                  <td className="px-2 py-2 text-xs font-medium">{g.label}</td>
+                  {/* `g.label` arrives from the backend in English. Keyed off the stable
+                      `g.module` id instead, with the server's own label as the fallback for any
+                      module added server-side before a translation exists — this task is
+                      frontend-only, so the API response itself is untouched. */}
+                  <td className="px-2 py-2 text-xs font-medium">
+                    {t([`team:permissionModule.${g.module}`, g.label])}
+                  </td>
                   {ACTION_COLUMNS.map((action) => {
                     // A module only has the cells its keys define — "Reports" has no delete, and
                     // "Audit log" only has read. Empty cells render as a dash rather than an
@@ -949,7 +993,7 @@ function RolePermissionsDialog({
                               }
                               aria-label={key}
                             />
-                            {permissionAction(key)}
+                            {t([`team:action.${permissionAction(key)}`, permissionAction(key)])}
                           </label>
                         ))}
                       </div>
@@ -963,11 +1007,12 @@ function RolePermissionsDialog({
 
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            {locked ? "Close" : "Cancel"}
+            {locked ? t("common:actions.close") : t("common:actions.cancel")}
           </Button>
           {!locked && (
             <Button onClick={save} disabled={saving} className="gap-2">
-              {saving && <Loader2 className="h-4 w-4 animate-spin" />}Save permissions
+              {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+              {t("team:permissionsDialog.save")}
             </Button>
           )}
         </DialogFooter>
@@ -979,6 +1024,8 @@ function RolePermissionsDialog({
 // ── Audit ───────────────────────────────────────────────────────────────────
 
 function AuditTab() {
+  const { t } = useTranslation(["team", "common"]);
+  const { relative: fmtRelative } = useTeamDates();
   const [entity, setEntity] = useState("all");
   const [action, setAction] = useState("all");
   const [q, setQ] = useState("");
@@ -1031,28 +1078,28 @@ function AuditTab() {
     a.download = `nutria-audit-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    toast.success(`Exported ${rows.length} row${rows.length === 1 ? "" : "s"}`);
+    toast.success(t("team:audit.exported", { count: rows.length }));
   }
 
   return (
     <Card className="p-5">
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Search className="absolute start-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={q}
             onChange={(e) => resetFilters(() => setQ(e.target.value))}
-            placeholder="Search person or entity…"
-            className="h-9 w-60 pl-8 text-sm"
+            placeholder={t("team:audit.searchPlaceholder")}
+            className="h-9 w-60 ps-8 text-sm"
           />
         </div>
         <Select value={entity} onValueChange={(v) => resetFilters(() => setEntity(v))}>
           <SelectTrigger className="h-9 w-40 text-xs">
-            <SelectValue placeholder="All entities" />
+            <SelectValue placeholder={t("team:audit.allEntities")} />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all" className="text-xs">
-              All entities
+              {t("team:audit.allEntities")}
             </SelectItem>
             {(facetsQ.data?.entities ?? []).map((e) => (
               <SelectItem key={e} value={e} className="text-xs">
@@ -1063,11 +1110,11 @@ function AuditTab() {
         </Select>
         <Select value={action} onValueChange={(v) => resetFilters(() => setAction(v))}>
           <SelectTrigger className="h-9 w-44 text-xs">
-            <SelectValue placeholder="All actions" />
+            <SelectValue placeholder={t("team:audit.allActions")} />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all" className="text-xs">
-              All actions
+              {t("team:audit.allActions")}
             </SelectItem>
             {(facetsQ.data?.actions ?? []).map((a) => (
               <SelectItem key={a} value={a} className="text-xs">
@@ -1079,12 +1126,12 @@ function AuditTab() {
         <Button
           variant="outline"
           size="sm"
-          className="ml-auto h-9 gap-1.5 text-xs"
+          className="ms-auto h-9 gap-1.5 text-xs"
           onClick={exportCsv}
           disabled={!accumulated.length}
         >
           <Download className="h-3.5 w-3.5" />
-          Export {accumulated.length} rows
+          {t("team:audit.exportRows", { count: accumulated.length })}
         </Button>
       </div>
 
@@ -1094,7 +1141,7 @@ function AuditTab() {
         </div>
       ) : accumulated.length === 0 ? (
         <p className="py-10 text-center text-sm text-muted-foreground">
-          Nothing matches these filters.
+          {t("team:audit.emptyFiltered")}
         </p>
       ) : (
         <div className="divide-y">
@@ -1104,7 +1151,7 @@ function AuditTab() {
                 {fmtRelative(e.at)}
               </span>
               <span className="min-w-0 flex-1 truncate">
-                <span className="font-medium">{e.actor?.name ?? "System"}</span>
+                <span className="font-medium">{e.actor?.name ?? t("team:audit.system")}</span>
                 <span className="text-muted-foreground"> {e.action} </span>
                 <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
                   {e.entity}
@@ -1131,7 +1178,10 @@ function AuditTab() {
             onClick={() => setPage((p) => p + 1)}
           >
             {auditQ.isFetching && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            Load more ({accumulated.length} of {auditQ.data.total})
+            {t("team:audit.loadMore", {
+              loaded: accumulated.length,
+              total: auditQ.data.total,
+            })}
           </Button>
         </div>
       )}
@@ -1152,6 +1202,8 @@ function InviteDialog({
   roles: TeamRoleRow[];
   onDone: (r: InviteResult) => void;
 }) {
+  const { t } = useTranslation(["team", "common"]);
+  const roleMeta = useRoleMeta();
   const [email, setEmail] = useState("");
   const [roleId, setRoleId] = useState("");
   const [sending, setSending] = useState(false);
@@ -1164,10 +1216,10 @@ function InviteDialog({
     try {
       const result = await createInvite(email.trim(), effectiveRole);
       if (result.emailSent) {
-        toast.success(`Invitation emailed to ${result.invite.email}`);
+        toast.success(t("team:inviteDialog.emailed", { email: result.invite.email }));
       } else {
-        toast.success(`Invitation created for ${result.invite.email}`, {
-          description: "Email isn't configured — copy the link to send it yourself.",
+        toast.success(t("team:inviteDialog.created", { email: result.invite.email }), {
+          description: t("team:inviteDialog.emailNotConfigured"),
         });
       }
       setEmail("");
@@ -1185,15 +1237,12 @@ function InviteDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Invite a teammate</DialogTitle>
-          <DialogDescription>
-            They&apos;ll get a link to choose their own password. It expires in 7 days and can only
-            be used once.
-          </DialogDescription>
+          <DialogTitle>{t("team:inviteDialog.title")}</DialogTitle>
+          <DialogDescription>{t("team:inviteDialog.inviteHint")}</DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="invite-email-field">Email</Label>
+            <Label htmlFor="invite-email-field">{t("team:inviteDialog.email")}</Label>
             <Input
               id="invite-email-field"
               type="email"
@@ -1201,14 +1250,16 @@ function InviteDialog({
               autoFocus
               disabled={sending}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="name@practice.com"
+              placeholder={t("team:inviteDialog.emailPlaceholder")}
+              // A Latin-only token; forced LTR so it is not mirrored on the Arabic page.
+              dir="ltr"
               onKeyDown={(e) => {
                 if (e.key === "Enter" && email.includes("@")) send();
               }}
             />
           </div>
           <div className="space-y-1.5">
-            <Label>Role</Label>
+            <Label>{t("team:inviteDialog.role")}</Label>
             <Select value={effectiveRole} onValueChange={setRoleId} disabled={sending}>
               <SelectTrigger>
                 <SelectValue />
@@ -1230,15 +1281,19 @@ function InviteDialog({
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={sending}>
-            Cancel
+            {t("common:actions.cancel")}
           </Button>
           <Button
             onClick={send}
             disabled={sending || !email.includes("@") || !effectiveRole}
             className="gap-2"
           >
-            {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-            Send invitation
+            {sending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Send className="h-4 w-4 rtl:-scale-x-100" />
+            )}
+            {t("team:inviteDialog.send")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1255,27 +1310,33 @@ function InviteLinkDialog({
   result: InviteResult | null;
   onOpenChange: (o: boolean) => void;
 }) {
+  const { t } = useTranslation(["team", "common"]);
+  const roleMeta = useRoleMeta();
   return (
     <Dialog open={!!result} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <LinkIcon className="h-4 w-4 text-amber-600" />
-            Send this link to {result?.invite.email}
+            {t("team:inviteDialog.linkTitle", { email: result?.invite.email ?? "" })}
           </DialogTitle>
           <DialogDescription>
             {result?.emailError
-              ? `The invitation was created, but the email couldn't be sent (${result.emailError}).`
-              : "Email sending isn't configured on this server, so the invitation wasn't emailed."}{" "}
-            Copy the link below and send it yourself.
+              ? // The server's own error text, interpolated as the server sent it.
+                t("team:inviteDialog.emailFailed", { error: result.emailError })
+              : t("team:inviteDialog.linkNotConfigured")}{" "}
+            {t("team:inviteDialog.linkCopyHint")}
           </DialogDescription>
         </DialogHeader>
         <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
           <p className="text-xs text-amber-900">
-            Anyone with this link can create an account as{" "}
-            <strong>{result ? roleMeta(result.invite.role?.name).label : ""}</strong>. Send it only
-            to {result?.invite.email}.
+            {/* Split either side of the <strong> rather than interpolated into one string:
+                the role name must stay bold, and the two halves are each a translatable
+                fragment whose order Arabic keeps (the role still follows the verb phrase). */}
+            {t("team:inviteDialog.linkWarningBefore")}
+            <strong>{result ? roleMeta(result.invite.role?.name).label : ""}</strong>
+            {t("team:inviteDialog.linkWarningAfter", { email: result?.invite.email ?? "" })}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -1291,15 +1352,15 @@ function InviteLinkDialog({
             onClick={() => {
               if (!result) return;
               navigator.clipboard.writeText(result.link);
-              toast.success("Link copied");
+              toast.success(t("team:inviteDialog.linkCopied"));
             }}
           >
             <Copy className="h-3.5 w-3.5" />
-            Copy
+            {t("common:actions.copy")}
           </Button>
         </div>
         <DialogFooter>
-          <Button onClick={() => onOpenChange(false)}>Done</Button>
+          <Button onClick={() => onOpenChange(false)}>{t("team:inviteDialog.done")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
